@@ -2003,25 +2003,10 @@ class AEBridge:
         style: drop_shadow/inner_shadow/outer_glow/inner_glow/bevel_emboss/
                satin/color_overlay/gradient_overlay/stroke
         """
-        # Layer Styles 只能通过 AE 菜单命令添加，先选中图层再执行命令
-        style_cmds = {
-            "drop_shadow": 9000, "inner_shadow": 9001,
-            "outer_glow": 9002, "inner_glow": 9003,
-            "bevel_emboss": 9004, "satin": 9005,
-            "color_overlay": 9006, "gradient_overlay": 9007,
-            "stroke": 9008,
-        }
-        cmd = style_cmds.get(style)
-        if not cmd:
-            return f"ERR: unknown style '{style}'. Available: {list(style_cmds.keys())}"
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'for(var i=1;i<=c.numLayers;i++)c.layer(i).selected=false;'
-            f'c.layer("{_esc(name)}").selected=true;'
-            f'app.executeCommand({cmd});'
-            f'"style_added";'
-        )
-        return self.run_jsx(jsx)
+        # Layer Styles 无法通过 ExtendScript 可靠启用 (canSetEnabled=false)
+        # 需要通过 AE 菜单手动添加
+        return ("ERR:not_scriptable — use AE menu: Layer > Layer Styles > "
+                + style.replace('_', ' ').title())
 
     def enable_layer_style(self, name: str, style_index: int,
                             enabled: bool = True) -> str:
@@ -2118,10 +2103,11 @@ class AEBridge:
     # ── Time Remap ─────────────────────────────────────────
 
     def enable_time_remap(self, name: str) -> str:
-        """启用图层时间重映射"""
+        """启用图层时间重映射（仅对有 footage source 的图层有效）"""
         return self.run_jsx(
-            f'var c=app.project.activeItem;'
-            f'c.layer("{_esc(name)}").timeRemapEnabled=true;"ok";'
+            f'var c=app.project.activeItem;var tl=c.layer("{_esc(name)}");'
+            f'if(!tl.canSetTimeRemapEnabled){{"ERR:layer_not_supported"}}'
+            f'else{{tl.timeRemapEnabled=true;"ok"}}'
         )
 
     def set_time_remap_keyframes(self, name: str,
@@ -2130,40 +2116,39 @@ class AEBridge:
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
+            f'if(!tl.canSetTimeRemapEnabled){{"ERR:layer_not_supported"}}else{{'
             f'if(!tl.timeRemapEnabled)tl.timeRemapEnabled=true;'
-            f'var tr=tl.property("Time Remap");'
-            f'while(tr.numKeys>0)tr.removeKey(1);'
+            f'var tr=tl.timeRemap;'
         )
         for comp_t, src_t in keyframes:
             jsx += f'tr.setValueAtTime({comp_t},{src_t});'
-        jsx += '"ok";'
+        jsx += '"ok"}'
         return self.run_jsx(jsx)
 
     def freeze_frame(self, name: str, at_time: float) -> str:
-        """冻结帧"""
+        """冻结帧（仅对有 footage source 的图层有效）"""
         return self.run_jsx(
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
+            f'if(!tl.canSetTimeRemapEnabled){{"ERR:layer_not_supported"}}else{{'
             f'if(!tl.timeRemapEnabled)tl.timeRemapEnabled=true;'
-            f'var tr=tl.property("Time Remap");'
-            f'while(tr.numKeys>0)tr.removeKey(1);'
-            f'tr.setValueAtTime(tl.inPoint,{at_time});'
-            f'tr.setValueAtTime(tl.outPoint,{at_time});'
-            f'"frozen";'
+            f'var tr=tl.timeRemap;'
+            f'tr.setValueAtTime(tr.keyTime(1),{at_time});'
+            f'tr.setValueAtTime(tr.keyTime(tr.numKeys),{at_time});'
+            f'"frozen"}}'
         )
 
     def reverse_layer(self, name: str) -> str:
-        """反转图层时间"""
+        """反转图层时间（仅对有 footage source 的图层有效）"""
         return self.run_jsx(
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
+            f'if(!tl.canSetTimeRemapEnabled){{"ERR:layer_not_supported"}}else{{'
             f'if(!tl.timeRemapEnabled)tl.timeRemapEnabled=true;'
-            f'var tr=tl.property("Time Remap");'
-            f'var dur=tl.source.duration;'
-            f'while(tr.numKeys>0)tr.removeKey(1);'
-            f'tr.setValueAtTime(tl.inPoint,dur);'
-            f'tr.setValueAtTime(tl.outPoint,0);'
-            f'"reversed";'
+            f'var tr=tl.timeRemap;var dur=tl.source.duration;'
+            f'tr.setValueAtTime(tr.keyTime(1),dur);'
+            f'tr.setValueAtTime(tr.keyTime(tr.numKeys),0);'
+            f'"reversed"}}'
         )
 
     # ── Render Queue Management ────────────────────────────
