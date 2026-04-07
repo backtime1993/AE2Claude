@@ -41,11 +41,11 @@ if (comp && comp.selectedLayers.length > 0) {
         var initEnd = layer.outPoint;
 
         if (driverCode === "transform.position") {
-            initStart = pos.key(1).time;
-            initEnd = pos.key(pos.numKeys).time;
+            initStart = pos.keyTime(1);
+            initEnd = pos.keyTime(pos.numKeys);
         } else if (driverCode === "transform.xPosition") {
-            initStart = xPos.key(1).time;
-            initEnd = xPos.key(xPos.numKeys).time;
+            initStart = xPos.keyTime(1);
+            initEnd = xPos.keyTime(xPos.numKeys);
         }
         
         // 放置 FI / FO 标记
