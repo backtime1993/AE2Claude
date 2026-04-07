@@ -459,7 +459,7 @@ def main():
         return
     elif cmd == "snapshot":
         _ensure_comp()
-        out = args[1] if len(args) > 1 else "F:/claude/tmp/ae_snapshot.png"
+        out = args[1] if len(args) > 1 else os.path.join(os.environ.get("TEMP", "/tmp"), "ae_snapshot.png").replace("\\", "/")
         out = out.replace("\\", "/")
         r = req("/jsx",
             f'(function(){{var c=app.project.activeItem;if(!c)return"ERR:no_comp";'
