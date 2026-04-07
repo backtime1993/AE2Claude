@@ -1046,7 +1046,7 @@ class AEBridge:
     # ── Composition Management ─────────────────────────────
 
     def create_comp(self, name: str, width: int, height: int,
-                     fps: float, duration: float,
+                     fps: float = 30, duration: float = 10,
                      bg_color: List[float] = None) -> str:
         """创建新合成"""
         jsx = (
@@ -1055,7 +1055,7 @@ class AEBridge:
         )
         if bg_color:
             jsx += f'c.bgColor=[{bg_color[0]},{bg_color[1]},{bg_color[2]}];'
-        jsx += 'c.name;'
+        jsx += 'c.openInViewer();c.name;'
         return self.run_jsx(jsx)
 
     def set_active_comp(self, name: str) -> str:
@@ -2286,6 +2286,65 @@ class AEBridge:
             f'if({new_index}>1){{for(var i=1;i<{new_index};i++)tl.moveAfter(c.layer(i));}}'
             f'"ok"}}catch(e){{"ERR:"+e.toString()}}'
         )
+
+    # ── Pixel Access (requires C++ renderFramePixels) ─────
+
+    def sample_pixel(self, x: int, y: int, time: float = -1) -> dict:
+        """采样单个像素，返回 {r, g, b, a}"""
+        code = (
+            f'p=app.project\n'
+            f'comp=None\n'
+            f'for i in p.items:\n'
+            f'    if type(i).__name__=="CompItem":\n'
+            f'        comp=i; break\n'
+            f'if comp is None: raise RuntimeError("no comp")\n'
+            f'px=comp.renderFramePixels({time})\n'
+            f'r=int(px[{y},{x},0]); g=int(px[{y},{x},1]); b=int(px[{y},{x},2]); a=int(px[{y},{x},3])\n'
+            f'_result=f"{{r}},{{g}},{{b}},{{a}}"'
+        )
+        r = self._run_py(code)
+        parts = r.split(",")
+        return {"r": int(parts[0]), "g": int(parts[1]),
+                "b": int(parts[2]), "a": int(parts[3])}
+
+    def sample_pixels(self, points: List[List[int]], time: float = -1) -> List[dict]:
+        """批量采样多个像素点，points: [[x,y], ...]"""
+        pts_str = repr(points)
+        code = (
+            f'p=app.project\n'
+            f'comp=None\n'
+            f'for i in p.items:\n'
+            f'    if type(i).__name__=="CompItem":\n'
+            f'        comp=i; break\n'
+            f'if comp is None: raise RuntimeError("no comp")\n'
+            f'import json\n'
+            f'px=comp.renderFramePixels({time})\n'
+            f'pts={pts_str}\n'
+            f'out=[]\n'
+            f'for pt in pts:\n'
+            f'    x,y=pt[0],pt[1]\n'
+            f'    out.append({{"r":int(px[y,x,0]),"g":int(px[y,x,1]),"b":int(px[y,x,2]),"a":int(px[y,x,3])}})\n'
+            f'_result=json.dumps(out)'
+        )
+        r = self._run_py(code)
+        return json.loads(r)
+
+    def _run_py(self, code: str) -> str:
+        """执行 Python 代码并返回 result 变量的值"""
+        data = code.encode('utf-8')
+        req = urllib.request.Request(
+            f'{self._base_url}/',
+            data=data,
+            headers={'Content-Type': 'text/plain; charset=utf-8'}
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            r = json.loads(resp.read())
+        if r.get("ok"):
+            val = r.get("result", "")
+            if isinstance(val, str):
+                val = val.strip("'\"")
+            return val
+        raise RuntimeError(r.get("error", "unknown"))
 
 
 # ╔══════════════════════════════════════════════════════════╗

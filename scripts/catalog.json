@@ -39,13 +39,5 @@
     "Twixtor Pro": "Twixtor 45",
     "Twitch": "Videocopilot Twitch"
   },
-  "presets": {
-    "高光提取v2": "C:/Program Files/Adobe/Adobe After Effects (Beta)/Support Files/Presets/高光提取v2.ffx",
-    "摆动 - 位置": "C:/Program Files/Adobe/Adobe After Effects (Beta)/Support Files/Presets/Behaviors/摆动 - 位置.ffx",
-    "灰尘": "C:/Program Files/Adobe/Adobe After Effects (Beta)/Support Files/Presets/灰尘.ffx",
-    "常用光流": "C:/Program Files/Adobe/Adobe After Effects (Beta)/Support Files/Presets/常用光流.ffx",
-    "反转 Alpha": "C:/Program Files/Adobe/Adobe After Effects (Beta)/Support Files/Presets/Image - Utilities/反转 Alpha.ffx",
-    "提取边缘(HP)": "C:/Program Files/Adobe/Adobe After Effects (Beta)/Support Files/Presets/提取边缘(HP).ffx",
-    "摆动 - 旋转": "C:/Program Files/Adobe/Adobe After Effects (Beta)/Support Files/Presets/Behaviors/摆动 - 旋转.ffx"
-  }
+  "presets": {}
 }
