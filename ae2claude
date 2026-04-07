@@ -8,6 +8,8 @@ Built-in:
   ae2claude version                      AE version
   ae2claude comps                        list compositions
   ae2claude layers                       list layers in active comp
+  ae2claude run <name>                   run user script (MoBar scriptlets)
+  ae2claude scripts                      list all user scripts
   ae2claude methods                      list all bridge methods
   ae2claude help                         this help
 
@@ -129,6 +131,65 @@ def _get_bridge():
     from ae_bridge import AEBridge
     return AEBridge()
 
+def _get_scripts_dir():
+    return os.path.join(_BRIDGE_DIR, "scripts")
+
+def _load_registry():
+    reg_path = os.path.join(_get_scripts_dir(), "registry.json")
+    if not os.path.exists(reg_path):
+        return []
+    with open(reg_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def _run_script(name):
+    """Run a user script by slug (fuzzy match)."""
+    registry = _load_registry()
+    scripts_dir = _get_scripts_dir()
+
+    # exact match first
+    match = None
+    for s in registry:
+        if s["slug"] == name or s["name"] == name:
+            match = s; break
+
+    # fuzzy: substring match
+    if not match:
+        candidates = [s for s in registry if name in s["slug"] or name in s["name"]]
+        if len(candidates) == 1:
+            match = candidates[0]
+        elif len(candidates) > 1:
+            print(f"Multiple matches for '{name}':", file=sys.stderr)
+            for c in candidates:
+                print(f"  {c['slug']}  ({c['name']})", file=sys.stderr)
+            sys.exit(1)
+
+    if not match:
+        print(f"error: script '{name}' not found. Use 'ae2claude scripts' to list.", file=sys.stderr)
+        sys.exit(1)
+
+    fpath = os.path.join(scripts_dir, match["file"])
+    with open(fpath, "r", encoding="utf-8") as f:
+        code = f.read()
+
+    r = req("/jsx", code, timeout=30)
+    if r.get("ok"):
+        result = r.get("result", "")
+        if result:
+            print(result)
+    else:
+        print(f"error: {r.get('error', 'unknown')}", file=sys.stderr)
+        sys.exit(1)
+
+def _list_scripts():
+    """List all available user scripts."""
+    registry = _load_registry()
+    if not registry:
+        print("No scripts found. Run export_mobar.py first.")
+        return
+    for s in registry:
+        print(f"  {s['slug']:40s} {s['name']}")
+    print(f"\n共 {len(registry)} 个脚本 — 用 ae2claude run <名称> 执行")
+
 def _parse_arg(s):
     """Try to parse as JSON, fallback to string."""
     try:
@@ -218,6 +279,16 @@ def main():
             print("usage: ae2claude call <method> [args...]", file=sys.stderr)
             sys.exit(1)
         _call_method(args[1], args[2:])
+        return
+    elif cmd == "run":
+        if len(args) < 2:
+            print("usage: ae2claude run <script-name>", file=sys.stderr)
+            print("       ae2claude scripts  — list available scripts", file=sys.stderr)
+            sys.exit(1)
+        _run_script(args[1])
+        return
+    elif cmd == "scripts":
+        _list_scripts()
         return
     elif cmd == "methods":
         _list_methods()
