@@ -11,11 +11,9 @@
 
     app.beginUndoGroup("Smart Trim v2.2");
 
-    var up = false;
-    try{
-        var kb = ScriptUI.environment.keyboardState;
-        up = !!(kb && kb.ctrlKey);
-    }catch(e){}
+    // __mode__: "default" = 对齐下邻(或所选最下层的下邻), "ctrl" = 对齐上邻(或所选最上层的上邻)
+    var mode = (typeof __mode__ !== "undefined") ? __mode__ : "default";
+    var up = (mode === "ctrl");
 
     // 计算参考邻居
     var refIx = -1;

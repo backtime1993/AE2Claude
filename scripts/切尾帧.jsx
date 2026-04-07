@@ -10,8 +10,10 @@
 
     app.beginUndoGroup("CTI裁切（不位移）");
 
-    var t = comp.time;                         // CTI  
-    var ctrl = ScriptUI.environment.keyboardState.ctrlKey;
+    var t = comp.time;                         // CTI
+    // __mode__: "default" = 保留前半段, "ctrl" = 复制+保留后半段
+    var mode = (typeof __mode__ !== "undefined") ? __mode__ : "default";
+    var ctrl = (mode === "ctrl");
 
     // 倒序处理，防止索引变化
     for (var i = sel.length - 1; i >= 0; i--) {

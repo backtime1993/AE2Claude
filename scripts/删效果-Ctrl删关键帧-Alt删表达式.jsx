@@ -5,12 +5,10 @@
     var sel = comp.selectedLayers || [];
     if (!sel.length) { return; }
 
-    var ks = null, isCtrl = false, isAlt = false;
-    try {
-        ks = ScriptUI.environment && ScriptUI.environment.keyboardState;
-        isCtrl = !!(ks && ks.ctrlKey);
-        isAlt  = !!(ks && ks.altKey);
-    } catch (e) {}
+    // __mode__: "default" = 删除效果, "ctrl" = 清关键帧, "alt" = 清表达式
+    var mode = (typeof __mode__ !== "undefined") ? __mode__ : "default";
+    var isCtrl = (mode === "ctrl");
+    var isAlt  = (mode === "alt");
 
     // Ctrl 清关键帧，Alt 清表达式
     var title = isCtrl ? "Clear Keyframes (Ctrl)" : (isAlt ? "Clear Expressions (Alt)" : "Remove Effects from Selected Layers");

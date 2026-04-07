@@ -4,8 +4,9 @@
   if (!comp || comp.selectedLayers.length === 0) return;
 
   var selectedLayers = comp.selectedLayers;
-  // 检测 Ctrl 键状态 (Windows: ctrlKey, Mac: metaKey/ctrlKey)
-  var isCtrl = ScriptUI.environment.keyboardState.ctrlKey; 
+  // __mode__: "default" = 左对齐(最小inPoint→CTI), "ctrl" = 右对齐(最大outPoint→CTI)
+  var mode = (typeof __mode__ !== "undefined") ? __mode__ : "default";
+  var isCtrl = (mode === "ctrl");
   
   // 如果按 Ctrl 找最大 outPoint (右对齐)，否则找最小 inPoint (左对齐)
   var refTime = isCtrl ? -Infinity : Infinity;

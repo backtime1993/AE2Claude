@@ -1,13 +1,14 @@
 // 创建空对象并设置父级 (Ctrl/Alt 逻辑切换 – comp-center / layer-center)
+// __mode__: "default" = 合成中心+修剪到选中范围, "ctrl" = 图层中心+修剪, "alt" = 顶置+全长
 var comp = app.project.activeItem;
 
 if (comp && comp instanceof CompItem) {
     app.beginUndoGroup("创建空对象并设置父级 (Ctrl/Alt 逻辑)");
 
     var sel       = comp.selectedLayers;
-    var kb        = ScriptUI.environment.keyboardState;
-    var isCtrl    = kb.ctrlKey;   // Layer-center & trim
-    var isAlt     = kb.altKey;    // Top & full-length
+    var mode      = (typeof __mode__ !== "undefined") ? __mode__ : "default";
+    var isCtrl    = (mode === "ctrl");   // Layer-center & trim
+    var isAlt     = (mode === "alt");    // Top & full-length
     var nullLayer = comp.layers.addNull();      // 先建出来
     var need3D    = false;
 

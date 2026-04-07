@@ -10,8 +10,9 @@
     var comp = proj && proj.activeItem;
     if (!(comp instanceof CompItem)) return;
 
-    var kb = (ScriptUI && ScriptUI.environment) ? ScriptUI.environment.keyboardState : null;
-    var forceUnlock = kb && kb.altKey; // Alt = 强制解锁处理
+    // __mode__: "default" = 跳过锁定层, "alt" = 强制解锁后删除再还原锁定
+    var mode = (typeof __mode__ !== "undefined") ? __mode__ : "default";
+    var forceUnlock = (mode === "alt"); // alt = 强制解锁处理
 
     var targets = comp.selectedLayers.length ? comp.selectedLayers : (function(){
         var arr = [];

@@ -10,15 +10,9 @@
 
     var fd = comp.frameDuration;
 
-    // 读修饰键（Windows: Ctrl；Mac: Cmd）
-    var useHead = false;
-    try {
-        var ks = ScriptUI.environment.keyboardState;
-        useHead = ks.ctrlKey || ks.metaKey;
-    } catch (e) {
-        // 某些环境下可能没有 ScriptUI（极少数情况），那就默认尾帧
-        useHead = false;
-    }
+    // __mode__: "default" = 跳到最晚尾帧(outPoint-1f), "ctrl" = 跳到最早首帧(inPoint)
+    var mode = (typeof __mode__ !== "undefined") ? __mode__ : "default";
+    var useHead = (mode === "ctrl");
 
     var target;
     if (useHead) {

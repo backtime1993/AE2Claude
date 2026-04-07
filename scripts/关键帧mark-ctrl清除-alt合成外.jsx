@@ -2,9 +2,10 @@
     app.beginUndoGroup("Generate & Copy Layer Markers");
 
     var a = app.project.activeItem;
-    var kb = ScriptUI.environment ? ScriptUI.environment.keyboardState : null;
-    var isCtrl = kb && kb.ctrlKey;
-    var isAlt  = kb && kb.altKey;
+    // __mode__: "default" = 从关键帧生成marker并向子合成传播, "ctrl" = 清除选中层marker, "alt" = 向父合成传播marker
+    var mode = (typeof __mode__ !== "undefined") ? __mode__ : "default";
+    var isCtrl = (mode === "ctrl");
+    var isAlt  = (mode === "alt");
 
     function timesFromMarkerProp(m) {
         var map = {}; var c = m ? m.numKeys : 0;

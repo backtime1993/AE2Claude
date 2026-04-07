@@ -1,4 +1,5 @@
 /* Flip Layer v1.0 */
+// __mode__: "default" = 左右翻转, "ctrl" = 上下翻转, "alt" = 上下翻转
 (function flipLayer() {
     var comp = app.project.activeItem;
     if (!(comp && comp instanceof CompItem)) return;
@@ -8,8 +9,8 @@
 
     app.beginUndoGroup("Flip Layer");
 
-    var kb = ScriptUI.environment.keyboardState;
-    var isCtrl = kb.ctrlKey;
+    var mode = (typeof __mode__ !== "undefined") ? __mode__ : "default";
+    var isCtrl = (mode === "ctrl");
 
     for (var i = 0; i < sel.length; i++) {
         var layer = sel[i];

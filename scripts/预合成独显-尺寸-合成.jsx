@@ -30,8 +30,9 @@
         }catch(e){}
     }
 
-    var kb=null,isCtrl=false;
-    try{ kb=ScriptUI.environment && ScriptUI.environment.keyboardState; isCtrl=kb&&kb.ctrlKey; }catch(e){}
+    // __mode__: "default" = 独显大预合成+shy其余层, "ctrl" = 全量还原(清solo/shy/hideShyLayers)
+    var mode = (typeof __mode__ !== "undefined") ? __mode__ : "default";
+    var isCtrl = (mode === "ctrl");
 
     var sel = comp.selectedLayers||[];
     var selectedHasTaggedPre=false;

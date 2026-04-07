@@ -12,8 +12,10 @@ if (app.project && app.project.activeItem && app.project.activeItem instanceof C
     var blackSolid = comp.layers.addSolid([0, 0, 0], "Black Solid", comp.width, comp.height, comp.pixelAspect);
 
     if (selectedLayers.length > 0) {
-        var ctrlPressed = ScriptUI.environment.keyboardState.ctrlKey;
-        var altPressed = ScriptUI.environment.keyboardState.altKey;
+        // __mode__: "default" = 选中层上方+修剪, "ctrl" = 最下方, "alt" = 最上方+修剪
+        var mode = (typeof __mode__ !== "undefined") ? __mode__ : "default";
+        var ctrlPressed = (mode === "ctrl");
+        var altPressed = (mode === "alt");
 
         if (ctrlPressed) {
             // 将黑色纯色移至所有图层最下方
