@@ -144,8 +144,8 @@ def _load_registry():
     with open(reg_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def _run_script(name):
-    """Run a user script by slug (fuzzy match)."""
+def _run_script(name, mode=None):
+    """Run a user script by slug (fuzzy match). mode: default/ctrl/alt"""
     registry = _load_registry()
     scripts_dir = _get_scripts_dir()
 
@@ -174,8 +174,13 @@ def _run_script(name):
     with open(fpath, "r", encoding="utf-8") as f:
         code = f.read()
 
+    # Inject __mode__ if specified
+    if mode and mode != "default":
+        code = f'var __mode__ = "{mode}";\n' + code
+
     note = match.get("note", "")
-    print(f"→ {match['name']}{('  ' + note) if note else ''}", file=sys.stderr)
+    mode_str = f" [mode={mode}]" if mode and mode != "default" else ""
+    print(f"→ {match['name']}{mode_str}{('  ' + note) if note else ''}", file=sys.stderr)
 
     r = req("/jsx", code, timeout=30)
     if r.get("ok"):
@@ -311,10 +316,16 @@ def main():
         return
     elif cmd == "run":
         if len(args) < 2:
-            print("usage: ae2claude run <script-name>", file=sys.stderr)
+            print("usage: ae2claude run <script-name> [--mode ctrl|alt]", file=sys.stderr)
             print("       ae2claude scripts  — list available scripts", file=sys.stderr)
             sys.exit(1)
-        _run_script(args[1])
+        mode = "default"
+        if "--mode" in args:
+            mi = args.index("--mode")
+            if mi + 1 < len(args):
+                mode = args[mi + 1]
+                args = args[:mi] + args[mi+2:]
+        _run_script(args[1], mode=mode)
         return
     elif cmd == "scripts":
         _list_scripts()

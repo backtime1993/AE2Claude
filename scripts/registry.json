@@ -115,11 +115,6 @@
     "file": "关键帧mark-ctrl清除-alt合成外.jsx"
   },
   {
-    "slug": "复制标记-ctrl复制-点击粘贴",
-    "name": "复制标记 ctrl复制 点击粘贴",
-    "file": "复制标记-ctrl复制-点击粘贴.jsx"
-  },
-  {
     "slug": "光标图层跳转",
     "name": "光标图层跳转",
     "file": "光标图层跳转.jsx"
