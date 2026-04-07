@@ -1977,11 +1977,15 @@ class AEBridge:
             "offset": "ADBE Text Percent Offset",
         }
         jsx = (
+            f'try{{'
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
             f'var animators=tl.property("ADBE Text Properties").property("ADBE Text Animators");'
+            f'if(!animators||animators.numProperties<{animator_index}){{"ERR:no_animator"}}else{{'
             f'var anim=animators.property({animator_index});'
-            f'var sel=anim.property("ADBE Text Selectors").property({selector_index});'
+            f'var sels=anim.property("ADBE Text Selectors");'
+            f'if(!sels||sels.numProperties<{selector_index}){{"ERR:no_selector"}}else{{'
+            f'var sel=sels.property({selector_index});'
         )
         if keyframes:
             for prop_key, kfs in keyframes.items():
@@ -1991,7 +1995,8 @@ class AEBridge:
                 jsx += f'var p=sel.property("{mn}");'
                 for t, val in kfs:
                     jsx += f'p.setValueAtTime({t},{val});'
-        jsx += '"animated";'
+        jsx += '"animated"}}}'
+        jsx += f'}}catch(e){{"ERR:"+e.toString()}}'
         return self.run_jsx(jsx)
 
     # ── Layer Styles ───────────────────────────────────────
@@ -2363,10 +2368,13 @@ class AEBridge:
         )
 
     def reorder_layer(self, name: str, new_index: int) -> str:
-        """移动图层到指定索引"""
+        """移动图层到指定索引 (1-based)"""
         return self.run_jsx(
-            f'var c=app.project.activeItem;'
-            f'c.layer("{_esc(name)}").moveTo({new_index});"ok";'
+            f'try{{var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'tl.moveToBeginning();'
+            f'if({new_index}>1){{for(var i=1;i<{new_index};i++)tl.moveAfter(c.layer(i));}}'
+            f'"ok"}}catch(e){{"ERR:"+e.toString()}}'
         )
 
 
