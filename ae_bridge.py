@@ -159,6 +159,51 @@ TRANSFORM_PROPS = {
 }
 
 # ╔══════════════════════════════════════════════════════════╗
+# ║               BLEND MODE REGISTRY                       ║
+# ╠══════════════════════════════════════════════════════════╣
+# ║ 图层混合模式 BlendingMode 枚举映射                       ║
+# ╚══════════════════════════════════════════════════════════╝
+
+BLEND_MODES = {
+    "normal": "BlendingMode.NORMAL",
+    "dissolve": "BlendingMode.DISSOLVE",
+    "darken": "BlendingMode.DARKEN",
+    "multiply": "BlendingMode.MULTIPLY",
+    "color_burn": "BlendingMode.COLOR_BURN",
+    "linear_burn": "BlendingMode.LINEAR_BURN",
+    "darker_color": "BlendingMode.DARKER_COLOR",
+    "lighten": "BlendingMode.LIGHTEN",
+    "screen": "BlendingMode.SCREEN",
+    "color_dodge": "BlendingMode.COLOR_DODGE",
+    "linear_dodge": "BlendingMode.LINEAR_DODGE",
+    "lighter_color": "BlendingMode.LIGHTER_COLOR",
+    "overlay": "BlendingMode.OVERLAY",
+    "soft_light": "BlendingMode.SOFT_LIGHT",
+    "hard_light": "BlendingMode.HARD_LIGHT",
+    "vivid_light": "BlendingMode.VIVID_LIGHT",
+    "linear_light": "BlendingMode.LINEAR_LIGHT",
+    "pin_light": "BlendingMode.PIN_LIGHT",
+    "hard_mix": "BlendingMode.HARD_MIX",
+    "difference": "BlendingMode.DIFFERENCE",
+    "exclusion": "BlendingMode.EXCLUSION",
+    "hue": "BlendingMode.HUE",
+    "saturation": "BlendingMode.SATURATION",
+    "color": "BlendingMode.COLOR",
+    "luminosity": "BlendingMode.LUMINOSITY",
+    "add": "BlendingMode.ADD",
+    "stencil_alpha": "BlendingMode.STENCIL_ALPHA",
+    "silhouette_alpha": "BlendingMode.SILHOUETTE_ALPHA",
+}
+
+TRACK_MATTE_TYPES = {
+    "alpha": "TrackMatteType.ALPHA",
+    "alpha_inverted": "TrackMatteType.ALPHA_INVERTED",
+    "luma": "TrackMatteType.LUMA",
+    "luma_inverted": "TrackMatteType.LUMA_INVERTED",
+    "none": "TrackMatteType.NO_TRACK_MATTE",
+}
+
+# ╔══════════════════════════════════════════════════════════╗
 # ║           KNOWN EFFECT MATCHNAMES (PROBE LIST)          ║
 # ╠══════════════════════════════════════════════════════════╣
 # ║ 用于 list_available_effects() 动态探测当前 AE 安装中    ║
@@ -1679,6 +1724,322 @@ class AEBridge:
         return self.run_jsx(
             f'var c=app.project.activeItem;'
             f'c.layer("{_esc(name)}").property("Masks").property({mask_index}).remove();"removed";'
+        )
+
+    # ── Markers ────────────────────────────────────────────
+
+    def add_comp_marker(self, time: float, comment: str = "",
+                         label: int = 0, duration: float = 0,
+                         chapter: str = "", url: str = "") -> str:
+        """添加合成级 Marker"""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var m=new MarkerValue("{_esc(comment)}");'
+        )
+        if chapter:
+            jsx += f'm.chapter="{_esc(chapter)}";'
+        if url:
+            jsx += f'm.url="{_esc(url)}";'
+        if label:
+            jsx += f'm.label={label};'
+        if duration:
+            jsx += f'm.duration={duration};'
+        jsx += (
+            f'var ms=c.markerProperty;'
+            f'ms.setValueAtTime({time},m);"ok";'
+        )
+        return self.run_jsx(jsx)
+
+    def list_comp_markers(self) -> List[dict]:
+        """列出合成所有 Marker"""
+        r = self.run_jsx(
+            'var c=app.project.activeItem;'
+            'var ms=c.markerProperty;var out=[];'
+            'for(var i=1;i<=ms.numKeys;i++){'
+            'var m=ms.keyValue(i);'
+            'out.push({index:i,time:ms.keyTime(i),comment:m.comment,'
+            'duration:m.duration,label:m.label,chapter:m.chapter});}'
+            'JSON.stringify(out);'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return []
+
+    def remove_comp_marker(self, index: int) -> str:
+        """删除合成 Marker (1-based index)"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.markerProperty.removeKey({index});"removed";'
+        )
+
+    def add_layer_marker(self, name: str, time: float, comment: str = "",
+                          label: int = 0, duration: float = 0) -> str:
+        """添加图层级 Marker"""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var m=new MarkerValue("{_esc(comment)}");'
+        )
+        if label:
+            jsx += f'm.label={label};'
+        if duration:
+            jsx += f'm.duration={duration};'
+        jsx += f'tl.property("Marker").setValueAtTime({time},m);"ok";'
+        return self.run_jsx(jsx)
+
+    def list_layer_markers(self, name: str) -> List[dict]:
+        """列出图层所有 Marker"""
+        r = self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var ms=c.layer("{_esc(name)}").property("Marker");var out=[];'
+            f'for(var i=1;i<=ms.numKeys;i++){{'
+            f'var m=ms.keyValue(i);'
+            f'out.push({{index:i,time:ms.keyTime(i),comment:m.comment,'
+            f'duration:m.duration,label:m.label}});}}'
+            f'JSON.stringify(out);'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return []
+
+    def remove_layer_marker(self, name: str, index: int) -> str:
+        """删除图层 Marker"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").property("Marker").removeKey({index});"removed";'
+        )
+
+    # ── Parenting ──────────────────────────────────────────
+
+    def set_parent(self, child_name: str, parent_name: str) -> str:
+        """设置图层父子关系"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(child_name)}").parent=c.layer("{_esc(parent_name)}");'
+            f'"ok";'
+        )
+
+    def remove_parent(self, name: str) -> str:
+        """移除图层父级"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").parent=null;"ok";'
+        )
+
+    def get_parent(self, name: str) -> Optional[str]:
+        """获取图层父级名称，无父级返回 None"""
+        r = self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var p=c.layer("{_esc(name)}").parent;'
+            f'p?p.name:"__null__";'
+        )
+        return None if r == "__null__" else r
+
+    def create_null_control(self, name: str = "Null Control",
+                             parent_to: List[str] = None,
+                             position: List[float] = None) -> str:
+        """创建 Null 对象并可选批量绑定子图层。"""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var nl=c.layers.addNull();'
+            f'nl.name="{_esc(name)}";'
+        )
+        if position:
+            jsx += f'nl.property("Transform").property("Position").setValue({json.dumps(position)});'
+        if parent_to:
+            for child in parent_to:
+                jsx += f'try{{c.layer("{_esc(child)}").parent=nl;}}catch(e){{}}'
+        jsx += 'nl.name;'
+        return self.run_jsx(jsx)
+
+    # ── Blending Mode + Track Matte ────────────────────────
+
+    def set_blending_mode(self, name: str, mode: str) -> str:
+        """设置图层混合模式。mode: normal/multiply/screen/overlay/add/..."""
+        bm = BLEND_MODES.get(mode)
+        if not bm:
+            return f"ERR: unknown mode '{mode}'. Available: {list(BLEND_MODES.keys())}"
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").blendingMode={bm};"ok";'
+        )
+
+    def get_blending_mode(self, name: str) -> str:
+        """获取图层混合模式"""
+        r = self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").blendingMode.toString();'
+        )
+        return r
+
+    def set_track_matte(self, name: str, matte_layer: str,
+                         matte_type: str = "alpha") -> str:
+        """设置轨道蒙版。matte_type: alpha/alpha_inverted/luma/luma_inverted"""
+        tt = TRACK_MATTE_TYPES.get(matte_type, "TrackMatteType.ALPHA")
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'tl.trackMatteType={tt};"ok";'
+        )
+
+    def remove_track_matte(self, name: str) -> str:
+        """移除轨道蒙版"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").trackMatteType=TrackMatteType.NO_TRACK_MATTE;"ok";'
+        )
+
+    # ── Text Animator ──────────────────────────────────────
+
+    def add_text_animator(self, name: str, properties: Dict[str, Any] = None) -> str:
+        """
+        为文本图层添加 Animator。
+        properties keys: position, anchor_point, scale, skew, rotation,
+                        opacity, fill_color, stroke_color, stroke_width,
+                        tracking_type, tracking_amount, line_anchor, line_spacing,
+                        character_offset, blur
+        """
+        prop_matchnames = {
+            "position": "ADBE Text Position 3D",
+            "anchor_point": "ADBE Text Anchor Point 3D",
+            "scale": "ADBE Text Scale 3D",
+            "skew": "ADBE Text Skew",
+            "rotation": "ADBE Text Rotation",
+            "opacity": "ADBE Text Opacity",
+            "fill_color": "ADBE Text Fill Color",
+            "stroke_color": "ADBE Text Stroke Color",
+            "stroke_width": "ADBE Text Stroke Width",
+            "tracking_type": "ADBE Text Tracking Type",
+            "tracking_amount": "ADBE Text Tracking Amount",
+            "line_anchor": "ADBE Text Line Anchor",
+            "line_spacing": "ADBE Text Line Spacing",
+            "character_offset": "ADBE Text Character Offset",
+            "blur": "ADBE Text Blur",
+        }
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var animators=tl.property("Source Text").property("ADBE Text Animators");'
+            f'var anim=animators.addProperty("ADBE Text Animator");'
+        )
+        if properties:
+            jsx += 'var props=anim.property("ADBE Text Animator Properties");'
+            for key, val in properties.items():
+                mn = prop_matchnames.get(key)
+                if not mn:
+                    continue
+                jsx += f'var p=props.addProperty("{mn}");'
+                if isinstance(val, (list, tuple)):
+                    jsx += f'p.setValue({json.dumps(val)});'
+                else:
+                    jsx += f'p.setValue({val});'
+        jsx += '"animator_added";'
+        return self.run_jsx(jsx)
+
+    def set_text_animator_selector(self, name: str, animator_index: int = 1,
+                                    start: float = 0, end: float = 100,
+                                    offset: float = 0,
+                                    shape: str = "square",
+                                    based_on: str = "characters",
+                                    mode: str = "add") -> str:
+        """配置文本 Animator 的 Range Selector。"""
+        shape_map = {
+            "square": 1, "ramp_up": 2, "ramp_down": 3,
+            "triangle": 4, "round": 5, "smooth": 6,
+        }
+        based_map = {"characters": 1, "characters_excluding_spaces": 2, "words": 3, "lines": 4}
+        mode_val = {"add": 1, "subtract": 2, "intersect": 3, "min": 4, "max": 5, "difference": 6}.get(mode, 1)
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var animators=tl.property("Source Text").property("ADBE Text Animators");'
+            f'var anim=animators.property({animator_index});'
+            f'var sel=anim.property("ADBE Text Selectors").property(1);'
+            f'sel.property("ADBE Text Percent Start").setValue({start});'
+            f'sel.property("ADBE Text Percent End").setValue({end});'
+            f'sel.property("ADBE Text Percent Offset").setValue({offset});'
+            f'sel.property("ADBE Text Selector Mode").setValue({mode_val});'
+            f'sel.property("ADBE Text Range Shape").setValue({shape_map.get(shape, 1)});'
+            f'sel.property("ADBE Text Range Type2").setValue({based_map.get(based_on, 1)});'
+            f'"selector_set";'
+        )
+        return self.run_jsx(jsx)
+
+    def animate_text_selector(self, name: str, animator_index: int = 1,
+                               selector_index: int = 1,
+                               keyframes: Dict[str, List[Tuple[float, float]]] = None) -> str:
+        """动画化文本 Selector 属性。keyframes: {"start": [(t, val), ...], "end": [...], "offset": [...]}"""
+        prop_map = {
+            "start": "ADBE Text Percent Start",
+            "end": "ADBE Text Percent End",
+            "offset": "ADBE Text Percent Offset",
+        }
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var animators=tl.property("Source Text").property("ADBE Text Animators");'
+            f'var anim=animators.property({animator_index});'
+            f'var sel=anim.property("ADBE Text Selectors").property({selector_index});'
+        )
+        if keyframes:
+            for prop_key, kfs in keyframes.items():
+                mn = prop_map.get(prop_key)
+                if not mn:
+                    continue
+                jsx += f'var p=sel.property("{mn}");'
+                for t, val in kfs:
+                    jsx += f'p.setValueAtTime({t},{val});'
+        jsx += '"animated";'
+        return self.run_jsx(jsx)
+
+    # ── Layer Styles ───────────────────────────────────────
+
+    def add_layer_style(self, name: str, style: str,
+                         props: Dict[str, Any] = None) -> str:
+        """
+        为图层添加 Layer Style。
+        style: drop_shadow/inner_shadow/outer_glow/inner_glow/bevel_emboss/
+               satin/color_overlay/gradient_overlay/stroke
+        """
+        style_names = {
+            "drop_shadow": "ADBE Drop Shadow",
+            "inner_shadow": "ADBE Inner Shadow",
+            "outer_glow": "ADBE Outer Glow",
+            "inner_glow": "ADBE Inner Glow",
+            "bevel_emboss": "ADBE Bevel Emboss",
+            "satin": "ADBE Satin",
+            "color_overlay": "ADBE Color Overlay",
+            "gradient_overlay": "ADBE Gradient Overlay",
+            "stroke": "ADBE Stroke",
+        }
+        mn = style_names.get(style)
+        if not mn:
+            return f"ERR: unknown style '{style}'. Available: {list(style_names.keys())}"
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var ls=tl.property("Layer Styles");'
+            f'if(!ls.canSetEnabled){{tl.property("Layer Styles").addProperty("ADBE Blend Options Group");}}'
+            f'var sty=ls.addProperty("{mn}");'
+        )
+        if props:
+            for k, v in props.items():
+                if isinstance(v, (list, tuple)):
+                    jsx += f'try{{sty.property("{k}").setValue({json.dumps(v)});}}catch(e){{}}'
+                else:
+                    jsx += f'try{{sty.property("{k}").setValue({v});}}catch(e){{}}'
+        jsx += f'sty.enabled=true;"style_added";'
+        return self.run_jsx(jsx)
+
+    def enable_layer_style(self, name: str, style_index: int,
+                            enabled: bool = True) -> str:
+        """启用/禁用指定 Layer Style"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var ls=c.layer("{_esc(name)}").property("Layer Styles");'
+            f'ls.property({style_index}).enabled={"true" if enabled else "false"};"ok";'
         )
 
 
