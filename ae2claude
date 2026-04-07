@@ -113,7 +113,10 @@ Bridge (ae2claude call <method> [args...] [--key value]):
 import sys, json, os, urllib.request, urllib.error, inspect
 
 BASE = "http://127.0.0.1:8089"
-_BRIDGE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 项目根目录：优先用脚本所在目录，如果找不到 ae_bridge.py 则用已知路径
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_DIR = r"F:\claude\longterm\AE2Claude"
+_BRIDGE_DIR = _SCRIPT_DIR if os.path.exists(os.path.join(_SCRIPT_DIR, "ae_bridge.py")) else _PROJECT_DIR
 
 def req(path, data=None, timeout=15):
     r = urllib.request.Request(f"{BASE}{path}",
@@ -171,10 +174,13 @@ def _run_script(name):
     with open(fpath, "r", encoding="utf-8") as f:
         code = f.read()
 
+    note = match.get("note", "")
+    print(f"→ {match['name']}{('  ' + note) if note else ''}", file=sys.stderr)
+
     r = req("/jsx", code, timeout=30)
     if r.get("ok"):
         result = r.get("result", "")
-        if result:
+        if result and result != "undefined":
             print(result)
     else:
         print(f"error: {r.get('error', 'unknown')}", file=sys.stderr)
@@ -298,6 +304,13 @@ def main():
     elif cmd in ("help", "-h", "--help"):
         print(__doc__.strip())
         return
+    elif cmd == "info":
+        # 快捷: 当前合成概况
+        r = req("/jsx",
+            'var c=app.project.activeItem;if(!c)"no active comp";else{'
+            'JSON.stringify({name:c.name,width:c.width,height:c.height,'
+            'fps:1/c.frameDuration,duration:c.duration,numLayers:c.numLayers,'
+            'time:c.time})}')
     else:
         # treat entire args as jsx
         r = req("/jsx", " ".join(args))
