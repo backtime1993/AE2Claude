@@ -2,7 +2,6 @@
     var comp = app.project.activeItem;
     // 检查选中项
     if (!comp || comp.selectedProperties.length === 0) {
-        alert("请先选中属性（点击属性名称选中）！");
         return;
     }
 
@@ -38,7 +37,7 @@
     }
 
     if (validProps.length === 0) {
-        alert("未检测到关键帧，请确保选中的是包含关键帧的属性。");
+        app.endUndoGroup();
         return;
     }
 

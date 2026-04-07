@@ -5,12 +5,10 @@
 (function () {
     var comp = app.project.activeItem;
     if (!(comp instanceof CompItem)) {
-        alert("请先进入一个合成。");
         return;
     }
 
     if (!comp.selectedLayers.length) {
-        alert("请先选择一个图层。");
         return;
     }
 
@@ -31,13 +29,11 @@
     } catch (e) {}
 
     if (!w || !h) {
-        alert("无法获取图层尺寸。");
         return;
     }
 
     // AE 限制
     if (w < 4 || h < 4 || w > 32000 || h > 32000) {
-        alert("目标尺寸不合法: " + w + " x " + h);
         return;
     }
 

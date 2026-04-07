@@ -21,10 +21,10 @@
     }
 
     var comp = app.project.activeItem;
-    if (!(comp instanceof CompItem)) { alert("先打开合成哈～"); return; }
+    if (!(comp instanceof CompItem)) { return; }
 
     var sel = comp.selectedLayers;
-    if (sel.length === 0) { alert("先选几个图层再说"); return; }
+    if (sel.length === 0) { return; }
 
     app.beginUndoGroup("Trim to Keyframes");
     for (var i = 0; i < sel.length; i++) {

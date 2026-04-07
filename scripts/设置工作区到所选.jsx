@@ -42,7 +42,7 @@
                 break;
             }
         }
-        if (!haveRef) { alert("请先进入一个合成，或在项目面板选中至少一个合成~"); app.endUndoGroup(); return; }
+        if (!haveRef) { app.endUndoGroup(); return; }
     }
 
     function alignCompWorkArea(tComp, refStart, refDur) {

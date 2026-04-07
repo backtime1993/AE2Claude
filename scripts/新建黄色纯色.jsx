@@ -27,6 +27,4 @@ if (app.project && app.project.activeItem && app.project.activeItem instanceof C
     }
 
     app.endUndoGroup();
-} else {
-    alert("请先打开一个合成。");
 }

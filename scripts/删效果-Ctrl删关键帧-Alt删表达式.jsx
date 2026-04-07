@@ -1,9 +1,9 @@
 (function () {
     var comp = app.project.activeItem;
-    if (!(comp instanceof CompItem)) { alert("先进入一个合成。"); return; }
+    if (!(comp instanceof CompItem)) { return; }
 
     var sel = comp.selectedLayers || [];
-    if (!sel.length) { alert("请先选择一些图层。"); return; }
+    if (!sel.length) { return; }
 
     var ks = null, isCtrl = false, isAlt = false;
     try {

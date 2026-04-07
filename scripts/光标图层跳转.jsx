@@ -1,12 +1,12 @@
 /* Go To Head / Tail Frame (Ctrl/Cmd = Head) */
 (function () {
-    app.beginUndoGroup("Go To Head/Tail Frame");
-
     var comp = app.project.activeItem;
-    if (!(comp instanceof CompItem)) { alert("兄弟，先点进一个合成~"); return; }
+    if (!(comp instanceof CompItem)) { return; }
 
     var layers = comp.selectedLayers;
-    if (layers.length === 0) { alert("先选中至少一个图层哈"); return; }
+    if (layers.length === 0) { return; }
+
+    app.beginUndoGroup("Go To Head/Tail Frame");
 
     var fd = comp.frameDuration;
 

@@ -82,6 +82,4 @@ if (comp && comp instanceof CompItem) {
     nullLayer.label = 2;    // 黄色
 
     app.endUndoGroup();
-} else {
-    alert("请确保有一个合成处于活动状态。");
 }

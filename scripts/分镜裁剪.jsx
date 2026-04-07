@@ -1,8 +1,8 @@
 (function outToNextIn() {
-    app.beginUndoGroup("出点接下一层入点");
-
     var comp = app.project.activeItem;
-    if (!(comp instanceof CompItem)) { alert("兄弟，先点进合成~"); return; }
+    if (!(comp instanceof CompItem)) { return; }
+
+    app.beginUndoGroup("出点接下一层入点");
 
     // 目标层：有选层就用选层，否则用全部
     var targets = comp.selectedLayers.length ? comp.selectedLayers : (function () {
@@ -12,7 +12,7 @@
     // 跳过锁定层
     var layers = [];
     for (var i = 0; i < targets.length; i++) if (!targets[i].locked) layers.push(targets[i]);
-    if (layers.length < 2) { alert("至少需要两层才能收尾相接~"); app.endUndoGroup(); return; }
+    if (layers.length < 2) { app.endUndoGroup(); return; }
 
     // 按“入点时间”排序，入点相同则按图层索引
     layers.sort(function (a, b) {

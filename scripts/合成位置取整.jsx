@@ -1,13 +1,11 @@
 (function () {
     var comp = app.project.activeItem;
     if (!(comp && comp instanceof CompItem)) {
-        alert("请先进入一个合成。");
         return;
     }
 
     var sel = comp.selectedLayers;
     if (!sel || sel.length === 0) {
-        alert("请先选中至少一个图层再运行脚本。");
         return;
     }
 

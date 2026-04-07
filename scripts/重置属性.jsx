@@ -15,8 +15,8 @@
     // 1. 储存功能
     btnStore.onClick = function() {
         var comp = app.project.activeItem;
-        if (!comp || !(comp instanceof CompItem)) return alert("请先打开一个合成");
-        if (comp.selectedLayers.length === 0) return alert("请选择一个摄像机层");
+        if (!comp || !(comp instanceof CompItem)) return;
+        if (comp.selectedLayers.length === 0) return;
         
         sourceData.compName = comp.name;
         sourceData.layerName = comp.selectedLayers[0].name;
@@ -35,11 +35,11 @@
 
     // 2. 绑定/修复功能
     btnBind.onClick = function() {
-        if (sourceData.compName === "") return alert("请先执行第一步储存信息");
-        
+        if (sourceData.compName === "") return;
+
         var comp = app.project.activeItem;
         var layers = comp.selectedLayers;
-        if (!comp || layers.length === 0) return alert("请选择目标摄像机");
+        if (!comp || layers.length === 0) return;
 
         app.beginUndoGroup("Smart Bind Camera");
         

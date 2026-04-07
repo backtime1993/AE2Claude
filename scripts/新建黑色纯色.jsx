@@ -37,7 +37,5 @@ if (app.project && app.project.activeItem && app.project.activeItem instanceof C
 
     // 结束撤销组
     app.endUndoGroup();
-} else {
-    alert("请先打开一个合成。");
 }
 

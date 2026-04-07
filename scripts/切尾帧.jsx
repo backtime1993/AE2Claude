@@ -1,16 +1,14 @@
 (function () {
-    app.beginUndoGroup("CTI裁切（不位移）");
-
     var comp = app.project.activeItem;
     if (!(comp && comp instanceof CompItem)) {
-        alert("兄弟，先选中一个合成~");
         return;
     }
     var sel = comp.selectedLayers;
     if (sel.length === 0) {
-        alert("兄弟，先选要裁切的图层~");
         return;
     }
+
+    app.beginUndoGroup("CTI裁切（不位移）");
 
     var t = comp.time;                         // CTI  
     var ctrl = ScriptUI.environment.keyboardState.ctrlKey;

@@ -2,8 +2,8 @@
     app.beginUndoGroup("调整层·镜头模糊 40 帧（含入/出点右移5f）");
 
     var comp = app.project.activeItem;
-    if (!(comp instanceof CompItem)) { alert("兄弟先点进一个合成。"); app.endUndoGroup(); return; }
-    if (comp.selectedLayers.length === 0) { alert("兄弟先选一个图层，我会插在它上面。"); app.endUndoGroup(); return; }
+    if (!(comp instanceof CompItem)) { app.endUndoGroup(); return; }
+    if (comp.selectedLayers.length === 0) { app.endUndoGroup(); return; }
 
     // 选中里索引最小（最靠上）的那层
     var sel = comp.selectedLayers, topLayer = sel[0];
@@ -16,7 +16,7 @@
     // 原始40帧窗口（居中在光标）
     var tIn  = Math.max(0, t - half);
     var tOut = Math.min(comp.duration, t + half);
-    if (tIn >= tOut) { alert("合成太短或光标太靠边，放不下40帧窗口。"); app.endUndoGroup(); return; }
+    if (tIn >= tOut) { app.endUndoGroup(); return; }
 
     // 需要把入/出点整体右移5帧，但要保证：1) 不超出合成 2) 光标仍在层内
     var wantShift = 5 * fd;
@@ -41,11 +41,11 @@
     var fx = fxGrp.addProperty("ADBE Camera Lens Blur")
           || fxGrp.addProperty("Camera Lens Blur")
           || fxGrp.addProperty("摄像机镜头模糊");
-    if (!fx) { alert("没找到内置效果：摄像机镜头模糊（Camera Lens Blur）。"); app.endUndoGroup(); return; }
+    if (!fx) { app.endUndoGroup(); return; }
 
     // 模糊半径（通常是属性1）
     var radius = fx.property(1);
-    if (!radius) { alert("找不到“模糊半径”属性。"); app.endUndoGroup(); return; }
+    if (!radius) { app.endUndoGroup(); return; }
 
     // 在入点/光标/出点各打一针：0 → 20 → 0；强制线性
     var tK1 = solid.inPoint;   // 入点（已右移）

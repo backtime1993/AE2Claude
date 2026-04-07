@@ -7,16 +7,14 @@
       app.beginUndoGroup("Bridge Two Layers v1.7");
 
       var comp = app.project.activeItem;
-      if (!(comp && comp instanceof CompItem)) { alert("请先进入一个合成。");
-  app.endUndoGroup(); return; }
+      if (!(comp && comp instanceof CompItem)) { app.endUndoGroup(); return; }
 
       var fd = comp.frameDuration;
       var T  = Math.round(comp.time / fd) * fd;
       var eps = 2 * fd;
 
       var sel = comp.selectedLayers;
-      if (!sel || sel.length < 2) { alert("至少选择两层（多选也可）。");
-  app.endUndoGroup(); return; }
+      if (!sel || sel.length < 2) { app.endUndoGroup(); return; }
 
       function pickTwoAroundTime(layers, t) {
           var before = null, after = null, d1 = 1e9, d2 = 1e9;
@@ -40,16 +38,13 @@
       pair.sort(function (a, b) { return a.inPoint - b.inPoint; });
       var A = pair[0], B = pair[1];
 
-      if (T <= A.inPoint + fd) { alert("前层过近入点，至少留 1 帧。");
-  app.endUndoGroup(); return; }
-      if (T >= B.outPoint - fd) { alert("后层过近出点，至少留 1 帧。");
-  app.endUndoGroup(); return; }
+      if (T <= A.inPoint + fd) { app.endUndoGroup(); return; }
+      if (T >= B.outPoint - fd) { app.endUndoGroup(); return; }
 
       var A_in0 = A.inPoint, A_out0 = A.outPoint;
       var B_in0 = B.inPoint, B_out0 = B.outPoint;
       var A_oldDur = A_out0 - A_in0, B_oldDur = B_out0 - B_in0;
-      if (A_oldDur <= 0 || B_oldDur <= 0) { alert("存在零时长图层。");
-  app.endUndoGroup(); return; }
+      if (A_oldDur <= 0 || B_oldDur <= 0) { app.endUndoGroup(); return; }
 
       var A_newDur = T - A_in0, B_newDur = B_out0 - T;
       var A_scale = A_newDur / A_oldDur, B_scale = B_newDur / B_oldDur;

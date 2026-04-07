@@ -4,18 +4,16 @@
  */
 
 (function () {
-    app.beginUndoGroup("Set Comp Duration From Layers");
-
     var comp = app.project.activeItem;
     if (!(comp instanceof CompItem)) {
-        alert("请先打开一个合成！");
         return;
     }
 
     if (comp.selectedLayers.length === 0) {
-        alert("先选一个或多个图层再跑脚本！");
         return;
     }
+
+    app.beginUndoGroup("Set Comp Duration From Layers");
 
     var minIn  = Number.MAX_VALUE;
     var maxOut = 0;

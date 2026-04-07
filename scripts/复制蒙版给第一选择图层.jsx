@@ -1,13 +1,11 @@
 (function() {
     var comp = app.project.activeItem;
     if (!comp || !(comp instanceof CompItem)) {
-        alert("请先打开一个合成");
         return;
     }
 
     var selectedLayers = comp.selectedLayers;
     if (selectedLayers.length < 2) {
-        alert("请至少选择两个图层：\n1. 先选接收蒙版的图层\n2. 再选来源图层");
         return;
     }
 

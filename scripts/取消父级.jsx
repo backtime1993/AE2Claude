@@ -26,6 +26,4 @@ if (comp && comp instanceof CompItem) {
     }
 
     app.endUndoGroup();
-} else {
-    alert("请确保有一个合成处于活动状态。");
 }

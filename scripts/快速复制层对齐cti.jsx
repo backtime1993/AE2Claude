@@ -1,12 +1,12 @@
 // 复制所选图层到 CTI；若仅选中两个图层：复制第一个并放在第二个上方
 (function () {
-    app.beginUndoGroup("复制到CTI / 两层插入上方");
-
     var comp = app.project.activeItem;
-    if (!(comp && comp instanceof CompItem)) { alert("先选中一个合成。"); return; }
+    if (!(comp && comp instanceof CompItem)) { return; }
 
     var sel = comp.selectedLayers;
-    if (!sel.length) { alert("先选择至少一个图层。"); return; }
+    if (!sel.length) { return; }
+
+    app.beginUndoGroup("复制到CTI / 两层插入上方");
 
     var fd = comp.frameDuration;
     var T  = Math.round(comp.time / fd) * fd; // 帧对齐

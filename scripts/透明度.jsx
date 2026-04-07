@@ -115,6 +115,4 @@ if (comp && comp.selectedLayers.length > 0) {
         successCount++;
     }
     app.endUndoGroup();
-} else {
-    alert("请先选择图层！");
 }
