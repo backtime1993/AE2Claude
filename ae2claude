@@ -1,24 +1,112 @@
 #!/usr/bin/env python3
-"""AE2Claude CLI - talk to After Effects from the terminal.
+"""AE2Claude CLI v2.0 - talk to After Effects from the terminal.
 
-Usage:
-  ae2claude                           health check
-  ae2claude jsx <code>                run ExtendScript
-  ae2claude py <code>                 run Python (PyShiftCore context)
-  ae2claude version                   AE version
-  ae2claude comps                     list compositions
-  ae2claude layers                    list layers in active comp
-  ae2claude call <method> [args...]   call ae_bridge method (JSON args)
-  ae2claude methods                   list all ae_bridge methods
+Built-in:
+  ae2claude                              health check
+  ae2claude jsx <code>                   run ExtendScript
+  ae2claude py <code>                    run Python (PyShiftCore)
+  ae2claude version                      AE version
+  ae2claude comps                        list compositions
+  ae2claude layers                       list layers in active comp
+  ae2claude methods                      list all bridge methods
+  ae2claude help                         this help
 
-Examples:
-  ae2claude call comp_info
-  ae2claude call get_transform_value TestText position
-  ae2claude call set_blending_mode TestSolid multiply
-  ae2claude call add_shape_layer MyShape
-  ae2claude call get_keyframes TestText opacity
-  ae2claude call create_camera MyCam --zoom 1200
-  ae2claude jsx '"app.version"'
+Bridge (ae2claude call <method> [args...] [--key value]):
+  Query:
+    comp_info                            active comp info
+    project_info                         project info
+    list_layers                          all layers
+    list_comps                           all compositions
+    layer_exists <name>                  check layer
+    get_layer_info <name>                layer detail
+    get_selected_layers                  selected layers
+    list_masks <name>                    layer masks
+    list_comp_markers                    comp markers
+    list_layer_markers <name>            layer markers
+    list_precomps                        precomp list
+    enumerate_effects <name>             layer effects
+    render_queue_info                    render queue
+
+  Read Properties:
+    get_transform_value <name> <prop>    position/scale/rotation/opacity
+    get_keyframes <name> <prop>          keyframe list
+    get_property_value <name> <path>     any property
+    get_property_keyframes <name> <path> any keyframes
+    get_effect_param <name> <fx> <param> effect value
+    get_blending_mode <name>             blend mode
+    get_parent <name>                    parent layer
+
+  Create:
+    add_text_layer <text>                text layer
+    add_shape_layer <name>               shape layer
+    add_shape_rect <name> --size [w,h]   rectangle
+    add_shape_ellipse <name> --size [w,h] ellipse
+    add_shape_fill <name> --color [r,g,b] fill
+    add_shape_stroke <name>              stroke
+    create_comp <name> <w> <h> <fps> <dur> new comp
+    create_camera <name>                 camera
+    create_light <name>                  light
+    create_null_control <name>           null + parent
+    import_file <path>                   import footage
+
+  Modify:
+    set_position_keyframes <name> <kfs>  position KFs
+    set_opacity_keyframes <name> <kfs>   opacity KFs
+    set_scale_keyframes <name> <kfs>     scale KFs
+    set_rotation_keyframes <name> <kfs>  rotation KFs
+    set_blending_mode <name> <mode>      blend mode
+    set_parent <child> <parent>          parenting
+    remove_parent <name>                 unparent
+    set_3d_layer <name>                  enable 3D
+    set_track_matte <name> <matte> <type> track matte
+    set_layer_timing <name>              in/out point
+    set_layer_label <name> <label>       label color
+    rename_layer <old> <new>             rename
+    reorder_layer <name> <index>         reorder
+    apply_easing <name>                  ease transform
+    set_expression <name> <path> <expr>  expression
+    clear_expression <name> <path>       clear expr
+
+  Mask:
+    add_mask <name> <verts>              custom mask
+    add_mask_rect <name> <t> <l> <w> <h> rect mask
+    set_mask_feather <name> <idx> <val>  feather
+    set_mask_opacity <name> <idx> <val>  mask opacity
+    animate_mask_path <name> <idx> <kfs> animate mask
+    remove_mask <name> <idx>             delete mask
+
+  Marker:
+    add_comp_marker <time>               comp marker
+    add_layer_marker <name> <time>       layer marker
+    remove_comp_marker <idx>             delete marker
+
+  Text:
+    add_text_animator <name> --properties {...} text animator
+    animate_text_selector <name>         selector KFs
+
+  Time:
+    enable_time_remap <name>             enable remap
+    freeze_frame <name> <time>           freeze
+    reverse_layer <name>                 reverse
+
+  Render:
+    add_to_render_queue                  queue active comp
+    render_comp                          queue + render
+    start_render                         start render
+    clear_render_queue                   clear queue
+
+  Batch:
+    batch_jsx <scripts>                  multi-JSX
+    select_layers <names>                select
+    deselect_all                         deselect
+    duplicate_layer <name>               duplicate
+    remove_layer <name>                  delete
+    remove_layers_by_prefix <prefix>     batch delete
+    precompose <names> <comp_name>       precompose
+
+  Undo:
+    begin_undo <name>                    start undo group
+    end_undo                             end undo group
 """
 import sys, json, os, urllib.request, urllib.error, inspect
 
