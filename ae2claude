@@ -137,6 +137,98 @@ def _get_bridge():
 def _get_scripts_dir():
     return os.path.join(_BRIDGE_DIR, "scripts")
 
+def _load_catalog():
+    cat_path = os.path.join(_get_scripts_dir(), "catalog.json")
+    if not os.path.exists(cat_path):
+        return {"effects": {}, "presets": {}}
+    with open(cat_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def _apply_effect(name):
+    """Apply effect by name (fuzzy match from catalog)."""
+    catalog = _load_catalog()
+    effects = catalog.get("effects", {})
+
+    # exact match
+    match_name = effects.get(name)
+
+    # fuzzy
+    if not match_name:
+        candidates = {k: v for k, v in effects.items() if name.lower() in k.lower()}
+        if len(candidates) == 1:
+            match_name = list(candidates.values())[0]
+            name = list(candidates.keys())[0]
+        elif len(candidates) > 1:
+            print(f"Multiple matches for '{name}':", file=sys.stderr)
+            for k in candidates:
+                print(f"  {k}", file=sys.stderr)
+            sys.exit(1)
+
+    if not match_name:
+        print(f"error: effect '{name}' not in catalog. Use 'ae2claude fx --list'", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"→ {name} ({match_name})", file=sys.stderr)
+    jsx = (
+        f'(function(){{'
+        f'var c=app.project.activeItem;'
+        f'if(!c||!(c instanceof CompItem))return"ERR:no_comp";'
+        f'var s=c.selectedLayers;if(s.length===0)return"ERR:no_selection";'
+        f'app.beginUndoGroup("Add {name}");'
+        f'for(var i=0;i<s.length;i++){{try{{s[i].property("Effects").addProperty("{match_name}");}}catch(e){{}}}}'
+        f'app.endUndoGroup();return"added:"+s.length;'
+        f'}})()'
+    )
+    r = req("/jsx", jsx)
+    if r.get("ok"):
+        result = r.get("result", "")
+        if result and result.startswith("ERR:"):
+            print(result, file=sys.stderr); sys.exit(1)
+        if result: print(result)
+    else:
+        print(f"error: {r.get('error', 'unknown')}", file=sys.stderr); sys.exit(1)
+
+def _apply_preset(name):
+    """Apply preset by name (fuzzy match from catalog)."""
+    catalog = _load_catalog()
+    presets = catalog.get("presets", {})
+
+    path = presets.get(name)
+    if not path:
+        candidates = {k: v for k, v in presets.items() if name.lower() in k.lower()}
+        if len(candidates) == 1:
+            path = list(candidates.values())[0]
+            name = list(candidates.keys())[0]
+        elif len(candidates) > 1:
+            print(f"Multiple matches for '{name}':", file=sys.stderr)
+            for k in candidates: print(f"  {k}", file=sys.stderr)
+            sys.exit(1)
+
+    if not path:
+        print(f"error: preset '{name}' not in catalog. Use 'ae2claude preset --list'", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"→ {name}", file=sys.stderr)
+    jsx = (
+        f'(function(){{'
+        f'var c=app.project.activeItem;'
+        f'if(!c||!(c instanceof CompItem))return"ERR:no_comp";'
+        f'var s=c.selectedLayers;if(s.length===0)return"ERR:no_selection";'
+        f'app.beginUndoGroup("Apply {name}");'
+        f'var f=new File("{path}");if(!f.exists)return"ERR:preset_not_found";'
+        f'for(var i=0;i<s.length;i++){{s[i].applyPreset(f);}}'
+        f'app.endUndoGroup();return"applied:"+s.length;'
+        f'}})()'
+    )
+    r = req("/jsx", jsx)
+    if r.get("ok"):
+        result = r.get("result", "")
+        if result and result.startswith("ERR:"):
+            print(result, file=sys.stderr); sys.exit(1)
+        if result: print(result)
+    else:
+        print(f"error: {r.get('error', 'unknown')}", file=sys.stderr); sys.exit(1)
+
 def _load_registry():
     reg_path = os.path.join(_get_scripts_dir(), "registry.json")
     if not os.path.exists(reg_path):
@@ -329,6 +421,24 @@ def main():
         return
     elif cmd == "scripts":
         _list_scripts()
+        return
+    elif cmd == "fx":
+        if len(args) < 2 or args[1] == "--list":
+            catalog = _load_catalog()
+            for name, mn in sorted(catalog.get("effects", {}).items()):
+                print(f"  {name:35s} {mn}")
+            print(f"\n共 {len(catalog.get('effects', {}))} 个效果 — ae2claude fx <名称>")
+            return
+        _apply_effect(args[1])
+        return
+    elif cmd == "preset":
+        if len(args) < 2 or args[1] == "--list":
+            catalog = _load_catalog()
+            for name, path in sorted(catalog.get("presets", {}).items()):
+                print(f"  {name:35s} {os.path.basename(path)}")
+            print(f"\n共 {len(catalog.get('presets', {}))} 个预设 — ae2claude preset <名称>")
+            return
+        _apply_preset(args[1])
         return
     elif cmd == "methods":
         _list_methods()
