@@ -1,4 +1,6 @@
-/* Comp Trimmer — 裁尾：合成结束点→光标+1帧 (CLI版，无GUI) */
+/* Comp Trimmer — 裁尾 (CLI版，完整原版逻辑)
+   无选中层: 裁合成duration到光标+1帧
+   选中预合成层: 裁预合成内部duration */
 (function(){
 var comp = app.project.activeItem;
 if (!comp || !(comp instanceof CompItem)) return "ERR:no_comp";
@@ -9,7 +11,7 @@ if (selectedLayers.length === 0) {
         app.beginUndoGroup("Trim End");
         comp.duration = currentTime;
         app.endUndoGroup();
-        return "trimmed_to:" + currentTime;
+        return "trimmed_comp:" + currentTime;
     }
     return "ERR:time_is_0";
 }
@@ -31,7 +33,7 @@ try {
             layer.outPoint = currentTime;
         }
     }
-} catch (e) {}
+} catch (e) { return "ERR:" + e.toString(); }
 app.endUndoGroup();
 return "trimmed_end:" + currentTime;
 })()
