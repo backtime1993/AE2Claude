@@ -2,27 +2,99 @@
 """AE2Claude CLI - talk to After Effects from the terminal.
 
 Usage:
-  ae2claude                     health check
-  ae2claude jsx <code>          run ExtendScript
-  ae2claude py <code>           run Python (PyShiftCore context)
-  ae2claude version             AE version
-  ae2claude comps               list compositions
-  ae2claude layers              list layers in active comp
+  ae2claude                           health check
+  ae2claude jsx <code>                run ExtendScript
+  ae2claude py <code>                 run Python (PyShiftCore context)
+  ae2claude version                   AE version
+  ae2claude comps                     list compositions
+  ae2claude layers                    list layers in active comp
+  ae2claude call <method> [args...]   call ae_bridge method (JSON args)
+  ae2claude methods                   list all ae_bridge methods
+
+Examples:
+  ae2claude call comp_info
+  ae2claude call get_transform_value TestText position
+  ae2claude call set_blending_mode TestSolid multiply
+  ae2claude call add_shape_layer MyShape
+  ae2claude call get_keyframes TestText opacity
+  ae2claude call create_camera MyCam --zoom 1200
+  ae2claude jsx '"app.version"'
 """
-import sys, json, urllib.request, urllib.error
+import sys, json, os, urllib.request, urllib.error, inspect
 
 BASE = "http://127.0.0.1:8089"
+_BRIDGE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def req(path, data=None):
+def req(path, data=None, timeout=15):
     r = urllib.request.Request(f"{BASE}{path}",
         data=data.encode("utf-8") if data else None,
         headers={"Content-Type": "text/plain; charset=utf-8"} if data else {})
     try:
-        with urllib.request.urlopen(r, timeout=15) as resp:
+        with urllib.request.urlopen(r, timeout=timeout) as resp:
             return json.loads(resp.read())
     except urllib.error.URLError as e:
         print(f"error: AE2Claude not reachable ({e})", file=sys.stderr)
         sys.exit(1)
+
+def _get_bridge():
+    sys.path.insert(0, _BRIDGE_DIR)
+    from ae_bridge import AEBridge
+    return AEBridge()
+
+def _parse_arg(s):
+    """Try to parse as JSON, fallback to string."""
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, ValueError):
+        return s
+
+def _call_method(method_name, args):
+    ae = _get_bridge()
+    method = getattr(ae, method_name, None)
+    if method is None:
+        print(f"error: unknown method '{method_name}'", file=sys.stderr)
+        print(f"hint: ae2claude methods", file=sys.stderr)
+        sys.exit(1)
+
+    # Parse --key value kwargs and positional args
+    positional = []
+    kwargs = {}
+    i = 0
+    while i < len(args):
+        if args[i].startswith("--"):
+            key = args[i][2:].replace("-", "_")
+            if i + 1 < len(args) and not args[i + 1].startswith("--"):
+                kwargs[key] = _parse_arg(args[i + 1])
+                i += 2
+            else:
+                kwargs[key] = True
+                i += 1
+        else:
+            positional.append(_parse_arg(args[i]))
+            i += 1
+
+    try:
+        result = method(*positional, **kwargs)
+        if isinstance(result, (dict, list)):
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif result is not None:
+            print(result)
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+def _list_methods():
+    ae = _get_bridge()
+    methods = []
+    for name in sorted(dir(ae)):
+        if name.startswith("_"):
+            continue
+        m = getattr(ae, name)
+        if callable(m):
+            sig = inspect.signature(m)
+            params = [str(p) for p in sig.parameters.values()]
+            methods.append(f"  {name}({', '.join(params)})")
+    print("\n".join(methods))
 
 def main():
     args = sys.argv[1:]
@@ -52,6 +124,18 @@ def main():
     elif cmd in ("health", "status"):
         r = req("/")
         print(json.dumps(r, indent=2, ensure_ascii=False))
+        return
+    elif cmd == "call":
+        if len(args) < 2:
+            print("usage: ae2claude call <method> [args...]", file=sys.stderr)
+            sys.exit(1)
+        _call_method(args[1], args[2:])
+        return
+    elif cmd == "methods":
+        _list_methods()
+        return
+    elif cmd in ("help", "-h", "--help"):
+        print(__doc__.strip())
         return
     else:
         # treat entire args as jsx
