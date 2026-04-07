@@ -30,7 +30,7 @@ import urllib.request
 import urllib.error
 from typing import Optional, List, Dict, Any, Tuple, Union
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║              EFFECT MATCHNAME REGISTRY                  ║
@@ -2040,6 +2040,247 @@ class AEBridge:
             f'var c=app.project.activeItem;'
             f'var ls=c.layer("{_esc(name)}").property("Layer Styles");'
             f'ls.property({style_index}).enabled={"true" if enabled else "false"};"ok";'
+        )
+
+    # ── 3D / Camera / Light ────────────────────────────────
+
+    def set_3d_layer(self, name: str, enabled: bool = True) -> str:
+        """启用/禁用图层 3D"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").threeDLayer={"true" if enabled else "false"};"ok";'
+        )
+
+    def create_camera(self, name: str = "Camera",
+                       camera_type: str = "two_node",
+                       zoom: float = None,
+                       position: List[float] = None) -> str:
+        """创建摄像机。camera_type: one_node/two_node"""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var cam=c.layers.addCamera("{_esc(name)}",[c.width/2,c.height/2]);'
+        )
+        if camera_type == "one_node":
+            jsx += 'cam.autoOrient=AutoOrientType.NO_AUTO_ORIENT;'
+        if zoom is not None:
+            jsx += f'cam.property("Camera Options").property("Zoom").setValue({zoom});'
+        if position:
+            jsx += f'cam.property("Transform").property("Position").setValue({json.dumps(position)});'
+        jsx += 'cam.name;'
+        return self.run_jsx(jsx)
+
+    def create_light(self, name: str = "Light",
+                      light_type: str = "point",
+                      intensity: float = 100,
+                      color: List[float] = None,
+                      position: List[float] = None) -> str:
+        """创建灯光。light_type: parallel/spot/point/ambient"""
+        type_map = {"parallel": 1, "spot": 2, "point": 3, "ambient": 4}
+        lt_val = type_map.get(light_type, 3)
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var lyr=c.layers.addLight("{_esc(name)}",[c.width/2,c.height/2]);'
+            f'lyr.property("Light Options").property("Light Type").setValue({lt_val});'
+            f'lyr.property("Light Options").property("Intensity").setValue({intensity});'
+        )
+        if color:
+            jsx += f'lyr.property("Light Options").property("Color").setValue({json.dumps(color)});'
+        if position:
+            jsx += f'lyr.property("Transform").property("Position").setValue({json.dumps(position)});'
+        jsx += 'lyr.name;'
+        return self.run_jsx(jsx)
+
+    def set_camera_property(self, name: str, prop: str, value: Any) -> str:
+        """设置摄像机属性 (zoom/focus_distance/aperture/blur_level)"""
+        prop_map = {
+            "zoom": "Zoom", "focus_distance": "Focus Distance",
+            "aperture": "Aperture", "blur_level": "Blur Level",
+        }
+        ae_prop = prop_map.get(prop, prop)
+        v = json.dumps(value) if isinstance(value, (list, tuple)) else str(value)
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").property("Camera Options").property("{ae_prop}").setValue({v});"ok";'
+        )
+
+    def set_light_property(self, name: str, prop: str, value: Any) -> str:
+        """设置灯光属性 (intensity/color/cone_angle/cone_feather/shadow_darkness/shadow_diffusion)"""
+        prop_map = {
+            "intensity": "Intensity", "color": "Color",
+            "cone_angle": "Cone Angle", "cone_feather": "Cone Feather",
+            "shadow_darkness": "Shadow Darkness", "shadow_diffusion": "Shadow Diffusion",
+        }
+        ae_prop = prop_map.get(prop, prop)
+        v = json.dumps(value) if isinstance(value, (list, tuple)) else str(value)
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").property("Light Options").property("{ae_prop}").setValue({v});"ok";'
+        )
+
+    # ── Time Remap ─────────────────────────────────────────
+
+    def enable_time_remap(self, name: str) -> str:
+        """启用图层时间重映射"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").timeRemapEnabled=true;"ok";'
+        )
+
+    def set_time_remap_keyframes(self, name: str,
+                                  keyframes: List[Tuple[float, float]]) -> str:
+        """设置时间重映射关键帧。keyframes: [(comp_time, source_time), ...]"""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'if(!tl.timeRemapEnabled)tl.timeRemapEnabled=true;'
+            f'var tr=tl.property("Time Remap");'
+            f'while(tr.numKeys>0)tr.removeKey(1);'
+        )
+        for comp_t, src_t in keyframes:
+            jsx += f'tr.setValueAtTime({comp_t},{src_t});'
+        jsx += '"ok";'
+        return self.run_jsx(jsx)
+
+    def freeze_frame(self, name: str, at_time: float) -> str:
+        """冻结帧"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'if(!tl.timeRemapEnabled)tl.timeRemapEnabled=true;'
+            f'var tr=tl.property("Time Remap");'
+            f'while(tr.numKeys>0)tr.removeKey(1);'
+            f'tr.setValueAtTime(tl.inPoint,{at_time});'
+            f'tr.setValueAtTime(tl.outPoint,{at_time});'
+            f'"frozen";'
+        )
+
+    def reverse_layer(self, name: str) -> str:
+        """反转图层时间"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'if(!tl.timeRemapEnabled)tl.timeRemapEnabled=true;'
+            f'var tr=tl.property("Time Remap");'
+            f'var dur=tl.source.duration;'
+            f'while(tr.numKeys>0)tr.removeKey(1);'
+            f'tr.setValueAtTime(tl.inPoint,dur);'
+            f'tr.setValueAtTime(tl.outPoint,0);'
+            f'"reversed";'
+        )
+
+    # ── Render Queue Management ────────────────────────────
+
+    def render_queue_info(self) -> List[dict]:
+        """获取渲染队列状态"""
+        r = self.run_jsx(
+            'var rq=app.project.renderQueue;var out=[];'
+            'for(var i=1;i<=rq.numItems;i++){var ri=rq.item(i);'
+            'var om=ri.outputModule(1);'
+            'out.push({index:i,comp:ri.comp.name,status:ri.status,'
+            'outputPath:om.file?om.file.fsName:""});}'
+            'JSON.stringify(out);'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return []
+
+    def set_render_output(self, rq_index: int, output_path: str,
+                           template: str = None) -> str:
+        """设置渲染项输出路径和模板"""
+        safe_path = output_path.replace('\\', '/')
+        jsx = (
+            f'var ri=app.project.renderQueue.item({rq_index});'
+            f'var om=ri.outputModule(1);'
+            f'om.file=new File("{safe_path}");'
+        )
+        if template:
+            jsx += f'om.applyTemplate("{_esc(template)}");'
+        jsx += '"ok";'
+        return self.run_jsx(jsx)
+
+    def remove_render_item(self, rq_index: int) -> str:
+        """从渲染队列移除项目"""
+        return self.run_jsx(
+            f'app.project.renderQueue.item({rq_index}).remove();"removed";'
+        )
+
+    def clear_render_queue(self) -> str:
+        """清空渲染队列"""
+        return self.run_jsx(
+            'var rq=app.project.renderQueue;'
+            'for(var i=rq.numItems;i>=1;i--)rq.item(i).remove();'
+            '"cleared:"+rq.numItems;'
+        )
+
+    def start_render(self) -> str:
+        """开始渲染（阻塞直到完成）"""
+        return self.run_jsx(
+            'app.project.renderQueue.render();"render_complete";',
+            timeout=600000
+        )
+
+    def render_comp(self, comp_name: str = None, output_path: str = None,
+                     template: str = None) -> str:
+        """快捷方法：加入队列 + 设置输出 + 开始渲染"""
+        self.add_to_render_queue(comp_name, output_path, template)
+        return self.start_render()
+
+    # ── Batch / Selection ──────────────────────────────────
+
+    def batch_jsx(self, scripts: List[str]) -> List[Any]:
+        """批量执行多段 JSX（一次 HTTP 调用）。"""
+        wrapped = 'var _results=[];'
+        for i, s in enumerate(scripts):
+            wrapped += f'try{{_results.push({s})}}catch(e){{_results.push("ERR:"+e.toString())}}'
+        wrapped += 'JSON.stringify(_results);'
+        r = self.run_jsx(wrapped)
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return [r]
+
+    def select_layers(self, names: List[str]) -> str:
+        """选中指定图层"""
+        jsx = 'var c=app.project.activeItem;'
+        jsx += 'for(var i=1;i<=c.numLayers;i++)c.layer(i).selected=false;'
+        for n in names:
+            jsx += f'try{{c.layer("{_esc(n)}").selected=true;}}catch(e){{}}'
+        jsx += '"ok";'
+        return self.run_jsx(jsx)
+
+    def deselect_all(self) -> str:
+        """取消所有选择"""
+        return self.run_jsx(
+            'var c=app.project.activeItem;'
+            'for(var i=1;i<=c.numLayers;i++)c.layer(i).selected=false;"ok";'
+        )
+
+    def get_selected_layers(self) -> List[dict]:
+        """获取当前选中图层"""
+        r = self.run_jsx(
+            'var c=app.project.activeItem;var out=[];'
+            'for(var i=1;i<=c.numLayers;i++){var l=c.layer(i);'
+            'if(l.selected)out.push({name:l.name,index:i,id:l.id});}'
+            'JSON.stringify(out);'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return []
+
+    def duplicate_layer(self, name: str) -> str:
+        """复制图层，返回新图层名"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var nl=c.layer("{_esc(name)}").duplicate();nl.name;'
+        )
+
+    def reorder_layer(self, name: str, new_index: int) -> str:
+        """移动图层到指定索引"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").moveTo({new_index});"ok";'
         )
 
 
