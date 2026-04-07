@@ -1195,6 +1195,492 @@ class AEBridge:
         except json.JSONDecodeError:
             return {"error": r}
 
+    # ── Property Read-back ─────────────────────────────────
+
+    def get_transform_value(self, name: str, prop: str, at_time: float = None) -> Any:
+        """
+        读取 Transform 属性当前值或指定时间的值。
+
+        Args:
+            name: 图层名
+            prop: 属性名 ("position"/"scale"/"rotation"/"opacity"/"anchor_point")
+            at_time: 指定时间(秒)，None 表示当前时间
+        """
+        info = TRANSFORM_PROPS.get(prop)
+        if not info:
+            raise ValueError(f"Unknown transform prop: {prop}. Available: {list(TRANSFORM_PROPS.keys())}")
+        path = info["path"]
+        if at_time is not None:
+            jsx = (
+                f'var c=app.project.activeItem;'
+                f'var tl=c.layer("{_esc(name)}");'
+                f'var p=tl.{path};'
+                f'var v=p.valueAtTime({at_time},false);'
+                f'JSON.stringify(v instanceof Array?v:[v]);'
+            )
+        else:
+            jsx = (
+                f'var c=app.project.activeItem;'
+                f'var tl=c.layer("{_esc(name)}");'
+                f'var p=tl.{path};'
+                f'var v=p.value;'
+                f'JSON.stringify(v instanceof Array?v:[v]);'
+            )
+        r = self.run_jsx(jsx)
+        try:
+            val = json.loads(r)
+            return val[0] if len(val) == 1 and prop in ("rotation", "opacity") else val
+        except json.JSONDecodeError:
+            return r
+
+    def get_keyframes(self, name: str, prop: str) -> List[Tuple[float, Any]]:
+        """读取 Transform 属性的所有关键帧。"""
+        info = TRANSFORM_PROPS.get(prop)
+        if not info:
+            raise ValueError(f"Unknown transform prop: {prop}")
+        path = info["path"]
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var p=tl.{path};'
+            f'var out=[];'
+            f'for(var i=1;i<=p.numKeys;i++){{'
+            f'var t=p.keyTime(i);var v=p.keyValue(i);'
+            f'out.push({{t:t,v:v}});}}'
+            f'JSON.stringify(out);'
+        )
+        r = self.run_jsx(jsx)
+        try:
+            data = json.loads(r)
+            return [(kf["t"], kf["v"]) for kf in data]
+        except json.JSONDecodeError:
+            return []
+
+    def get_property_value(self, name: str, prop_path: str, at_time: float = None) -> Any:
+        """读取任意属性值。prop_path 如 'property("Transform").property("Opacity")'"""
+        if at_time is not None:
+            jsx = (
+                f'var c=app.project.activeItem;'
+                f'var tl=c.layer("{_esc(name)}");'
+                f'var p=tl.{prop_path};'
+                f'var v=p.valueAtTime({at_time},false);'
+                f'JSON.stringify(v instanceof Array?v:[v]);'
+            )
+        else:
+            jsx = (
+                f'var c=app.project.activeItem;'
+                f'var tl=c.layer("{_esc(name)}");'
+                f'var p=tl.{prop_path};'
+                f'var v=p.value;'
+                f'JSON.stringify(v instanceof Array?v:[v]);'
+            )
+        r = self.run_jsx(jsx)
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return r
+
+    def get_property_keyframes(self, name: str, prop_path: str) -> List[Tuple[float, Any]]:
+        """读取任意属性的所有关键帧。"""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var p=tl.{prop_path};'
+            f'var out=[];'
+            f'for(var i=1;i<=p.numKeys;i++){{'
+            f'var t=p.keyTime(i);var v=p.keyValue(i);'
+            f'out.push({{t:t,v:v}});}}'
+            f'JSON.stringify(out);'
+        )
+        r = self.run_jsx(jsx)
+        try:
+            data = json.loads(r)
+            return [(kf["t"], kf["v"]) for kf in data]
+        except json.JSONDecodeError:
+            return []
+
+    def get_effect_param(self, name: str, effect_match_name: str,
+                          param_match_name: str, at_time: float = None) -> Any:
+        """读取效果属性值。"""
+        time_part = f'.valueAtTime({at_time},false)' if at_time is not None else '.value'
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var fx=tl.property("Effects");'
+            f'var ef=null;for(var i=fx.numProperties;i>=1;i--){{'
+            f'if(fx.property(i).matchName=="{effect_match_name}"){{ef=fx.property(i);break;}}}}'
+            f'if(!ef)JSON.stringify({{error:"effect_not_found"}});else{{'
+            f'var v=ef.property("{param_match_name}"){time_part};'
+            f'JSON.stringify(v instanceof Array?v:[v]);}}'
+        )
+        r = self.run_jsx(jsx)
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return r
+
+    def get_effect_keyframes(self, name: str, effect_match_name: str,
+                              param_match_name: str) -> List[Tuple[float, Any]]:
+        """读取效果属性的所有关键帧。"""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var fx=tl.property("Effects");'
+            f'var ef=null;for(var i=fx.numProperties;i>=1;i--){{'
+            f'if(fx.property(i).matchName=="{effect_match_name}"){{ef=fx.property(i);break;}}}}'
+            f'if(!ef)JSON.stringify([]);else{{'
+            f'var p=ef.property("{param_match_name}");var out=[];'
+            f'for(var k=1;k<=p.numKeys;k++){{'
+            f'out.push({{t:p.keyTime(k),v:p.keyValue(k)}});}}'
+            f'JSON.stringify(out);}}'
+        )
+        r = self.run_jsx(jsx)
+        try:
+            data = json.loads(r)
+            return [(kf["t"], kf["v"]) for kf in data]
+        except json.JSONDecodeError:
+            return []
+
+    # ── Shape Layers ───────────────────────────────────────
+
+    def add_shape_layer(self, name: str = "Shape Layer", label: int = None) -> str:
+        """创建空 Shape 图层"""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var sl=c.layers.addShape();'
+            f'sl.name="{_esc(name)}";'
+        )
+        if label is not None:
+            jsx += f'sl.label={label};'
+        jsx += 'sl.name;'
+        return self.run_jsx(jsx)
+
+    def add_shape_rect(self, name: str, size: List[float] = None,
+                        position: List[float] = None, roundness: float = 0,
+                        group_index: int = None) -> str:
+        """在 Shape 图层中添加矩形。"""
+        size = size or [100, 100]
+        position = position or [0, 0]
+        group_sel = (
+            f'var grp=contents.property({group_index});'
+            if group_index else
+            f'var grp=contents.addProperty("ADBE Vector Group");grp.name="Rectangle";'
+        )
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var contents=tl.property("Contents");'
+            f'{group_sel}'
+            f'var rect=grp.property("Contents").addProperty("ADBE Vector Shape - Rect");'
+            f'rect.property("Size").setValue({json.dumps(size)});'
+            f'rect.property("Position").setValue({json.dumps(position)});'
+            f'rect.property("Roundness").setValue({roundness});'
+            f'"ok";'
+        )
+        return self.run_jsx(jsx)
+
+    def add_shape_ellipse(self, name: str, size: List[float] = None,
+                           position: List[float] = None,
+                           group_index: int = None) -> str:
+        """在 Shape 图层中添加椭圆"""
+        size = size or [100, 100]
+        position = position or [0, 0]
+        group_sel = (
+            f'var grp=contents.property({group_index});'
+            if group_index else
+            f'var grp=contents.addProperty("ADBE Vector Group");grp.name="Ellipse";'
+        )
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var contents=tl.property("Contents");'
+            f'{group_sel}'
+            f'var el=grp.property("Contents").addProperty("ADBE Vector Shape - Ellipse");'
+            f'el.property("Size").setValue({json.dumps(size)});'
+            f'el.property("Position").setValue({json.dumps(position)});'
+            f'"ok";'
+        )
+        return self.run_jsx(jsx)
+
+    def add_shape_path(self, name: str, vertices: List[List[float]],
+                        in_tangents: List[List[float]] = None,
+                        out_tangents: List[List[float]] = None,
+                        closed: bool = True,
+                        group_index: int = None) -> str:
+        """在 Shape 图层中添加自定义路径。"""
+        n = len(vertices)
+        in_t = in_tangents or [[0, 0]] * n
+        out_t = out_tangents or [[0, 0]] * n
+        group_sel = (
+            f'var grp=contents.property({group_index});'
+            if group_index else
+            f'var grp=contents.addProperty("ADBE Vector Group");grp.name="Path";'
+        )
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var contents=tl.property("Contents");'
+            f'{group_sel}'
+            f'var pathProp=grp.property("Contents").addProperty("ADBE Vector Shape - Group");'
+            f'var shape=new Shape();'
+            f'shape.vertices={json.dumps(vertices)};'
+            f'shape.inTangents={json.dumps(in_t)};'
+            f'shape.outTangents={json.dumps(out_t)};'
+            f'shape.closed={"true" if closed else "false"};'
+            f'pathProp.property("Path").setValue(shape);'
+            f'"ok";'
+        )
+        return self.run_jsx(jsx)
+
+    def add_shape_fill(self, name: str, color: List[float] = None,
+                        opacity: float = 100, group_index: int = 1) -> str:
+        """添加 Shape 填充"""
+        color = color or [1, 1, 1]
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var grp=tl.property("Contents").property({group_index});'
+            f'var fill=grp.property("Contents").addProperty("ADBE Vector Graphic - Fill");'
+            f'fill.property("Color").setValue({json.dumps(color)});'
+            f'fill.property("Opacity").setValue({opacity});'
+            f'"ok";'
+        )
+        return self.run_jsx(jsx)
+
+    def add_shape_stroke(self, name: str, color: List[float] = None,
+                          width: float = 2, opacity: float = 100,
+                          group_index: int = 1) -> str:
+        """添加 Shape 描边"""
+        color = color or [1, 1, 1]
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var grp=tl.property("Contents").property({group_index});'
+            f'var stroke=grp.property("Contents").addProperty("ADBE Vector Graphic - Stroke");'
+            f'stroke.property("Color").setValue({json.dumps(color)});'
+            f'stroke.property("Stroke Width").setValue({width});'
+            f'stroke.property("Opacity").setValue({opacity});'
+            f'"ok";'
+        )
+        return self.run_jsx(jsx)
+
+    # ── Pre-compose ────────────────────────────────────────
+
+    def precompose(self, layer_names: List[str], comp_name: str = "PreComp",
+                    move_attrs: bool = True) -> str:
+        """将指定图层预合成。"""
+        select_jsx = (
+            f'var c=app.project.activeItem;'
+            f'for(var i=1;i<=c.numLayers;i++)c.layer(i).selected=false;'
+        )
+        for ln in layer_names:
+            select_jsx += f'try{{c.layer("{_esc(ln)}").selected=true;}}catch(e){{}}'
+        select_jsx += (
+            f'var idxs=[];for(var i=1;i<=c.numLayers;i++){{'
+            f'if(c.layer(i).selected)idxs.push(i);}}'
+        )
+        move_flag = 1 if move_attrs else 2
+        select_jsx += (
+            f'if(idxs.length>0){{'
+            f'c.layers.precompose(idxs,"{_esc(comp_name)}",{move_flag});"ok"}}'
+            f'else{{"no_layers_selected"}}'
+        )
+        return self.run_jsx(select_jsx)
+
+    def precompose_by_index(self, indices: List[int], comp_name: str = "PreComp",
+                             move_attrs: bool = True) -> str:
+        """将指定索引的图层预合成"""
+        move_flag = 1 if move_attrs else 2
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'c.layers.precompose({json.dumps(indices)},"{_esc(comp_name)}",{move_flag});'
+            f'"ok";'
+        )
+        return self.run_jsx(jsx)
+
+    def list_precomps(self) -> List[dict]:
+        """列出项目中所有合成及是否被用作预合成"""
+        r = self.run_jsx(
+            'var out=[];for(var i=1;i<=app.project.numItems;i++){'
+            'var it=app.project.item(i);'
+            'if(it instanceof CompItem){var used=false;'
+            'for(var j=1;j<=app.project.numItems&&!used;j++){'
+            'var c2=app.project.item(j);if(c2 instanceof CompItem){'
+            'for(var k=1;k<=c2.numLayers&&!used;k++){'
+            'if(c2.layer(k).source&&c2.layer(k).source.id==it.id)used=true;}}}'
+            'out.push({id:it.id,name:it.name,numLayers:it.numLayers,isPrecomp:used});}}'
+            'JSON.stringify(out);'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return []
+
+    def open_precomp(self, layer_name: str) -> str:
+        """打开图层的源合成"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(layer_name)}");'
+            f'if(tl.source instanceof CompItem){{tl.source.openInViewer();"opened:"+tl.source.name}}'
+            f'else{{"not_a_precomp"}}'
+        )
+
+    def add_comp_to_comp(self, source_comp_name: str, target_comp_name: str = None) -> str:
+        """将一个合成嵌套到另一个合成中"""
+        jsx = 'var src=null,tgt=null;'
+        jsx += 'for(var i=1;i<=app.project.numItems;i++){var it=app.project.item(i);'
+        jsx += f'if(it instanceof CompItem&&it.name=="{_esc(source_comp_name)}")src=it;'
+        if target_comp_name:
+            jsx += f'if(it instanceof CompItem&&it.name=="{_esc(target_comp_name)}")tgt=it;'
+        jsx += '}'
+        if not target_comp_name:
+            jsx += 'tgt=app.project.activeItem;'
+        jsx += 'if(!src)"src_not_found";else if(!tgt)"tgt_not_found";else{'
+        jsx += 'tgt.layers.add(src);"added";}'
+        return self.run_jsx(jsx)
+
+    # ── Masks ──────────────────────────────────────────────
+
+    def add_mask(self, name: str, vertices: List[List[float]],
+                  in_tangents: List[List[float]] = None,
+                  out_tangents: List[List[float]] = None,
+                  mode: str = "add", feather: float = 0,
+                  opacity: float = 100, inverted: bool = False,
+                  closed: bool = True) -> str:
+        """为图层添加蒙版。mode: none/add/subtract/intersect/lighten/darken/difference"""
+        n = len(vertices)
+        in_t = in_tangents or [[0, 0]] * n
+        out_t = out_tangents or [[0, 0]] * n
+        mode_map = {
+            "none": "MaskMode.NONE", "add": "MaskMode.ADD",
+            "subtract": "MaskMode.SUBTRACT", "intersect": "MaskMode.INTERSECT",
+            "lighten": "MaskMode.LIGHTEN", "darken": "MaskMode.DARKEN",
+            "difference": "MaskMode.DIFFERENCE",
+        }
+        mode_jsx = mode_map.get(mode, "MaskMode.ADD")
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var masks=tl.property("Masks");'
+            f'var m=masks.addProperty("ADBE Mask Atom");'
+            f'var shape=new Shape();'
+            f'shape.vertices={json.dumps(vertices)};'
+            f'shape.inTangents={json.dumps(in_t)};'
+            f'shape.outTangents={json.dumps(out_t)};'
+            f'shape.closed={"true" if closed else "false"};'
+            f'm.property("maskShape").setValue(shape);'
+            f'm.property("maskFeather").setValue([{feather},{feather}]);'
+            f'm.property("maskOpacity").setValue({opacity});'
+            f'm.maskMode={mode_jsx};'
+            f'm.inverted={"true" if inverted else "false"};'
+            f'"mask_added";'
+        )
+        return self.run_jsx(jsx)
+
+    def add_mask_rect(self, name: str, top: float, left: float,
+                       width: float, height: float, **kwargs) -> str:
+        """矩形蒙版快捷方法"""
+        verts = [[left, top], [left + width, top],
+                 [left + width, top + height], [left, top + height]]
+        return self.add_mask(name, verts, **kwargs)
+
+    def add_mask_ellipse(self, name: str, center: List[float],
+                          size: List[float], segments: int = 32, **kwargs) -> str:
+        """椭圆蒙版快捷方法"""
+        import math
+        rx, ry = size[0] / 2, size[1] / 2
+        cx, cy = center
+        verts = []
+        for i in range(segments):
+            angle = 2 * math.pi * i / segments
+            verts.append([cx + rx * math.cos(angle), cy + ry * math.sin(angle)])
+        return self.add_mask(name, verts, **kwargs)
+
+    def list_masks(self, name: str) -> List[dict]:
+        """列出图层所有蒙版"""
+        r = self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var masks=tl.property("Masks");var out=[];'
+            f'for(var i=1;i<=masks.numProperties;i++){{'
+            f'var m=masks.property(i);out.push({{index:i,name:m.name,'
+            f'mode:m.maskMode,inverted:m.inverted,locked:m.locked}});}}'
+            f'JSON.stringify(out);'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return []
+
+    def set_mask_path(self, name: str, mask_index: int,
+                       vertices: List[List[float]],
+                       in_tangents: List[List[float]] = None,
+                       out_tangents: List[List[float]] = None,
+                       closed: bool = True) -> str:
+        """修改蒙版路径"""
+        n = len(vertices)
+        in_t = in_tangents or [[0, 0]] * n
+        out_t = out_tangents or [[0, 0]] * n
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var m=tl.property("Masks").property({mask_index});'
+            f'var shape=new Shape();'
+            f'shape.vertices={json.dumps(vertices)};'
+            f'shape.inTangents={json.dumps(in_t)};'
+            f'shape.outTangents={json.dumps(out_t)};'
+            f'shape.closed={"true" if closed else "false"};'
+            f'm.property("maskShape").setValue(shape);"ok";'
+        )
+        return self.run_jsx(jsx)
+
+    def set_mask_feather(self, name: str, mask_index: int, feather: float) -> str:
+        """设置蒙版羽化"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var m=c.layer("{_esc(name)}").property("Masks").property({mask_index});'
+            f'm.property("maskFeather").setValue([{feather},{feather}]);"ok";'
+        )
+
+    def set_mask_opacity(self, name: str, mask_index: int, opacity: float) -> str:
+        """设置蒙版不透明度"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var m=c.layer("{_esc(name)}").property("Masks").property({mask_index});'
+            f'm.property("maskOpacity").setValue({opacity});"ok";'
+        )
+
+    def set_mask_expansion(self, name: str, mask_index: int, expansion: float) -> str:
+        """设置蒙版扩展"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var m=c.layer("{_esc(name)}").property("Masks").property({mask_index});'
+            f'm.property("maskExpansion").setValue({expansion});"ok";'
+        )
+
+    def animate_mask_path(self, name: str, mask_index: int,
+                           keyframes: List[Tuple[float, List[List[float]]]]) -> str:
+        """蒙版路径关键帧动画。keyframes: [(time, [[x,y], ...]), ...]"""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var m=c.layer("{_esc(name)}").property("Masks").property({mask_index});'
+            f'var mp=m.property("maskShape");'
+        )
+        for t, verts in keyframes:
+            jsx += (
+                f'var s=new Shape();s.vertices={json.dumps(verts)};'
+                f's.closed=true;mp.setValueAtTime({t},s);'
+            )
+        jsx += '"ok";'
+        return self.run_jsx(jsx)
+
+    def remove_mask(self, name: str, mask_index: int) -> str:
+        """删除指定蒙版"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").property("Masks").property({mask_index}).remove();"removed";'
+        )
+
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║                    HELPER FUNCTIONS                     ║
