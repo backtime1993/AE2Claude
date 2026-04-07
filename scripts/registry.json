@@ -180,44 +180,9 @@
     "note": "⚠️ 必须无选中层 + 先画好蒙版"
   },
   {
-    "slug": "new-shape-layer",
-    "name": "Layer > New > Shape Layer",
-    "file": "new-shape-layer.jsx"
-  },
-  {
-    "slug": "new-light",
-    "name": "Layer > New > Light",
-    "file": "new-light.jsx"
-  },
-  {
-    "slug": "new-text",
-    "name": "Layer > New > Text",
-    "file": "new-text.jsx"
-  },
-  {
-    "slug": "time-stretch",
-    "name": "Layer > Time > Time Stretch",
-    "file": "time-stretch.jsx"
-  },
-  {
     "slug": "purge-cache",
     "name": "Edit > Purge > All Cache",
     "file": "purge-cache.jsx"
-  },
-  {
-    "slug": "reveal-source",
-    "name": "Layer > Reveal Source in Project",
-    "file": "reveal-source.jsx"
-  },
-  {
-    "slug": "comp-settings",
-    "name": "Composition Settings",
-    "file": "comp-settings.jsx"
-  },
-  {
-    "slug": "new-adjustment",
-    "name": "Layer > New > Adjustment Layer",
-    "file": "new-adjustment.jsx"
   },
   {
     "slug": "expr-loop100",
@@ -240,13 +205,92 @@
     "file": "expr-wiggle.jsx"
   },
   {
-    "slug": "preset-hexagon",
-    "name": "Shape_六边形平铺 预设",
-    "file": "preset-hexagon.jsx"
-  },
-  {
     "slug": "effect-grow-bounds",
     "name": "Grow Bounds 效果",
     "file": "effect-grow-bounds.jsx"
+  },
+  {
+    "slug": "align-keys-to-cti",
+    "name": "Align Keys to Current Time",
+    "file": "align-keys-to-cti.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "clone-keys",
+    "name": "Clone Keys",
+    "file": "clone-keys.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "trim-layers",
+    "name": "Trim Layers",
+    "file": "trim-layers.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "set-anchor-point",
+    "name": "Set Anchor Point",
+    "file": "set-anchor-point.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "reveal-current-comp",
+    "name": "Reveal Current Comp",
+    "file": "reveal-current-comp.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "solo-layers-viewer",
+    "name": "Solo Layers (Viewer)",
+    "file": "solo-layers-viewer.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "shift-layer-times",
+    "name": "Shift Layer Times",
+    "file": "shift-layer-times.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "auto-trim-comp",
+    "name": "Auto Trim Comp",
+    "file": "auto-trim-comp.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "separate-xy",
+    "name": "Separate X/Y (Retain Easing)",
+    "file": "separate-xy.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "decompose",
+    "name": "Decompose",
+    "file": "decompose.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "toggle-visibility",
+    "name": "Toggle Layer Visibility",
+    "file": "toggle-visibility.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "clean-keyframes",
+    "name": "Clean Keyframes",
+    "file": "clean-keyframes.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "reset-layer-props",
+    "name": "Reset Layer Properties",
+    "file": "reset-layer-props.jsx",
+    "note": "MoBar内置高频"
+  },
+  {
+    "slug": "duplicate-comps",
+    "name": "Duplicate Comps",
+    "file": "duplicate-comps.jsx",
+    "note": "MoBar内置高频"
   }
 ]
