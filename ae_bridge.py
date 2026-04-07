@@ -1999,23 +1999,126 @@ class AEBridge:
     def add_layer_style(self, name: str, style: str,
                          props: Dict[str, Any] = None) -> str:
         """
-        为图层添加 Layer Style。
-        style: drop_shadow/inner_shadow/outer_glow/inner_glow/bevel_emboss/
-               satin/color_overlay/gradient_overlay/stroke
-        """
-        # Layer Styles 无法通过 ExtendScript 可靠启用 (canSetEnabled=false)
-        # 需要通过 AE 菜单手动添加
-        return ("ERR:not_scriptable — use AE menu: Layer > Layer Styles > "
-                + style.replace('_', ' ').title())
+        为图层启用 Layer Style（通过 AEGP SDK DynamicStreamSuite）。
 
-    def enable_layer_style(self, name: str, style_index: int,
-                            enabled: bool = True) -> str:
-        """启用/禁用指定 Layer Style"""
-        return self.run_jsx(
-            f'var c=app.project.activeItem;'
-            f'var ls=c.layer("{_esc(name)}").property("ADBE Layer Styles");'
-            f'ls.property({style_index}).enabled={"true" if enabled else "false"};"ok";'
+        style: drop_shadow/inner_shadow/outer_glow/inner_glow/bevel_emboss/
+               satin/color_overlay/gradient_overlay/pattern_overlay/stroke
+        props: 属性字典（启用后通过 JSX 设置），key 用 AE 属性 matchName
+        """
+        style_matchnames = {
+            "drop_shadow": "dropShadow/enabled",
+            "inner_shadow": "innerShadow/enabled",
+            "outer_glow": "outerGlow/enabled",
+            "inner_glow": "innerGlow/enabled",
+            "bevel_emboss": "bevelEmboss/enabled",
+            "satin": "chromeFX/enabled",
+            "color_overlay": "solidFill/enabled",
+            "gradient_overlay": "gradientFill/enabled",
+            "pattern_overlay": "patternFill/enabled",
+            "stroke": "frameFX/enabled",
+        }
+        mn = style_matchnames.get(style)
+        if not mn:
+            return f"ERR: unknown style '{style}'. Available: {list(style_matchnames.keys())}"
+
+        # 通过 POST / 调 PyShiftCore AEGP SDK 启用 Layer Style
+        code = (
+            f'import PyShiftCore as psc\n'
+            f'comp = psc.app.project.activeItem\n'
+            f'layer = None\n'
+            f'for i in range(comp.numLayers):\n'
+            f'    if comp.layers[i].name == "{_esc(name)}":\n'
+            f'        layer = comp.layers[i]; break\n'
+            f'if not layer:\n'
+            f'    _result = "ERR:layer_not_found"\n'
+            f'else:\n'
+            f'    r1 = psc.set_stream_flag(layer, ["ADBE Layer Styles"], 1, True)\n'
+            f'    r2 = psc.set_stream_flag(layer, ["ADBE Layer Styles"], 2, False)\n'
+            f'    r3 = psc.set_stream_flag(layer, ["ADBE Layer Styles", "{mn}"], 1, True)\n'
+            f'    r4 = psc.set_stream_flag(layer, ["ADBE Layer Styles", "{mn}"], 2, False)\n'
+            f'    _result = r4\n'
         )
+        data = code.encode('utf-8')
+        req = urllib.request.Request(
+            f'{self._base_url}/',
+            data=data,
+            headers={'Content-Type': 'text/plain; charset=utf-8'}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                r = json.loads(resp.read())
+        except (urllib.error.URLError, OSError) as e:
+            return f"ERR:request_failed:{e}"
+
+        if not r.get('ok'):
+            return f"ERR:{r.get('error', 'unknown')}"
+
+        result = r.get('result', '').strip("'\"")
+        if result != 'ok':
+            return result
+
+        # 启用成功后，可选设置属性
+        if props:
+            jsx = (
+                f'var c=app.project.activeItem;'
+                f'var sty=c.layer("{_esc(name)}").property("ADBE Layer Styles").property("{mn}");'
+            )
+            for k, v in props.items():
+                if isinstance(v, (list, tuple)):
+                    jsx += f'try{{sty.property("{k}").setValue({json.dumps(v)});}}catch(e){{}}'
+                else:
+                    jsx += f'try{{sty.property("{k}").setValue({v});}}catch(e){{}}'
+            jsx += '"props_set";'
+            self.run_jsx(jsx)
+
+        return "style_enabled"
+
+    def enable_layer_style(self, name: str, style: str,
+                            enabled: bool = True) -> str:
+        """启用/禁用指定 Layer Style（用 style key，不用 index）"""
+        style_matchnames = {
+            "drop_shadow": "dropShadow/enabled",
+            "inner_shadow": "innerShadow/enabled",
+            "outer_glow": "outerGlow/enabled",
+            "inner_glow": "innerGlow/enabled",
+            "bevel_emboss": "bevelEmboss/enabled",
+            "satin": "chromeFX/enabled",
+            "color_overlay": "solidFill/enabled",
+            "gradient_overlay": "gradientFill/enabled",
+            "pattern_overlay": "patternFill/enabled",
+            "stroke": "frameFX/enabled",
+        }
+        mn = style_matchnames.get(style)
+        if not mn:
+            return f"ERR: unknown style '{style}'"
+
+        code = (
+            f'import PyShiftCore as psc\n'
+            f'comp = psc.app.project.activeItem\n'
+            f'layer = None\n'
+            f'for i in range(comp.numLayers):\n'
+            f'    if comp.layers[i].name == "{_esc(name)}":\n'
+            f'        layer = comp.layers[i]; break\n'
+            f'if not layer:\n'
+            f'    _result = "ERR:layer_not_found"\n'
+            f'else:\n'
+            f'    r = psc.set_stream_flag(layer, ["ADBE Layer Styles", "{mn}"], 1, {"True" if enabled else "False"})\n'
+            f'    _result = r\n'
+        )
+        data = code.encode('utf-8')
+        req = urllib.request.Request(
+            f'{self._base_url}/',
+            data=data,
+            headers={'Content-Type': 'text/plain; charset=utf-8'}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                r = json.loads(resp.read())
+        except (urllib.error.URLError, OSError) as e:
+            return f"ERR:{e}"
+        if not r.get('ok'):
+            return f"ERR:{r.get('error', 'unknown')}"
+        return r.get('result', '').strip("'\"")
 
     # ── 3D / Camera / Light ────────────────────────────────
 
