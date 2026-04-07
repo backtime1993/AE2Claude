@@ -202,26 +202,31 @@
   {
     "slug": "comp-trim-end",
     "name": "裁尾（合成结束点→光标）",
-    "file": "comp-trim-end.jsx"
+    "file": "comp-trim-end.jsx",
+    "note": "⚠️ 无选中=裁合成 / 选中预合成=裁嵌套"
   },
   {
     "slug": "comp-trim-start",
     "name": "裁头（合成起始点→光标）",
-    "file": "comp-trim-start.jsx"
+    "file": "comp-trim-start.jsx",
+    "note": "⚠️ 同上 + 含关键帧偏移"
   },
   {
     "slug": "auto-crop",
     "name": "自动裁剪到内容",
-    "file": "auto-crop.jsx"
+    "file": "auto-crop.jsx",
+    "note": "⚠️ 必须无选中层 + 不支持Shape层"
   },
   {
     "slug": "crop-duration",
     "name": "裁剪时长到内容",
-    "file": "crop-duration.jsx"
+    "file": "crop-duration.jsx",
+    "note": "⚠️ 必须无选中层"
   },
   {
     "slug": "mask-crop",
     "name": "蒙版裁剪",
-    "file": "mask-crop.jsx"
+    "file": "mask-crop.jsx",
+    "note": "⚠️ 必须无选中层 + 先画好蒙版"
   }
 ]

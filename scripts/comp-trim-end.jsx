@@ -1,6 +1,8 @@
 /* Comp Trimmer — 裁尾 (CLI版，完整原版逻辑)
    无选中层: 裁合成duration到光标+1帧
-   选中预合成层: 裁预合成内部duration */
+   选中预合成层: 裁预合成内部duration
+   ⚠️ 坑: 选中非预合成层(solid/text等)会返回 ERR:not_all_comps
+   ⚠️ 用法: 要裁合成本身就不选任何层；要裁嵌套预合成就选中预合成层 */
 (function(){
 var comp = app.project.activeItem;
 if (!comp || !(comp instanceof CompItem)) return "ERR:no_comp";

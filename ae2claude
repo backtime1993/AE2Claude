@@ -187,7 +187,9 @@ def _list_scripts():
         print("No scripts found. Run export_mobar.py first.")
         return
     for s in registry:
-        print(f"  {s['slug']:40s} {s['name']}")
+        note = s.get('note', '')
+        suffix = f"  {note}" if note else ""
+        print(f"  {s['slug']:40s} {s['name']}{suffix}")
     print(f"\n共 {len(registry)} 个脚本 — 用 ae2claude run <名称> 执行")
 
 def _parse_arg(s):
