@@ -170,11 +170,6 @@
     "file": "匹配图层大小合成.jsx"
   },
   {
-    "slug": "预合成保留属性",
-    "name": "预合成保留属性",
-    "file": "预合成保留属性.jsx"
-  },
-  {
     "slug": "comp-trim-end",
     "name": "裁尾（合成结束点→光标）",
     "file": "comp-trim-end.jsx",
