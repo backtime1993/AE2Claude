@@ -210,13 +210,17 @@ def _apply_preset(name):
         sys.exit(1)
 
     print(f"→ {name}", file=sys.stderr)
+    # Support relative paths (resolved against AE Presets folder)
+    path_escaped = path.replace("\\", "/")
     jsx = (
         f'(function(){{'
         f'var c=app.project.activeItem;'
         f'if(!c||!(c instanceof CompItem))return"ERR:no_comp";'
         f'var s=c.selectedLayers;if(s.length===0)return"ERR:no_selection";'
         f'app.beginUndoGroup("Apply {name}");'
-        f'var f=new File("{path}");if(!f.exists)return"ERR:preset_not_found";'
+        f'var f=new File("{path_escaped}");'
+        f'if(!f.exists){{var base=new Folder(app.path).parent.fsName.replace(/\\\\/g,"/")+"/Presets/";'
+        f'f=new File(base+"{path_escaped}");}}if(!f.exists)return"ERR:preset_not_found";'
         f'for(var i=0;i<s.length;i++){{s[i].applyPreset(f);}}'
         f'app.endUndoGroup();return"applied:"+s.length;'
         f'}})()'
