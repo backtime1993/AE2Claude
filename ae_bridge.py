@@ -686,7 +686,7 @@ class AEBridge:
             jsx += f'tl.outPoint={end};'
 
         # Text styling
-        jsx += 'var tp=tl.property("Source Text");var td=tp.value;td.resetCharStyle();'
+        jsx += 'var tp=tl.property("ADBE Text Properties").property("ADBE Text Document");var td=tp.value;td.resetCharStyle();'
         if font_size:
             jsx += f'td.fontSize={font_size};'
         if fill_color:
@@ -1921,7 +1921,7 @@ class AEBridge:
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var animators=tl.property("Source Text").property("ADBE Text Animators");'
+            f'var animators=tl.property("ADBE Text Properties").property("ADBE Text Animators");'
             f'var anim=animators.addProperty("ADBE Text Animator");'
         )
         if properties:
@@ -1954,7 +1954,7 @@ class AEBridge:
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var animators=tl.property("Source Text").property("ADBE Text Animators");'
+            f'var animators=tl.property("ADBE Text Properties").property("ADBE Text Animators");'
             f'var anim=animators.property({animator_index});'
             f'var sel=anim.property("ADBE Text Selectors").property(1);'
             f'sel.property("ADBE Text Percent Start").setValue({start});'
@@ -1979,7 +1979,7 @@ class AEBridge:
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var animators=tl.property("Source Text").property("ADBE Text Animators");'
+            f'var animators=tl.property("ADBE Text Properties").property("ADBE Text Animators");'
             f'var anim=animators.property({animator_index});'
             f'var sel=anim.property("ADBE Text Selectors").property({selector_index});'
         )
@@ -2003,34 +2003,24 @@ class AEBridge:
         style: drop_shadow/inner_shadow/outer_glow/inner_glow/bevel_emboss/
                satin/color_overlay/gradient_overlay/stroke
         """
-        style_names = {
-            "drop_shadow": "ADBE Drop Shadow",
-            "inner_shadow": "ADBE Inner Shadow",
-            "outer_glow": "ADBE Outer Glow",
-            "inner_glow": "ADBE Inner Glow",
-            "bevel_emboss": "ADBE Bevel Emboss",
-            "satin": "ADBE Satin",
-            "color_overlay": "ADBE Color Overlay",
-            "gradient_overlay": "ADBE Gradient Overlay",
-            "stroke": "ADBE Stroke",
+        # Layer Styles 只能通过 AE 菜单命令添加，先选中图层再执行命令
+        style_cmds = {
+            "drop_shadow": 9000, "inner_shadow": 9001,
+            "outer_glow": 9002, "inner_glow": 9003,
+            "bevel_emboss": 9004, "satin": 9005,
+            "color_overlay": 9006, "gradient_overlay": 9007,
+            "stroke": 9008,
         }
-        mn = style_names.get(style)
-        if not mn:
-            return f"ERR: unknown style '{style}'. Available: {list(style_names.keys())}"
+        cmd = style_cmds.get(style)
+        if not cmd:
+            return f"ERR: unknown style '{style}'. Available: {list(style_cmds.keys())}"
         jsx = (
             f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var ls=tl.property("Layer Styles");'
-            f'if(!ls.canSetEnabled){{tl.property("Layer Styles").addProperty("ADBE Blend Options Group");}}'
-            f'var sty=ls.addProperty("{mn}");'
+            f'for(var i=1;i<=c.numLayers;i++)c.layer(i).selected=false;'
+            f'c.layer("{_esc(name)}").selected=true;'
+            f'app.executeCommand({cmd});'
+            f'"style_added";'
         )
-        if props:
-            for k, v in props.items():
-                if isinstance(v, (list, tuple)):
-                    jsx += f'try{{sty.property("{k}").setValue({json.dumps(v)});}}catch(e){{}}'
-                else:
-                    jsx += f'try{{sty.property("{k}").setValue({v});}}catch(e){{}}'
-        jsx += f'sty.enabled=true;"style_added";'
         return self.run_jsx(jsx)
 
     def enable_layer_style(self, name: str, style_index: int,
@@ -2038,7 +2028,7 @@ class AEBridge:
         """启用/禁用指定 Layer Style"""
         return self.run_jsx(
             f'var c=app.project.activeItem;'
-            f'var ls=c.layer("{_esc(name)}").property("Layer Styles");'
+            f'var ls=c.layer("{_esc(name)}").property("ADBE Layer Styles");'
             f'ls.property({style_index}).enabled={"true" if enabled else "false"};"ok";'
         )
 
@@ -2063,9 +2053,9 @@ class AEBridge:
         if camera_type == "one_node":
             jsx += 'cam.autoOrient=AutoOrientType.NO_AUTO_ORIENT;'
         if zoom is not None:
-            jsx += f'cam.property("Camera Options").property("Zoom").setValue({zoom});'
+            jsx += f'cam.property("ADBE Camera Options Group").property("ADBE Camera Zoom").setValue({zoom});'
         if position:
-            jsx += f'cam.property("Transform").property("Position").setValue({json.dumps(position)});'
+            jsx += f'cam.property("ADBE Transform Group").property("ADBE Position").setValue({json.dumps(position)});'
         jsx += 'cam.name;'
         return self.run_jsx(jsx)
 
@@ -2075,46 +2065,54 @@ class AEBridge:
                       color: List[float] = None,
                       position: List[float] = None) -> str:
         """创建灯光。light_type: parallel/spot/point/ambient"""
-        type_map = {"parallel": 1, "spot": 2, "point": 3, "ambient": 4}
-        lt_val = type_map.get(light_type, 3)
+        type_map = {
+            "parallel": "LightType.PARALLEL", "spot": "LightType.SPOT",
+            "point": "LightType.POINT", "ambient": "LightType.AMBIENT",
+        }
+        lt_jsx = type_map.get(light_type, "LightType.POINT")
         jsx = (
             f'var c=app.project.activeItem;'
             f'var lyr=c.layers.addLight("{_esc(name)}",[c.width/2,c.height/2]);'
-            f'lyr.property("Light Options").property("Light Type").setValue({lt_val});'
-            f'lyr.property("Light Options").property("Intensity").setValue({intensity});'
+            f'lyr.lightType={lt_jsx};'
+            f'lyr.property("ADBE Light Options Group").property("ADBE Light Intensity").setValue({intensity});'
         )
         if color:
-            jsx += f'lyr.property("Light Options").property("Color").setValue({json.dumps(color)});'
+            jsx += f'lyr.property("ADBE Light Options Group").property("ADBE Light Color").setValue({json.dumps(color)});'
         if position:
-            jsx += f'lyr.property("Transform").property("Position").setValue({json.dumps(position)});'
+            jsx += f'lyr.property("ADBE Transform Group").property("ADBE Position").setValue({json.dumps(position)});'
         jsx += 'lyr.name;'
         return self.run_jsx(jsx)
 
     def set_camera_property(self, name: str, prop: str, value: Any) -> str:
         """设置摄像机属性 (zoom/focus_distance/aperture/blur_level)"""
         prop_map = {
-            "zoom": "Zoom", "focus_distance": "Focus Distance",
-            "aperture": "Aperture", "blur_level": "Blur Level",
+            "zoom": "ADBE Camera Zoom",
+            "focus_distance": "ADBE Camera Focus Distance",
+            "aperture": "ADBE Camera Aperture",
+            "blur_level": "ADBE Camera Blur Level",
         }
         ae_prop = prop_map.get(prop, prop)
         v = json.dumps(value) if isinstance(value, (list, tuple)) else str(value)
         return self.run_jsx(
             f'var c=app.project.activeItem;'
-            f'c.layer("{_esc(name)}").property("Camera Options").property("{ae_prop}").setValue({v});"ok";'
+            f'c.layer("{_esc(name)}").property("ADBE Camera Options Group").property("{ae_prop}").setValue({v});"ok";'
         )
 
     def set_light_property(self, name: str, prop: str, value: Any) -> str:
         """设置灯光属性 (intensity/color/cone_angle/cone_feather/shadow_darkness/shadow_diffusion)"""
         prop_map = {
-            "intensity": "Intensity", "color": "Color",
-            "cone_angle": "Cone Angle", "cone_feather": "Cone Feather",
-            "shadow_darkness": "Shadow Darkness", "shadow_diffusion": "Shadow Diffusion",
+            "intensity": "ADBE Light Intensity",
+            "color": "ADBE Light Color",
+            "cone_angle": "ADBE Light Cone Angle",
+            "cone_feather": "ADBE Light Cone Feather",
+            "shadow_darkness": "ADBE Light Shadow Darkness",
+            "shadow_diffusion": "ADBE Light Shadow Diffusion",
         }
         ae_prop = prop_map.get(prop, prop)
         v = json.dumps(value) if isinstance(value, (list, tuple)) else str(value)
         return self.run_jsx(
             f'var c=app.project.activeItem;'
-            f'c.layer("{_esc(name)}").property("Light Options").property("{ae_prop}").setValue({v});"ok";'
+            f'c.layer("{_esc(name)}").property("ADBE Light Options Group").property("{ae_prop}").setValue({v});"ok";'
         )
 
     # ── Time Remap ─────────────────────────────────────────
