@@ -234,18 +234,6 @@
     "note": "MoBar内置高频"
   },
   {
-    "slug": "reveal-current-comp",
-    "name": "Reveal Current Comp",
-    "file": "reveal-current-comp.jsx",
-    "note": "MoBar内置高频"
-  },
-  {
-    "slug": "solo-layers-viewer",
-    "name": "Solo Layers (Viewer)",
-    "file": "solo-layers-viewer.jsx",
-    "note": "MoBar内置高频"
-  },
-  {
     "slug": "shift-layer-times",
     "name": "Shift Layer Times",
     "file": "shift-layer-times.jsx",
@@ -270,21 +258,9 @@
     "note": "MoBar内置高频"
   },
   {
-    "slug": "toggle-visibility",
-    "name": "Toggle Layer Visibility",
-    "file": "toggle-visibility.jsx",
-    "note": "MoBar内置高频"
-  },
-  {
     "slug": "clean-keyframes",
     "name": "Clean Keyframes",
     "file": "clean-keyframes.jsx",
-    "note": "MoBar内置高频"
-  },
-  {
-    "slug": "reset-layer-props",
-    "name": "Reset Layer Properties",
-    "file": "reset-layer-props.jsx",
     "note": "MoBar内置高频"
   },
   {
