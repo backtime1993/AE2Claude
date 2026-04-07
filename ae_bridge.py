@@ -10,7 +10,7 @@ AE Bridge - Universal After Effects Automation via PyShiftAE
 4. 内置 Dialog Dismisser 后台线程
 
 使用:
-    from ae_cdp_bridge import AEBridge
+    from ae_bridge import AEBridge
 
     with AEBridge() as ae:
         print(ae.comp_info())
@@ -286,15 +286,15 @@ KNOWN_EFFECT_MATCHNAMES = [
 ]
 
 # ╔══════════════════════════════════════════════════════════╗
-# ║                  AE CDP BRIDGE CLASS                    ║
+# ║                  AE BRIDGE CLASS                    ║
 # ╚══════════════════════════════════════════════════════════╝
 
 class AEBridge:
     """
-    After Effects CDP Bridge - 通过 MoBar CEP 面板 CDP 端口执行 ExtendScript。
+    AE2Claude Bridge - 通过 AEGP 插件 HTTP 服务器操控 After Effects。
 
     关键行为:
-    - 自动发现 WebSocket URL (默认端口 8870)
+    - 连接 PyShiftAE HTTP 服务器 (默认端口 8089)
     - 每次 run_jsx() 调用独立执行，避免 AE 对象引用失效
     - 支持 context manager (with 语句)
     - 可选启动 Dialog Dismisser 后台线程
@@ -821,7 +821,7 @@ class AEBridge:
         """
         对图层的 Transform 属性关键帧应用缓动。
 
-        ⚠️ 关键: 此操作必须在独立的 CDP 调用中执行 (不要和 addProperty 混用)。
+        ⚠️ 关键: 此操作必须在独立的 HTTP 调用中执行 (不要和 addProperty 混用)。
 
         Args:
             name: 图层名
@@ -1071,7 +1071,7 @@ class AEBridge:
 
     def exec_jsx_file(self, filepath: str) -> str:
         """
-        读取本地 JSX 文件并通过 CDP 执行。
+        读取本地 JSX 文件并通过 HTTP 执行。
         不使用 $.evalFile() (在 AE Beta 中不稳定)，
         而是直接读取文件内容并作为 run_jsx 字符串发送。
         """
@@ -2307,13 +2307,13 @@ def _esc(s: str) -> str:
 # ╚══════════════════════════════════════════════════════════╝
 
 def main():
-    """快速测试: python ae_cdp_bridge.py [jsx_code]"""
-    print(f"AE CDP Bridge v{__version__}")
+    """快速测试: python ae_bridge.py [jsx_code]"""
+    print(f"AE2Claude Bridge v{__version__}")
     print("=" * 50)
 
     try:
         ae = AEBridge()
-        print(f"[OK] Connected to {ae._ws_url}")
+        print(f"[OK] Connected to {ae._base_url}")
 
         # 基础测试
         r = ae.run_jsx('"hello_from_ae"')

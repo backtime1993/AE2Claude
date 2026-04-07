@@ -131,12 +131,10 @@ psc.is_project_dirty()
 
 ## 构建
 
-需要 VS 2022 Build Tools + vcpkg boost + pybind11 + Python 3.12 + AE SDK 25.6。
+C++ 源码在独立仓库 [PyShiftAE](https://github.com/Trentonom0r3/PyShiftAE)（上游）的 fork 中维护。
+本仓库只包含预编译的 `AE2Claude.aex` 和 Python/JSX 层。
 
-```bash
-cd src/PyShiftAE/Win
-MSBuild PyShiftAE.vcxproj /p:Configuration=Release /p:Platform=x64
-```
+如需从源码构建，需要：VS 2022 Build Tools + vcpkg boost + pybind11 + Python 3.12 + AE SDK 25.6。
 
 ## 环境要求
 
