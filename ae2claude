@@ -181,6 +181,9 @@ def _run_script(name):
     if r.get("ok"):
         result = r.get("result", "")
         if result and result != "undefined":
+            if result.startswith("ERR:"):
+                print(result, file=sys.stderr)
+                sys.exit(1)
             print(result)
     else:
         print(f"error: {r.get('error', 'unknown')}", file=sys.stderr)
@@ -235,7 +238,11 @@ def _call_method(method_name, args):
         if isinstance(result, (dict, list)):
             print(json.dumps(result, indent=2, ensure_ascii=False))
         elif result is not None:
-            print(result)
+            s = str(result)
+            if s.startswith("ERR:"):
+                print(s, file=sys.stderr)
+                sys.exit(1)
+            print(s)
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -268,6 +275,20 @@ def main():
     elif cmd == "py":
         code = " ".join(args[1:]) if len(args) > 1 else sys.stdin.read()
         r = req("/", code)
+        # py 输出统一：优先 output，其次 result（去引号）
+        if r.get("ok"):
+            out = r.get("output", "").strip()
+            res = r.get("result", "")
+            if isinstance(res, str):
+                res = res.strip("'\"")
+            if out:
+                print(out)
+            elif res and res != "None":
+                print(res)
+            return
+        else:
+            print(f"error: {r.get('error', 'unknown')}", file=sys.stderr)
+            sys.exit(1)
     elif cmd == "version":
         r = req("/jsx", "app.version")
     elif cmd == "comps":
@@ -303,6 +324,9 @@ def main():
         return
     elif cmd in ("help", "-h", "--help"):
         print(__doc__.strip())
+        return
+    elif cmd == "--version":
+        print("ae2claude 2.0.0")
         return
     elif cmd == "info":
         # 快捷: 当前合成概况
