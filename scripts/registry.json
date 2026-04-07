@@ -178,5 +178,75 @@
     "name": "蒙版裁剪",
     "file": "mask-crop.jsx",
     "note": "⚠️ 必须无选中层 + 先画好蒙版"
+  },
+  {
+    "slug": "new-shape-layer",
+    "name": "Layer > New > Shape Layer",
+    "file": "new-shape-layer.jsx"
+  },
+  {
+    "slug": "new-light",
+    "name": "Layer > New > Light",
+    "file": "new-light.jsx"
+  },
+  {
+    "slug": "new-text",
+    "name": "Layer > New > Text",
+    "file": "new-text.jsx"
+  },
+  {
+    "slug": "time-stretch",
+    "name": "Layer > Time > Time Stretch",
+    "file": "time-stretch.jsx"
+  },
+  {
+    "slug": "purge-cache",
+    "name": "Edit > Purge > All Cache",
+    "file": "purge-cache.jsx"
+  },
+  {
+    "slug": "reveal-source",
+    "name": "Layer > Reveal Source in Project",
+    "file": "reveal-source.jsx"
+  },
+  {
+    "slug": "comp-settings",
+    "name": "Composition Settings",
+    "file": "comp-settings.jsx"
+  },
+  {
+    "slug": "new-adjustment",
+    "name": "Layer > New > Adjustment Layer",
+    "file": "new-adjustment.jsx"
+  },
+  {
+    "slug": "expr-loop100",
+    "name": "循环100",
+    "file": "expr-loop100.jsx"
+  },
+  {
+    "slug": "expr-camera-follow",
+    "name": "摄像机跟随",
+    "file": "expr-camera-follow.jsx"
+  },
+  {
+    "slug": "expr-continue",
+    "name": "继续运动",
+    "file": "expr-continue.jsx"
+  },
+  {
+    "slug": "expr-wiggle",
+    "name": "抖动",
+    "file": "expr-wiggle.jsx"
+  },
+  {
+    "slug": "preset-hexagon",
+    "name": "Shape_六边形平铺 预设",
+    "file": "preset-hexagon.jsx"
+  },
+  {
+    "slug": "effect-grow-bounds",
+    "name": "Grow Bounds 效果",
+    "file": "effect-grow-bounds.jsx"
   }
 ]
