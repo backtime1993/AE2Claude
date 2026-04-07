@@ -1977,26 +1977,24 @@ class AEBridge:
             "offset": "ADBE Text Percent Offset",
         }
         jsx = (
-            f'try{{'
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var animators=tl.property("ADBE Text Properties").property("ADBE Text Animators");'
-            f'if(!animators||animators.numProperties<{animator_index}){{"ERR:no_animator"}}else{{'
-            f'var anim=animators.property({animator_index});'
-            f'var sels=anim.property("ADBE Text Selectors");'
-            f'if(!sels||sels.numProperties<{selector_index}){{"ERR:no_selector"}}else{{'
-            f'var sel=sels.property({selector_index});'
+            'var c=app.project.activeItem;'
+            'var tl=c.layer("' + _esc(name) + '");'
+            'var animators=tl.property("ADBE Text Properties").property("ADBE Text Animators");'
+            'if(!animators||animators.numProperties<' + str(animator_index) + '){"ERR:no_animator"}else{'
+            'var anim=animators.property(' + str(animator_index) + ');'
+            'var sels=anim.property("ADBE Text Selectors");'
+            'if(!sels||sels.numProperties<' + str(selector_index) + '){"ERR:no_selector"}else{'
+            'var sel=sels.property(' + str(selector_index) + ');'
         )
         if keyframes:
             for prop_key, kfs in keyframes.items():
                 mn = prop_map.get(prop_key)
                 if not mn:
                     continue
-                jsx += f'var p=sel.property("{mn}");'
+                jsx += 'var p=sel.property("' + mn + '");'
                 for t, val in kfs:
                     jsx += f'p.setValueAtTime({t},{val});'
-        jsx += '"animated"}}}'
-        jsx += f'}}catch(e){{"ERR:"+e.toString()}}'
+        jsx += '"animated"}}'
         return self.run_jsx(jsx)
 
     # ── Layer Styles ───────────────────────────────────────
