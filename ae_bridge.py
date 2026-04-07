@@ -1,0 +1,1247 @@
+"""
+AE Bridge - Universal After Effects Automation via PyShiftAE
+============================================================
+通过 PyShiftAE 插件内嵌的 HTTP 服务器 (默认 8089) 与 After Effects 通信。
+
+核心设计原则:
+1. 所有 effect 属性使用 matchName (兼容中文/日文/英文 AE)
+2. 每次调用执行最小操作单元 (避免 AE 对象引用失效)
+3. 通过 AEGP_ExecuteScript 原生执行 ExtendScript
+4. 内置 Dialog Dismisser 后台线程
+
+使用:
+    from ae_cdp_bridge import AEBridge
+
+    with AEBridge() as ae:
+        print(ae.comp_info())
+        ae.add_text_layer("Hello", start=1.0, end=5.0)
+        ae.add_effect("LayerName", "gaussian_blur", {"blurriness": 50})
+
+依赖: 无外部依赖 (仅 Python 标准库)
+"""
+import json
+import sys
+import time
+import threading
+import subprocess
+import os
+import re
+import urllib.request
+import urllib.error
+from typing import Optional, List, Dict, Any, Tuple, Union
+
+__version__ = "1.0.0"
+
+# ╔══════════════════════════════════════════════════════════╗
+# ║              EFFECT MATCHNAME REGISTRY                  ║
+# ╠══════════════════════════════════════════════════════════╣
+# ║ AE Beta 26.1 中文 locale 下 display name 是中文,       ║
+# ║ 用 matchName 才能保证跨语言兼容。                       ║
+# ╚══════════════════════════════════════════════════════════╝
+
+EFFECTS = {
+    # --- Gaussian Blur ---
+    "gaussian_blur": {
+        "matchName": "ADBE Gaussian Blur 2",
+        "props": {
+            "blurriness":         "ADBE Gaussian Blur 2-0001",  # 模糊度
+            "blur_direction":     "ADBE Gaussian Blur 2-0002",  # 模糊方向
+            "repeat_edge_pixels": "ADBE Gaussian Blur 2-0003",  # 重复边缘像素 (bool: 0/1)
+        }
+    },
+    # --- Drop Shadow ---
+    "drop_shadow": {
+        "matchName": "ADBE Drop Shadow",
+        "props": {
+            "shadow_color": "ADBE Drop Shadow-0001",  # 阴影颜色
+            "opacity":      "ADBE Drop Shadow-0002",  # 不透明度
+            "direction":    "ADBE Drop Shadow-0003",  # 方向
+            "distance":     "ADBE Drop Shadow-0004",  # 距离
+            "softness":     "ADBE Drop Shadow-0005",  # 柔和度
+        }
+    },
+    # --- Fill ---
+    "fill": {
+        "matchName": "ADBE Fill",
+        "props": {
+            "fill_mask":  "ADBE Fill-0001",
+            "all_masks":  "ADBE Fill-0002",
+            "color":      "ADBE Fill-0003",
+            "invert":     "ADBE Fill-0004",
+            "h_feather":  "ADBE Fill-0005",
+            "v_feather":  "ADBE Fill-0006",
+            "opacity":    "ADBE Fill-0007",
+        }
+    },
+    # --- Glow ---
+    "glow": {
+        "matchName": "ADBE Glo2",
+        "props": {
+            "glow_threshold":  "ADBE Glo2-0001",
+            "glow_radius":     "ADBE Glo2-0002",
+            "glow_intensity":  "ADBE Glo2-0003",
+        }
+    },
+    # --- Stroke ---
+    "stroke_effect": {
+        "matchName": "ADBE Stroke",
+        "props": {}
+    },
+    # --- Levels ---
+    "levels": {
+        "matchName": "ADBE Easy Levels2",
+        "props": {}
+    },
+    # --- Curves ---
+    "curves": {
+        "matchName": "ADBE CurvesCustom",
+        "props": {}
+    },
+    # --- Hue/Saturation ---
+    "hue_saturation": {
+        "matchName": "ADBE HUE SATURATION",
+        "props": {}
+    },
+    # --- CC Toner ---
+    "cc_toner": {
+        "matchName": "CC Toner",
+        "props": {}
+    },
+    # --- Ramp/Gradient ---
+    "gradient_ramp": {
+        "matchName": "ADBE Ramp",
+        "props": {}
+    },
+    # --- Turbulent Displace ---
+    "turbulent_displace": {
+        "matchName": "ADBE Turbulent Displace",
+        "props": {}
+    },
+}
+
+# ╔══════════════════════════════════════════════════════════╗
+# ║              TRANSFORM PROPERTY REGISTRY                ║
+# ╠══════════════════════════════════════════════════════════╣
+# ║ Transform 属性 matchName + 缓动维度参考                 ║
+# ╚══════════════════════════════════════════════════════════╝
+
+TRANSFORM_PROPS = {
+    "anchor_point": {
+        "matchName": "ADBE Anchor Point",
+        "path": 'property("Transform").property("Anchor Point")',
+        "ease_dims": 2,   # 2D spatial (unless 3D layer)
+        "spatial": True,
+    },
+    "position": {
+        "matchName": "ADBE Position",
+        "path": 'property("Transform").property("Position")',
+        "ease_dims": 1,   # Spatial -> 1 KeyframeEase element
+        "spatial": True,
+    },
+    "scale": {
+        "matchName": "ADBE Scale",
+        "path": 'property("Transform").property("Scale")',
+        "ease_dims": 3,   # 3D, non-spatial -> 3 elements
+        "spatial": False,
+    },
+    "rotation": {
+        "matchName": "ADBE Rotate Z",
+        "path": 'property("Transform").property("Rotation")',
+        "ease_dims": 1,
+        "spatial": False,
+    },
+    "opacity": {
+        "matchName": "ADBE Opacity",
+        "path": 'property("Transform").property("Opacity")',
+        "ease_dims": 1,
+        "spatial": False,
+    },
+}
+
+# ╔══════════════════════════════════════════════════════════╗
+# ║           KNOWN EFFECT MATCHNAMES (PROBE LIST)          ║
+# ╠══════════════════════════════════════════════════════════╣
+# ║ 用于 list_available_effects() 动态探测当前 AE 安装中    ║
+# ║ 实际可用的效果。canAddProperty() 测试后返回。            ║
+# ╚══════════════════════════════════════════════════════════╝
+
+KNOWN_EFFECT_MATCHNAMES = [
+    # ── Blur & Sharpen ──
+    "ADBE Gaussian Blur 2", "ADBE Box Blur2", "ADBE Camera Lens Blur",
+    "ADBE Radial Blur", "ADBE Sharpen", "ADBE Unsharp Mask2",
+    "ADBE Channel Blur", "ADBE Compound Blur", "ADBE Directional Blur",
+    "ADBE Motion Blur", "ADBE Smart Blur", "ADBE Bilateral",
+    "CC Cross Blur", "CC Radial Blur", "CC Radial Fast Blur", "CC Vector Blur",
+    # ── Color Correction ──
+    "ADBE Brightness & Contrast 2", "ADBE CurvesCustom", "ADBE Easy Levels2",
+    "ADBE HUE SATURATION", "ADBE Vibrance", "ADBE Color Balance (HLS)",
+    "ADBE Color Balance 2", "ADBE Tint", "ADBE Tritone", "ADBE Pro Levels2",
+    "ADBE Photo Filter", "ADBE Black&White", "ADBE Exposure2",
+    "ADBE Change To Color", "ADBE Change Color", "ADBE Lumetri",
+    "ADBE Leave Color", "ADBE Equalize", "ADBE Selective Color",
+    "ADBE Shadow/Highlight",
+    "CC Color Neutralizer", "CC Color Offset", "CC Toner",
+    # ── Distort ──
+    "ADBE Turbulent Displace", "ADBE Displacement Map", "ADBE LIQUIFY",
+    "ADBE Ripple", "ADBE Twirl", "ADBE WRPMESH", "ADBE Spherize",
+    "ADBE Polar Coordinates", "ADBE Bulge", "ADBE Wave Warp",
+    "ADBE Reshape", "ADBE Mirror", "ADBE Offset", "ADBE Magnify",
+    "ADBE Transform", "ADBE Optics Compensation",
+    "CC Bend It", "CC Bender", "CC Blobbylize", "CC Flo Motion",
+    "CC Griddler", "CC Lens", "CC Page Turn", "CC Power Pin",
+    "CC Ripple Pulse", "CC Slant", "CC Smear", "CC Split", "CC Split 2", "CC Tiler",
+    # ── Generate ──
+    "ADBE Fill", "ADBE Ramp", "ADBE Stroke", "ADBE Checkerboard",
+    "ADBE Grid", "ADBE Fractal", "ADBE Cell Pattern", "ADBE Ellipse",
+    "ADBE 4ColorGradient", "ADBE Lightning 2", "ADBE Scribble Fill",
+    "ADBE AudiSpek", "ADBE AudiWave", "ADBE Laser", "ADBE Write-on",
+    "CC Glue Gun", "CC Light Burst 2.5", "CC Light Rays", "CC Light Sweep", "CC Threads",
+    # ── Noise & Grain ──
+    "ADBE Fractal Noise", "ADBE Noise Alpha2", "ADBE Noise HLS2",
+    "ADBE Add Grain", "ADBE Remove Grain", "ADBE Match Grain",
+    "ADBE Dust & Scratches", "ADBE Median",
+    # ── Stylize ──
+    "ADBE Glo2", "ADBE Drop Shadow", "ADBE Emboss", "ADBE Find Edges",
+    "ADBE Mosaic", "ADBE Posterize", "ADBE Roughen Edges", "ADBE Scatter",
+    "ADBE Tile", "ADBE Texturize", "ADBE Brush Strokes", "ADBE Color Emboss",
+    "CC Glass", "CC HexTile", "CC Kaleida", "CC Mr. Smoothie",
+    "CC Plastic", "CC RepeTile", "CC Vignette",
+    # ── Transition ──
+    "ADBE Block Dissolve", "ADBE Gradient Wipe", "ADBE Linear Wipe",
+    "ADBE Radial Wipe", "ADBE Venetian Blinds", "ADBE Iris Wipe",
+    "CC Glass Wipe", "CC Grid Wipe", "CC Image Wipe", "CC Jaws",
+    "CC Light Wipe", "CC Line Sweep", "CC Scale Wipe", "CC Twister", "CC WarpoMatic",
+    # ── Channel ──
+    "ADBE Set Channels", "ADBE Set Matte3", "ADBE Shift Channels",
+    "ADBE Minimax", "ADBE Invert", "ADBE Arithmetic",
+    "ADBE Channel Combiner", "ADBE Calculations", "ADBE Remove Color Matting",
+    # ── Keying ──
+    "ADBE KEYLIGHT", "ADBE SPILL2", "ADBE Extract", "ADBE ATG Extract",
+    "ADBE Color Range", "ADBE Difference Matte", "ADBE Inner Outer Key",
+    "ADBE Linear Color Key2",
+    # ── Matte ──
+    "ADBE Simple Choker", "ADBE Matte Choker", "ADBE Refine Soft Matte",
+    # ── Perspective ──
+    "ADBE 3D Glasses2", "ADBE Bevel Alpha",
+    "CC Cylinder", "CC Environment", "CC Sphere", "CC Spotlight",
+    # ── Time ──
+    "ADBE Echo", "ADBE Posterize Time", "ADBE Timewarp", "ADBE Time Difference",
+    "CC Force Motion Blur", "CC Wide Time",
+    # ── Utility ──
+    "ADBE Apply Color LUT2", "ADBE Cineon Converter2",
+    "ADBE Color Profile Converter", "ADBE Grow Bounds",
+    # ── Simulation ──
+    "CC Ball Action", "CC Bubbles", "CC Drizzle", "CC Hair",
+    "CC Mr. Mercury", "CC Particle Systems II", "CC Particle World",
+    "CC Pixel Polly", "CC Rain", "CC Scatterize", "CC Snow", "CC Star Burst",
+    # ── Expression Controls ──
+    "ADBE Angle Control", "ADBE Checkbox Control", "ADBE Color Control",
+    "ADBE Layer Control", "ADBE Point Control", "ADBE Slider Control",
+    "ADBE Dropdown Control", "ADBE Point3D Control",
+]
+
+# ╔══════════════════════════════════════════════════════════╗
+# ║                  AE CDP BRIDGE CLASS                    ║
+# ╚══════════════════════════════════════════════════════════╝
+
+class AEBridge:
+    """
+    After Effects CDP Bridge - 通过 MoBar CEP 面板 CDP 端口执行 ExtendScript。
+
+    关键行为:
+    - 自动发现 WebSocket URL (默认端口 8870)
+    - 每次 run_jsx() 调用独立执行，避免 AE 对象引用失效
+    - 支持 context manager (with 语句)
+    - 可选启动 Dialog Dismisser 后台线程
+
+    示例:
+        with AEBridge() as ae:
+            info = ae.comp_info()
+            ae.begin_undo("My Script")
+            ae.add_text_layer("Hello World", start=1.0, end=5.0)
+            ae.end_undo()
+    """
+
+    def __init__(self, port: int = 8089, timeout: int = 30,
+                 auto_dismiss: bool = False, **_ignored):
+        """
+        Args:
+            port: PyShiftAE HTTP 服务器端口 (默认 8089)
+            timeout: HTTP 请求超时秒数
+            auto_dismiss: 是否启动 Dialog Dismisser 后台线程
+        """
+        self.port = port
+        self.timeout = timeout
+        self._base_url = f"http://127.0.0.1:{port}"
+        self._dismiss_thread = None
+        self._dismiss_running = False
+
+        # 验证连接
+        self._check_connection()
+
+        # 可选: Dialog Dismisser
+        if auto_dismiss:
+            self.start_dismiss()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    # ── Connection ──────────────────────────────────────────
+
+    def _check_connection(self):
+        """验证 PyShiftAE HTTP 服务器可达"""
+        try:
+            req = urllib.request.Request(f'{self._base_url}/health')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+                if data.get('status') != 'ok':
+                    raise ConnectionError("PyShiftAE health check failed")
+        except (urllib.error.URLError, OSError) as e:
+            raise ConnectionError(
+                f"Cannot connect to PyShiftAE on port {self.port}. "
+                f"Make sure AE is running with PyShiftAE plugin loaded. "
+                f"Error: {e}"
+            )
+
+    def close(self):
+        """停止后台线程"""
+        self._dismiss_running = False
+
+    def reconnect(self):
+        """重新验证连接 (AE 重启后调用)"""
+        self._check_connection()
+
+    # ── Core JSX Executor ──────────────────────────────────
+
+    def run_jsx(self, code: str, timeout: int = 60000) -> str:
+        """
+        通过 PyShiftAE AEGP_ExecuteScript 执行 ExtendScript 代码。
+
+        Args:
+            code: ExtendScript 代码字符串
+            timeout: 超时毫秒数 (转换为秒用于 HTTP)
+
+        Returns:
+            ExtendScript 返回的字符串结果
+
+        Raises:
+            RuntimeError: 脚本执行出错
+            ConnectionError: PyShiftAE 服务器不可达
+        """
+        data = code.encode('utf-8')
+        req = urllib.request.Request(
+            f'{self._base_url}/jsx',
+            data=data,
+            headers={'Content-Type': 'text/plain; charset=utf-8'}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=max(timeout / 1000, 5)) as resp:
+                r = json.loads(resp.read())
+        except (urllib.error.URLError, OSError) as e:
+            raise ConnectionError(f"PyShiftAE request failed: {e}")
+
+        if r.get('ok'):
+            return r.get('result', '')
+        error = r.get('error', 'Unknown JSX error')
+        raise RuntimeError(f"JSX error: {error}")
+
+    def run_jsx_checked(self, code: str, timeout: int = 60000,
+                         expect: str = None) -> str:
+        """
+        执行 JSX 并检查结果。如果 expect 不为 None，结果不匹配时抛出异常。
+
+        Args:
+            code: ExtendScript 代码
+            timeout: 超时毫秒数
+            expect: 期望的返回值 (精确匹配)
+
+        Returns:
+            ExtendScript 结果字符串
+
+        Raises:
+            RuntimeError: 结果不匹配期望值
+        """
+        result = self.run_jsx(code, timeout)
+        if expect is not None and result != expect:
+            raise RuntimeError(
+                f"JSX check failed: expected '{expect}', got '{result}'"
+            )
+        return result
+
+    # ── Dialog Dismisser ───────────────────────────────────
+
+    def start_dismiss(self):
+        """启动 Dialog Dismisser 后台线程"""
+        if self._dismiss_thread and self._dismiss_thread.is_alive():
+            return
+        self._dismiss_running = True
+        self._dismiss_thread = threading.Thread(
+            target=self._dialog_dismisser_loop, daemon=True
+        )
+        self._dismiss_thread.start()
+
+    def stop_dismiss(self):
+        """停止 Dialog Dismisser"""
+        self._dismiss_running = False
+
+    def _dialog_dismisser_loop(self):
+        """后台循环: 自动关闭 AE 模态对话框"""
+        if sys.platform != 'win32':
+            return
+
+        import ctypes
+        import ctypes.wintypes
+
+        user32 = ctypes.windll.user32
+        EnumWindows = user32.EnumWindows
+        IsWindowVisible = user32.IsWindowVisible
+        GetClassName = user32.GetClassNameW
+        GetWindowThreadProcessId = user32.GetWindowThreadProcessId
+        SetForegroundWindow = user32.SetForegroundWindow
+        PostMessage = user32.PostMessageW
+        WM_KEYDOWN, WM_KEYUP, VK_RETURN = 0x0100, 0x0101, 0x0D
+
+        # 获取 AE PID
+        ae_pid = self._find_ae_pid()
+
+        WINFUNCTYPE = ctypes.WINFUNCTYPE(
+            ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+        )
+
+        while self._dismiss_running:
+            try:
+                dialogs = []
+
+                @WINFUNCTYPE
+                def enum_cb(hwnd, lparam):
+                    if not IsWindowVisible(hwnd):
+                        return True
+                    pid = ctypes.wintypes.DWORD()
+                    GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if ae_pid and pid.value != ae_pid:
+                        return True
+                    cls = ctypes.create_unicode_buffer(256)
+                    GetClassName(hwnd, cls, 256)
+                    if cls.value == '#32770':
+                        dialogs.append(hwnd)
+                    return True
+
+                EnumWindows(enum_cb, 0)
+
+                for hwnd in dialogs:
+                    SetForegroundWindow(hwnd)
+                    time.sleep(0.2)
+                    PostMessage(hwnd, WM_KEYDOWN, VK_RETURN, 0)
+                    PostMessage(hwnd, WM_KEYUP, VK_RETURN, 0)
+                    time.sleep(0.5)
+            except Exception:
+                pass
+            time.sleep(0.8)
+
+    @staticmethod
+    def _find_ae_pid() -> int:
+        """查找 After Effects 进程 PID"""
+        try:
+            r = subprocess.run(
+                ['powershell', '-c',
+                 '(Get-Process | Where-Object '
+                 '{$_.MainWindowTitle -like "*After Effects*"}).Id'],
+                capture_output=True, text=True, timeout=5
+            )
+            if r.stdout.strip():
+                return int(r.stdout.strip().split()[0])
+        except Exception:
+            pass
+        return 0
+
+    # ╔══════════════════════════════════════════════════════╗
+    # ║              HIGH-LEVEL AE OPERATIONS               ║
+    # ╚══════════════════════════════════════════════════════╝
+
+    # ── Comp Info ──────────────────────────────────────────
+
+    def comp_info(self) -> dict:
+        """获取当前活动合成信息"""
+        r = self.run_jsx(
+            'var c=app.project.activeItem;'
+            'c ? JSON.stringify({id:c.id,name:c.name,width:c.width,height:c.height,'
+            'fps:1/c.frameDuration,duration:c.duration,numLayers:c.numLayers})'
+            ': "null"'
+        )
+        if r == "null" or r == "undefined":
+            return {}
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return {"raw": r}
+
+    def project_info(self) -> dict:
+        """获取项目信息"""
+        r = self.run_jsx(
+            'JSON.stringify({numItems:app.project.numItems,'
+            'file:app.project.file?app.project.file.fsName:"unsaved"})'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return {"raw": r}
+
+    # ── Undo Group ─────────────────────────────────────────
+
+    def begin_undo(self, name: str = "Script"):
+        """开始 undo 组"""
+        self.run_jsx(f'app.beginUndoGroup("{name}");')
+
+    def end_undo(self):
+        """结束 undo 组"""
+        self.run_jsx('app.endUndoGroup();')
+
+    # ── Layer Queries ──────────────────────────────────────
+
+    def list_layers(self) -> List[dict]:
+        """列出当前合成所有图层"""
+        r = self.run_jsx(
+            'var c=app.project.activeItem;var out=[];'
+            'for(var i=1;i<=c.numLayers;i++){'
+            'var l=c.layer(i);out.push({id:l.id,index:i,name:l.name,'
+            'startTime:l.startTime,outPoint:l.outPoint,label:l.label});}'
+            'JSON.stringify(out);'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return []
+
+    def layer_exists(self, name: str) -> bool:
+        """检查图层是否存在"""
+        r = self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'try{{c.layer("{_esc(name)}")?"true":"false"}}'
+            f'catch(e){{"false"}}'
+        )
+        return r == "true"
+
+    def get_layer_info(self, name: str) -> dict:
+        """获取指定图层详细信息"""
+        r = self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'JSON.stringify({{id:tl.id,name:tl.name,index:tl.index,'
+            f'startTime:tl.startTime,outPoint:tl.outPoint,'
+            f'inPoint:tl.inPoint,label:tl.label,'
+            f'numEffects:tl.property("Effects").numProperties}});'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return {"raw": r}
+
+    # ── Layer Management ───────────────────────────────────
+
+    def remove_layers_by_prefix(self, prefix: str) -> int:
+        """按名称前缀批量删除图层"""
+        r = self.run_jsx(
+            f'var c=app.project.activeItem;var rm=0;'
+            f'for(var i=c.numLayers;i>=1;i--){{'
+            f'if(c.layer(i).name.indexOf("{_esc(prefix)}")==0)'
+            f'{{c.layer(i).remove();rm++;}}}}'
+            f'"removed:"+rm;'
+        )
+        try:
+            return int(r.split(":")[1])
+        except (IndexError, ValueError):
+            return 0
+
+    def remove_layer(self, name: str) -> str:
+        """删除指定图层"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'try{{c.layer("{_esc(name)}").remove();"removed"}}'
+            f'catch(e){{"ERR:"+e.toString()}}'
+        )
+
+    def rename_layer(self, old_name: str, new_name: str) -> str:
+        """重命名图层"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(old_name)}").name="{_esc(new_name)}";'
+            f'"renamed"'
+        )
+
+    def set_layer_label(self, name: str, label: int) -> str:
+        """设置图层标签颜色 (0-16)"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").label={label};"ok"'
+        )
+
+    def set_layer_timing(self, name: str, start: float = None,
+                          end: float = None) -> str:
+        """设置图层的起止时间"""
+        parts = ['var c=app.project.activeItem;',
+                  f'var tl=c.layer("{_esc(name)}");']
+        if start is not None:
+            parts.append(f'tl.startTime={start};')
+        if end is not None:
+            parts.append(f'tl.outPoint={end};')
+        parts.append('"ok"')
+        return self.run_jsx(''.join(parts))
+
+    # ── Text Layers ────────────────────────────────────────
+
+    def add_text_layer(self, text: str, name: str = None,
+                        start: float = None, end: float = None,
+                        font: str = None, font_size: int = None,
+                        fill_color: List[float] = None,
+                        stroke_color: List[float] = None,
+                        stroke_width: float = None,
+                        justification: str = "center",
+                        label: int = None) -> str:
+        """
+        创建文本图层 (Step A - 仅创建+样式，不含效果和缓动)。
+
+        Args:
+            text: 文本内容
+            name: 图层名称 (默认使用 text)
+            start: 图层开始时间 (秒)
+            end: 图层结束时间 (秒)
+            font: 字体名 (如 "SourceHanSansSC-Bold")
+            font_size: 字号 (如 56)
+            fill_color: 填充色 [r,g,b] 0-1 范围
+            stroke_color: 描边色 [r,g,b] 0-1 范围
+            stroke_width: 描边宽度
+            justification: "left" / "center" / "right"
+            label: 标签颜色 (0-16)
+
+        Returns:
+            图层名称 或错误信息
+        """
+        safe_txt = _esc(text)
+        layer_name = _esc(name or text[:20])
+
+        just_map = {
+            "left": "ParagraphJustification.LEFT_JUSTIFY",
+            "center": "ParagraphJustification.CENTER_JUSTIFY",
+            "right": "ParagraphJustification.RIGHT_JUSTIFY",
+        }
+
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layers.addText("{safe_txt}");'
+            f'tl.name="{layer_name}";'
+        )
+        if label is not None:
+            jsx += f'tl.label={label};'
+        if start is not None:
+            jsx += f'tl.startTime={start};'
+        if end is not None:
+            jsx += f'tl.outPoint={end};'
+
+        # Text styling
+        jsx += 'var tp=tl.property("Source Text");var td=tp.value;td.resetCharStyle();'
+        if font_size:
+            jsx += f'td.fontSize={font_size};'
+        if fill_color:
+            jsx += f'td.fillColor=[{fill_color[0]},{fill_color[1]},{fill_color[2]}];td.applyFill=true;'
+        if stroke_color:
+            jsx += (f'td.strokeColor=[{stroke_color[0]},{stroke_color[1]},{stroke_color[2]}];'
+                    f'td.applyStroke=true;td.strokeOverFill=false;')
+        if stroke_width:
+            jsx += f'td.strokeWidth={stroke_width};'
+        if font:
+            jsx += f'td.font="{font}";'
+        if justification in just_map:
+            jsx += f'td.justification={just_map[justification]};'
+        jsx += 'tp.setValue(td);'
+        jsx += f'tl.name;'
+
+        return self.run_jsx(jsx)
+
+    def center_anchor(self, name: str, at_time: float = 0) -> str:
+        """将图层锚点居中 (基于 sourceRectAtTime)"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var rect=tl.sourceRectAtTime({at_time},false);'
+            f'var ax=rect.left+rect.width/2;var ay=rect.top+rect.height/2;'
+            f'tl.property("Transform").property("Anchor Point").setValue([ax,ay]);'
+            f'"centered"'
+        )
+
+    # ── Keyframes ──────────────────────────────────────────
+
+    def set_position_keyframes(self, name: str,
+                                keyframes: List[Tuple[float, List[float]]]) -> str:
+        """
+        设置 Position 关键帧。
+
+        Args:
+            name: 图层名
+            keyframes: [(time_sec, [x, y]), ...] 或 [(time_sec, [x, y, z]), ...]
+        """
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var pos=tl.property("Transform").property("Position");'
+        )
+        for t, val in keyframes:
+            jsx += f'pos.setValueAtTime({t},{json.dumps(val)});'
+        jsx += '"ok"'
+        return self.run_jsx(jsx)
+
+    def set_opacity_keyframes(self, name: str,
+                               keyframes: List[Tuple[float, float]]) -> str:
+        """
+        设置 Opacity 关键帧。
+
+        Args:
+            name: 图层名
+            keyframes: [(time_sec, value_0to100), ...]
+        """
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var opa=tl.property("Transform").property("Opacity");'
+        )
+        for t, val in keyframes:
+            jsx += f'opa.setValueAtTime({t},{val});'
+        jsx += '"ok"'
+        return self.run_jsx(jsx)
+
+    def set_scale_keyframes(self, name: str,
+                             keyframes: List[Tuple[float, List[float]]]) -> str:
+        """
+        设置 Scale 关键帧。注意 AE Scale 始终是 3D: [x, y, z]。
+
+        Args:
+            name: 图层名
+            keyframes: [(time_sec, [sx, sy, sz]), ...]  (sz 通常为 100)
+        """
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var scl=tl.property("Transform").property("Scale");'
+        )
+        for t, val in keyframes:
+            # 确保 3D
+            if len(val) == 2:
+                val = val + [100]
+            jsx += f'scl.setValueAtTime({t},{json.dumps(val)});'
+        jsx += '"ok"'
+        return self.run_jsx(jsx)
+
+    def set_rotation_keyframes(self, name: str,
+                                keyframes: List[Tuple[float, float]]) -> str:
+        """设置 Rotation 关键帧"""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var rot=tl.property("Transform").property("Rotation");'
+        )
+        for t, val in keyframes:
+            jsx += f'rot.setValueAtTime({t},{val});'
+        jsx += '"ok"'
+        return self.run_jsx(jsx)
+
+    def set_property_keyframes(self, name: str, prop_path: str,
+                                keyframes: List[Tuple[float, Any]]) -> str:
+        """
+        通用属性关键帧设置。
+
+        Args:
+            name: 图层名
+            prop_path: 属性路径，如 'property("Transform").property("Opacity")'
+            keyframes: [(time_sec, value), ...]
+        """
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var p=tl.{prop_path};'
+        )
+        for t, val in keyframes:
+            if isinstance(val, (list, tuple)):
+                jsx += f'p.setValueAtTime({t},{json.dumps(val)});'
+            else:
+                jsx += f'p.setValueAtTime({t},{val});'
+        jsx += '"ok"'
+        return self.run_jsx(jsx)
+
+    # ── Easing ─────────────────────────────────────────────
+
+    def apply_easing(self, name: str, properties: List[str] = None,
+                      speed: float = 0, influence: float = 80) -> str:
+        """
+        对图层的 Transform 属性关键帧应用缓动。
+
+        ⚠️ 关键: 此操作必须在独立的 CDP 调用中执行 (不要和 addProperty 混用)。
+
+        Args:
+            name: 图层名
+            properties: 要应用缓动的属性列表，如 ["opacity", "position", "scale"]
+                       默认 = ["opacity", "position", "scale"]
+            speed: KeyframeEase speed (通常 0)
+            influence: KeyframeEase influence (通常 33-100, 默认 80)
+        """
+        if properties is None:
+            properties = ["opacity", "position", "scale"]
+
+        jsx = (
+            f'try{{'
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var eI=new KeyframeEase({speed},{influence});'
+            f'var eO=new KeyframeEase({speed},{influence});'
+        )
+
+        for prop_name in properties:
+            info = TRANSFORM_PROPS.get(prop_name)
+            if not info:
+                continue
+            dims = info["ease_dims"]
+            ease_in = ",".join(["eI"] * dims)
+            ease_out = ",".join(["eO"] * dims)
+            path = info["path"]
+            jsx += (
+                f'var _p=tl.{path};'
+                f'for(var k=1;k<=_p.numKeys;k++)'
+                f'_p.setTemporalEaseAtKey(k,[{ease_in}],[{ease_out}]);'
+            )
+
+        jsx += '"ease_ok";'
+        jsx += '}catch(e){"EASE_ERR:"+e.toString()+" L:"+e.line;}'
+        return self.run_jsx(jsx)
+
+    def apply_effect_easing(self, name: str, effect_type: str,
+                             prop_key: str, speed: float = 0,
+                             influence: float = 80) -> str:
+        """
+        对效果属性的关键帧应用缓动。
+
+        ⚠️ 必须在 add_effect 之后的独立调用中执行。
+
+        Args:
+            name: 图层名
+            effect_type: 效果类型 key (如 "gaussian_blur")
+            prop_key: 属性 key (如 "blurriness")
+            speed: KeyframeEase speed
+            influence: KeyframeEase influence
+        """
+        fx = EFFECTS.get(effect_type)
+        if not fx:
+            return f"ERR: unknown effect {effect_type}"
+        mn = fx["props"].get(prop_key)
+        if not mn:
+            return f"ERR: unknown prop {prop_key}"
+        fx_mn = fx["matchName"]
+
+        return self.run_jsx(
+            f'try{{'
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var fx=tl.property("Effects");'
+            f'var eI=new KeyframeEase({speed},{influence});'
+            f'var eO=new KeyframeEase({speed},{influence});'
+            # 通过 matchName 查找最后添加的同类效果
+            f'var ef=null;for(var i=fx.numProperties;i>=1;i--){{'
+            f'if(fx.property(i).matchName=="{fx_mn}"){{ef=fx.property(i);break;}}}}'
+            f'if(!ef){{"ERR:effect_not_found"}}else{{'
+            f'var p=ef.property("{mn}");'
+            f'for(var k=1;k<=p.numKeys;k++)'
+            f'p.setTemporalEaseAtKey(k,[eI],[eO]);'
+            f'"fx_ease_ok";}}'
+            f'}}catch(e){{"FX_EASE_ERR:"+e.toString()+" L:"+e.line;}}'
+        )
+
+    # ── Effects ────────────────────────────────────────────
+
+    def add_effect(self, name: str, effect_type: str,
+                    props: Dict[str, Any] = None,
+                    keyframes: Dict[str, List[Tuple[float, Any]]] = None) -> str:
+        """
+        为图层添加效果并设置属性值/关键帧。
+
+        ⚠️ 关键设计: 每次调用只添加一个效果 (避免 AE 对象引用失效)。
+
+        Args:
+            name: 图层名
+            effect_type: 效果类型 key (如 "gaussian_blur", "drop_shadow")
+            props: 静态属性 {prop_key: value}
+            keyframes: 动态属性关键帧 {prop_key: [(time, value), ...]}
+
+        Returns:
+            "ok" 或错误信息
+        """
+        fx = EFFECTS.get(effect_type)
+        if not fx:
+            return f"ERR: unknown effect '{effect_type}'. Available: {list(EFFECTS.keys())}"
+
+        mn = fx["matchName"]
+        jsx = (
+            f'try{{'
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var ef=tl.property("Effects").addProperty("{mn}");'
+        )
+
+        # 设置静态属性
+        if props:
+            for key, val in props.items():
+                prop_mn = fx["props"].get(key)
+                if not prop_mn:
+                    continue
+                if isinstance(val, (list, tuple)):
+                    jsx += f'ef.property("{prop_mn}").setValue({json.dumps(val)});'
+                else:
+                    jsx += f'ef.property("{prop_mn}").setValue({val});'
+
+        # 设置关键帧属性
+        if keyframes:
+            for key, kfs in keyframes.items():
+                prop_mn = fx["props"].get(key)
+                if not prop_mn:
+                    continue
+                for t, val in kfs:
+                    if isinstance(val, (list, tuple)):
+                        jsx += f'ef.property("{prop_mn}").setValueAtTime({t},{json.dumps(val)});'
+                    else:
+                        jsx += f'ef.property("{prop_mn}").setValueAtTime({t},{val});'
+
+        jsx += '"ok";'
+        jsx += f'}}catch(e){{"FX_ERR:"+e.toString()+" L:"+e.line;}}'
+        return self.run_jsx(jsx)
+
+    def enumerate_effects(self, name: str) -> List[dict]:
+        """列出图层上的所有效果"""
+        r = self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var fx=tl.property("Effects");var out=[];'
+            f'for(var i=1;i<=fx.numProperties;i++){{'
+            f'var e=fx.property(i);out.push({{index:i,name:e.name,matchName:e.matchName}});}}'
+            f'JSON.stringify(out);'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return []
+
+    # ── Expressions ────────────────────────────────────────
+
+    def set_expression(self, name: str, prop_path: str, expr: str) -> str:
+        """设置属性表达式"""
+        safe_expr = _esc(expr)
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'tl.{prop_path}.expression="{safe_expr}";'
+            f'"expr_ok"'
+        )
+
+    def clear_expression(self, name: str, prop_path: str) -> str:
+        """清除属性表达式"""
+        return self.run_jsx(
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'tl.{prop_path}.expression="";'
+            f'"cleared"'
+        )
+
+    # ── Import ─────────────────────────────────────────────
+
+    def import_file(self, filepath: str, as_sequence: bool = False,
+                     conform_fps: float = None) -> str:
+        """
+        导入文件 (footage/图片序列)。
+
+        Args:
+            filepath: 文件路径 (使用正斜杠)
+            as_sequence: 是否作为图片序列导入
+            conform_fps: 强制帧率 (导入后设置)
+        """
+        safe_path = filepath.replace('\\', '/')
+        jsx = (
+            f'var f=new File("{safe_path}");'
+            f'if(!f.exists){{"NOT_FOUND"}}else{{'
+            f'var io=new ImportOptions(f);'
+        )
+        if as_sequence:
+            jsx += 'io.sequence=true;'
+        jsx += 'var it=app.project.importFile(io);'
+        if conform_fps:
+            jsx += f'it.mainSource.conformFrameRate={conform_fps};'
+        jsx += '"OK:"+it.name+",dur="+it.duration;}'
+        return self.run_jsx(jsx, timeout=120000)
+
+    # ── Render Queue ───────────────────────────────────────
+
+    def add_to_render_queue(self, comp_name: str = None,
+                             output_path: str = None,
+                             template: str = None) -> str:
+        """将合成添加到渲染队列"""
+        jsx = 'var c=app.project.activeItem;'
+        if comp_name:
+            jsx = (
+                f'var c=null;for(var i=1;i<=app.project.numItems;i++){{'
+                f'var it=app.project.item(i);'
+                f'if(it instanceof CompItem&&it.name=="{_esc(comp_name)}"){{c=it;break;}}}}'
+            )
+        jsx += 'if(!c){"no_comp"}else{'
+        jsx += 'var rqi=app.project.renderQueue.items.add(c);'
+        if output_path:
+            safe_path = output_path.replace('\\', '/')
+            jsx += f'rqi.outputModule(1).file=new File("{safe_path}");'
+        if template:
+            jsx += f'rqi.outputModule(1).applyTemplate("{template}");'
+        jsx += '"queued";}'
+        return self.run_jsx(jsx)
+
+    # ── Composition Management ─────────────────────────────
+
+    def create_comp(self, name: str, width: int, height: int,
+                     fps: float, duration: float,
+                     bg_color: List[float] = None) -> str:
+        """创建新合成"""
+        jsx = (
+            f'var c=app.project.items.addComp("{_esc(name)}",'
+            f'{width},{height},1,{duration},{fps});'
+        )
+        if bg_color:
+            jsx += f'c.bgColor=[{bg_color[0]},{bg_color[1]},{bg_color[2]}];'
+        jsx += 'c.name;'
+        return self.run_jsx(jsx)
+
+    def set_active_comp(self, name: str) -> str:
+        """通过名称查找并打开合成"""
+        return self.run_jsx(
+            f'var found=false;for(var i=1;i<=app.project.numItems;i++){{'
+            f'var it=app.project.item(i);'
+            f'if(it instanceof CompItem&&it.name=="{_esc(name)}"){{it.openInViewer();found=true;break;}}}}'
+            f'found?"opened":"not_found"'
+        )
+
+    # ── Utility: Execute Raw JSX File ──────────────────────
+
+    def exec_jsx_file(self, filepath: str) -> str:
+        """
+        读取本地 JSX 文件并通过 CDP 执行。
+        不使用 $.evalFile() (在 AE Beta 中不稳定)，
+        而是直接读取文件内容并作为 run_jsx 字符串发送。
+        """
+        with open(filepath, 'r', encoding='utf-8-sig') as f:
+            code = f.read()
+        return self.run_jsx(code)
+
+    # ── Effect Introspection ──────────────────────────────
+
+    def list_available_effects(self) -> dict:
+        """
+        探测当前 AE 中所有可用效果。
+        创建临时 solid，对 KNOWN_EFFECT_MATCHNAMES 逐一 canAddProperty + addProperty
+        获取 displayName，完成后 undo 清理。
+        """
+        mn_json = json.dumps(KNOWN_EFFECT_MATCHNAMES)
+        jsx = (
+            '(function(){'
+            'var c=app.project.activeItem;'
+            'if(!c||!(c instanceof CompItem))return JSON.stringify({error:"No active comp"});'
+            'app.beginUndoGroup("__probe__");'
+            'try{'
+            'var solid=c.layers.addSolid([0,0,0],"__effect_probe__",10,10,1);'
+            'var efx=solid.property("Effects");'
+            'var mns=' + mn_json + ';'
+            'var out=[];'
+            'for(var i=0;i<mns.length;i++){'
+            'try{if(efx.canAddProperty(mns[i])){'
+            'var e=efx.addProperty(mns[i]);'
+            'out.push({matchName:mns[i],displayName:e.name});'
+            '}}catch(x){}}'
+            'solid.remove();'
+            'app.endUndoGroup();'
+            'app.executeCommand(16);'
+            'return JSON.stringify(out);'
+            '}catch(e){'
+            'app.endUndoGroup();'
+            'try{app.executeCommand(16);}catch(x){}'
+            'return JSON.stringify({error:e.toString()});'
+            '}'
+            '})()'
+        )
+        r = self.run_jsx(jsx, timeout=120000)
+        try:
+            data = json.loads(r)
+            if isinstance(data, dict) and 'error' in data:
+                return data
+            return {"count": len(data), "effects": data}
+        except json.JSONDecodeError:
+            return {"error": r}
+
+    def describe_effect(self, match_name: str) -> dict:
+        """
+        自省指定效果的所有属性。
+        临时添加效果到 probe solid，递归遍历属性树，返回结构化元数据后 undo。
+        """
+        safe_mn = match_name.replace('"', '\\"')
+        jsx = (
+            '(function(){'
+            'var c=app.project.activeItem;'
+            'if(!c||!(c instanceof CompItem))return JSON.stringify({error:"No active comp"});'
+            'app.beginUndoGroup("__describe__");'
+            'try{'
+            'var solid=c.layers.addSolid([0,0,0],"__describe__",10,10,1);'
+            'var efxG=solid.property("Effects");'
+            'var mn="' + safe_mn + '";'
+            'if(!efxG.canAddProperty(mn)){'
+            'solid.remove();app.endUndoGroup();app.executeCommand(16);'
+            'return JSON.stringify({error:"Effect not available",matchName:mn});}'
+            'var eff=efxG.addProperty(mn);'
+            'var VT={};'
+            'VT[PropertyValueType.NO_VALUE]="NO_VALUE";'
+            'VT[PropertyValueType.ThreeD_SPATIAL]="3D_SPATIAL";'
+            'VT[PropertyValueType.ThreeD]="3D";'
+            'VT[PropertyValueType.TwoD_SPATIAL]="2D_SPATIAL";'
+            'VT[PropertyValueType.TwoD]="2D";'
+            'VT[PropertyValueType.OneD]="1D";'
+            'VT[PropertyValueType.COLOR]="COLOR";'
+            'VT[PropertyValueType.CUSTOM_VALUE]="CUSTOM";'
+            'VT[PropertyValueType.MARKER]="MARKER";'
+            'VT[PropertyValueType.LAYER_INDEX]="LAYER_INDEX";'
+            'VT[PropertyValueType.MASK_INDEX]="MASK_INDEX";'
+            'VT[PropertyValueType.SHAPE]="SHAPE";'
+            'VT[PropertyValueType.TEXT_DOCUMENT]="TEXT_DOCUMENT";'
+            'var props=[];'
+            'function walk(g,d){'
+            'for(var i=1;i<=g.numProperties;i++){'
+            'var p=g.property(i);'
+            'var o={name:p.name,matchName:p.matchName,index:i,depth:d};'
+            'if(p.propertyType==PropertyType.PROPERTY){'
+            'o.valueType=VT[p.propertyValueType]||"UNKNOWN";'
+            'o.canVaryOverTime=p.canVaryOverTime;'
+            'try{if(p.propertyValueType!=PropertyValueType.NO_VALUE&&'
+            'p.propertyValueType!=PropertyValueType.CUSTOM_VALUE){'
+            'var v=p.value;'
+            'if(typeof v=="object"&&v.length!==undefined){'
+            'o.value=[];for(var j=0;j<v.length;j++)o.value.push(v[j]);'
+            '}else{o.value=v;}}}catch(x){}'
+            'try{o.minValue=p.minValue;}catch(x){}'
+            'try{o.maxValue=p.maxValue;}catch(x){}'
+            '}else if(p.numProperties>0){'
+            'o.numChildren=p.numProperties;}'
+            'props.push(o);'
+            'if(p.numProperties>0&&p.propertyType!=PropertyType.PROPERTY){'
+            'walk(p,d+1);}}}'
+            'walk(eff,0);'
+            'var result={displayName:eff.name,matchName:eff.matchName,'
+            'numProperties:eff.numProperties,properties:props};'
+            'solid.remove();app.endUndoGroup();app.executeCommand(16);'
+            'return JSON.stringify(result);'
+            '}catch(e){'
+            'try{app.endUndoGroup();}catch(x){}'
+            'try{app.executeCommand(16);}catch(x){}'
+            'return JSON.stringify({error:e.toString()});'
+            '}'
+            '})()'
+        )
+        r = self.run_jsx(jsx, timeout=60000)
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return {"error": r}
+
+    # ── Stable ID Addressing ──────────────────────────────
+
+    def list_comps(self) -> list:
+        """列出项目中所有合成 (含 stable id)"""
+        r = self.run_jsx(
+            'var out=[];for(var i=1;i<=app.project.numItems;i++){'
+            'var it=app.project.item(i);'
+            'if(it instanceof CompItem)out.push({id:it.id,name:it.name,'
+            'width:it.width,height:it.height,duration:it.duration});}'
+            'JSON.stringify(out);'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return []
+
+    def set_active_comp_by_id(self, comp_id: int) -> str:
+        """通过 stable ID 查找并打开合成"""
+        return self.run_jsx(
+            'try{var c=app.project.itemByID(' + str(int(comp_id)) + ');'
+            'if(c instanceof CompItem){c.openInViewer();"opened:"+c.name}'
+            'else{"not_a_comp"}}'
+            'catch(e){"not_found"}'
+        )
+
+    def get_layer_by_id(self, layer_id: int, comp_id: int = None) -> dict:
+        """通过 stable ID 查找图层 (避免名称重复/索引漂移)"""
+        comp_jsx = (
+            'app.project.itemByID(' + str(int(comp_id)) + ')'
+            if comp_id else 'app.project.activeItem'
+        )
+        r = self.run_jsx(
+            'var c=' + comp_jsx + ';'
+            'if(!c||!(c instanceof CompItem))JSON.stringify({error:"no comp"});else{'
+            'var found=null;for(var i=1;i<=c.numLayers;i++){'
+            'if(c.layer(i).id==' + str(int(layer_id)) + '){found=c.layer(i);break;}}'
+            'found?JSON.stringify({id:found.id,index:found.index,name:found.name,'
+            'startTime:found.startTime,outPoint:found.outPoint,label:found.label})'
+            ':JSON.stringify({error:"layer not found"})}'
+        )
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return {"error": r}
+
+
+# ╔══════════════════════════════════════════════════════════╗
+# ║                    HELPER FUNCTIONS                     ║
+# ╚══════════════════════════════════════════════════════════╝
+
+def _esc(s: str) -> str:
+    """转义字符串用于嵌入 ExtendScript 字符串字面量"""
+    return (s
+        .replace('\\', '\\\\')
+        .replace('"', '\\"')
+        .replace("'", "\\'")
+        .replace('\n', '\\n')
+        .replace('\r', ''))
+
+
+# ╔══════════════════════════════════════════════════════════╗
+# ║                   CLI QUICK-TEST                        ║
+# ╚══════════════════════════════════════════════════════════╝
+
+def main():
+    """快速测试: python ae_cdp_bridge.py [jsx_code]"""
+    print(f"AE CDP Bridge v{__version__}")
+    print("=" * 50)
+
+    try:
+        ae = AEBridge()
+        print(f"[OK] Connected to {ae._ws_url}")
+
+        # 基础测试
+        r = ae.run_jsx('"hello_from_ae"')
+        print(f"[1] Basic: {r}")
+
+        info = ae.comp_info()
+        print(f"[2] Comp: {info}")
+
+        if len(sys.argv) > 1:
+            # 执行命令行传入的 JSX
+            code = ' '.join(sys.argv[1:])
+            print(f"[3] Custom: {ae.run_jsx(code)}")
+
+        ae.close()
+        print("[OK] Done")
+
+    except Exception as e:
+        print(f"[FAIL] {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""AE2Claude CLI - talk to After Effects from the terminal.
+
+Usage:
+  ae2claude                     health check
+  ae2claude jsx <code>          run ExtendScript
+  ae2claude py <code>           run Python (PyShiftCore context)
+  ae2claude version             AE version
+  ae2claude comps               list compositions
+  ae2claude layers              list layers in active comp
+"""
+import sys, json, urllib.request, urllib.error
+
+BASE = "http://127.0.0.1:8089"
+
+def req(path, data=None):
+    r = urllib.request.Request(f"{BASE}{path}",
+        data=data.encode("utf-8") if data else None,
+        headers={"Content-Type": "text/plain; charset=utf-8"} if data else {})
+    try:
+        with urllib.request.urlopen(r, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.URLError as e:
+        print(f"error: AE2Claude not reachable ({e})", file=sys.stderr)
+        sys.exit(1)
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        r = req("/")
+        print(json.dumps(r, indent=2, ensure_ascii=False))
+        return
+
+    cmd = args[0]
+
+    if cmd == "jsx":
+        code = " ".join(args[1:]) if len(args) > 1 else sys.stdin.read()
+        r = req("/jsx", code)
+    elif cmd == "py":
+        code = " ".join(args[1:]) if len(args) > 1 else sys.stdin.read()
+        r = req("/", code)
+    elif cmd == "version":
+        r = req("/jsx", "app.version")
+    elif cmd == "comps":
+        r = req("/jsx",
+            'var r=[];for(var i=1;i<=app.project.numItems;i++){var it=app.project.item(i);'
+            'if(it instanceof CompItem)r.push(it.name);}r.join("\\n")')
+    elif cmd == "layers":
+        r = req("/jsx",
+            'var c=app.project.activeItem;if(!c)"no active comp";'
+            'else{var r=[];for(var i=1;i<=c.numLayers;i++)r.push(i+": "+c.layer(i).name);r.join("\\n")}')
+    elif cmd in ("health", "status"):
+        r = req("/")
+        print(json.dumps(r, indent=2, ensure_ascii=False))
+        return
+    else:
+        # treat entire args as jsx
+        r = req("/jsx", " ".join(args))
+
+    if r.get("ok"):
+        result = r.get("result", "")
+        if result:
+            print(result)
+    else:
+        print(f"error: {r.get('error', 'unknown')}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
