@@ -208,5 +208,20 @@
     "slug": "comp-trim-start",
     "name": "裁头（合成起始点→光标）",
     "file": "comp-trim-start.jsx"
+  },
+  {
+    "slug": "auto-crop",
+    "name": "自动裁剪到内容",
+    "file": "auto-crop.jsx"
+  },
+  {
+    "slug": "crop-duration",
+    "name": "裁剪时长到内容",
+    "file": "crop-duration.jsx"
+  },
+  {
+    "slug": "mask-crop",
+    "name": "蒙版裁剪",
+    "file": "mask-crop.jsx"
   }
 ]
