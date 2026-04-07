@@ -2,6 +2,17 @@
 
 After Effects AEGP 插件，为 Claude 提供与 AE 通信的唯一通道。
 
+## 致谢
+
+本项目 C++ AEGP 插件核心基于 [PyShiftAE](https://github.com/Trentonom0r3/PyShiftAE) by [Trentonom0r3](https://github.com/Trentonom0r3)，在其基础上进行了大量扩展：
+
+- 新增 StreamSuite / KeyframeSuite / DynamicStreamSuite 原生绑定
+- 新增 Layer/CompItem pybind11 属性扩展（parent, label, addSolid, addNull 等）
+- 新增 Layer Styles 脚本化支持（通过 DynamicStreamSuite flag 操作）
+- 新增 HTTP 服务器 + CLI 工具 + ae_bridge.py 高层 API（65+ 方法）
+
+原项目采用 **AGPL-3.0** 许可证，本项目遵循相同许可。
+
 ## 架构
 
 ```
