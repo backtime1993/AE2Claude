@@ -592,15 +592,6 @@ class AEBridge:
         except json.JSONDecodeError:
             return []
 
-    def layer_exists(self, name: str) -> bool:
-        """检查图层是否存在"""
-        r = self.run_jsx(
-            f'var c=app.project.activeItem;'
-            f'try{{c.layer("{_esc(name)}")?"true":"false"}}'
-            f'catch(e){{"false"}}'
-        )
-        return r == "true"
-
     def get_layer_info(self, name: str) -> dict:
         """获取指定图层详细信息"""
         r = self.run_jsx(
@@ -617,20 +608,6 @@ class AEBridge:
             return {"raw": r}
 
     # ── Layer Management ───────────────────────────────────
-
-    def remove_layers_by_prefix(self, prefix: str) -> int:
-        """按名称前缀批量删除图层"""
-        r = self.run_jsx(
-            f'var c=app.project.activeItem;var rm=0;'
-            f'for(var i=c.numLayers;i>=1;i--){{'
-            f'if(c.layer(i).name.indexOf("{_esc(prefix)}")==0)'
-            f'{{c.layer(i).remove();rm++;}}}}'
-            f'"removed:"+rm;'
-        )
-        try:
-            return int(r.split(":")[1])
-        except (IndexError, ValueError):
-            return 0
 
     def remove_layer(self, name: str) -> str:
         """删除指定图层"""
@@ -669,72 +646,48 @@ class AEBridge:
 
     # ── Text Layers ────────────────────────────────────────
 
-    def add_text_layer(self, text: str, name: str = None,
-                        start: float = None, end: float = None,
-                        font: str = None, font_size: int = None,
-                        fill_color: List[float] = None,
-                        stroke_color: List[float] = None,
-                        stroke_width: float = None,
-                        justification: str = "center",
-                        label: int = None) -> str:
+    def add_text_layer(self, text: str, name: str = None) -> str:
         """
-        创建文本图层 (Step A - 仅创建+样式，不含效果和缓动)。
+        Create a text layer. Returns the layer name.
+
+        Use set_text_style() to configure font/color/size after creation.
+        Use set_layer_timing() to set in/out points.
+        Use set_layer_label() to set label color.
 
         Args:
-            text: 文本内容
-            name: 图层名称 (默认使用 text)
-            start: 图层开始时间 (秒)
-            end: 图层结束时间 (秒)
-            font: 字体名 (如 "SourceHanSansSC-Bold")
-            font_size: 字号 (如 56)
-            fill_color: 填充色 [r,g,b] 0-1 范围
-            stroke_color: 描边色 [r,g,b] 0-1 范围
-            stroke_width: 描边宽度
-            justification: "left" / "center" / "right"
-            label: 标签颜色 (0-16)
-
-        Returns:
-            图层名称 或错误信息
+            text: Text content
+            name: Layer name (defaults to first 20 chars of text)
         """
         safe_txt = _esc(text)
         layer_name = _esc(name or text[:20])
-
-        just_map = {
-            "left": "ParagraphJustification.LEFT_JUSTIFY",
-            "center": "ParagraphJustification.CENTER_JUSTIFY",
-            "right": "ParagraphJustification.RIGHT_JUSTIFY",
-        }
-
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layers.addText("{safe_txt}");'
             f'tl.name="{layer_name}";'
+            f'tl.name;'
         )
-        if label is not None:
-            jsx += f'tl.label={label};'
-        if start is not None:
-            jsx += f'tl.startTime={start};'
-        if end is not None:
-            jsx += f'tl.outPoint={end};'
+        return self.run_jsx(jsx)
 
-        # Text styling
-        jsx += 'var tp=tl.property("ADBE Text Properties").property("ADBE Text Document");var td=tp.value;td.resetCharStyle();'
-        if font_size:
-            jsx += f'td.fontSize={font_size};'
-        if fill_color:
-            jsx += f'td.fillColor=[{fill_color[0]},{fill_color[1]},{fill_color[2]}];td.applyFill=true;'
-        if stroke_color:
-            jsx += (f'td.strokeColor=[{stroke_color[0]},{stroke_color[1]},{stroke_color[2]}];'
-                    f'td.applyStroke=true;td.strokeOverFill=false;')
-        if stroke_width:
-            jsx += f'td.strokeWidth={stroke_width};'
-        if font:
-            jsx += f'td.font="{font}";'
-        if justification in just_map:
-            jsx += f'td.justification={just_map[justification]};'
-        jsx += 'tp.setValue(td);'
-        jsx += f'tl.name;'
+    def add_solid(self, name: str, color: List[float],
+                  width: int = None, height: int = None) -> str:
+        """
+        Create a solid layer. Returns the layer name.
 
+        Args:
+            name: Layer name
+            color: [r, g, b] in 0-1 range
+            width: Solid width (defaults to comp width)
+            height: Solid height (defaults to comp height)
+        """
+        safe_name = _esc(name)
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var w={width if width else "c.width"};'
+            f'var h={height if height else "c.height"};'
+            f'var sl=c.layers.addSolid([{color[0]},{color[1]},{color[2]}],'
+            f'"{safe_name}",w,h,c.pixelAspect,c.duration);'
+            f'sl.name;'
+        )
         return self.run_jsx(jsx)
 
     def center_anchor(self, name: str, at_time: float = 0) -> str:
@@ -2220,13 +2173,13 @@ class AEBridge:
         except json.JSONDecodeError:
             return [r]
 
-    def select_layers(self, names: List[str]) -> str:
-        """选中指定图层"""
-        jsx = 'var c=app.project.activeItem;'
-        jsx += 'for(var i=1;i<=c.numLayers;i++)c.layer(i).selected=false;'
-        for n in names:
-            jsx += f'try{{c.layer("{_esc(n)}").selected=true;}}catch(e){{}}'
-        jsx += '"ok";'
+    def set_layer_selected(self, name: str, selected: bool = True) -> str:
+        """Set a single layer's selection state."""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").selected={str(selected).lower()};'
+            f'"ok";'
+        )
         return self.run_jsx(jsx)
 
     def deselect_all(self) -> str:
