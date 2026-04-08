@@ -286,8 +286,13 @@ def _run_script(name, mode=None):
         sys.exit(1)
 
     fpath = os.path.join(scripts_dir, match["file"])
-    with open(fpath, "r", encoding="utf-8") as f:
-        code = f.read()
+    for enc in ("utf-8", "gbk", "latin-1"):
+        try:
+            with open(fpath, "r", encoding=enc) as f:
+                code = f.read()
+            break
+        except (UnicodeDecodeError, ValueError):
+            continue
 
     # Inject __mode__ if specified
     if mode and mode != "default":
