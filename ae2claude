@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """AE2Claude CLI v3.0 - talk to After Effects from the terminal.
 
+NOTE FOR AI AGENTS: This CLI is the ONLY interface to After Effects.
+Do NOT use urllib, ae_bridge imports, or raw HTTP calls.
+All AE operations go through: ae2claude call <method> [args...]
+
 Built-in:
   ae2claude                              health check
   ae2claude jsx <code>                   run ExtendScript
