@@ -750,100 +750,66 @@ class AEBridge:
 
     # ── Keyframes ──────────────────────────────────────────
 
-    def set_position_keyframes(self, name: str,
-                                keyframes: List[Tuple[float, List[float]]]) -> str:
+    def set_keyframes(self, name: str, prop: str,
+                      keyframes: List[Tuple[float, Any]]) -> str:
         """
-        设置 Position 关键帧。
+        Set keyframes on a transform property.
 
         Args:
-            name: 图层名
-            keyframes: [(time_sec, [x, y]), ...] 或 [(time_sec, [x, y, z]), ...]
-        """
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var pos=tl.property("Transform").property("Position");'
-        )
-        for t, val in keyframes:
-            jsx += f'pos.setValueAtTime({t},{json.dumps(val)});'
-        jsx += '"ok"'
-        return self.run_jsx(jsx)
-
-    def set_opacity_keyframes(self, name: str,
-                               keyframes: List[Tuple[float, float]]) -> str:
-        """
-        设置 Opacity 关键帧。
-
-        Args:
-            name: 图层名
-            keyframes: [(time_sec, value_0to100), ...]
-        """
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var opa=tl.property("Transform").property("Opacity");'
-        )
-        for t, val in keyframes:
-            jsx += f'opa.setValueAtTime({t},{val});'
-        jsx += '"ok"'
-        return self.run_jsx(jsx)
-
-    def set_scale_keyframes(self, name: str,
-                             keyframes: List[Tuple[float, List[float]]]) -> str:
-        """
-        设置 Scale 关键帧。注意 AE Scale 始终是 3D: [x, y, z]。
-
-        Args:
-            name: 图层名
-            keyframes: [(time_sec, [sx, sy, sz]), ...]  (sz 通常为 100)
-        """
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var scl=tl.property("Transform").property("Scale");'
-        )
-        for t, val in keyframes:
-            # 确保 3D
-            if len(val) == 2:
-                val = val + [100]
-            jsx += f'scl.setValueAtTime({t},{json.dumps(val)});'
-        jsx += '"ok"'
-        return self.run_jsx(jsx)
-
-    def set_rotation_keyframes(self, name: str,
-                                keyframes: List[Tuple[float, float]]) -> str:
-        """设置 Rotation 关键帧"""
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var rot=tl.property("Transform").property("Rotation");'
-        )
-        for t, val in keyframes:
-            jsx += f'rot.setValueAtTime({t},{val});'
-        jsx += '"ok"'
-        return self.run_jsx(jsx)
-
-    def set_property_keyframes(self, name: str, prop_path: str,
-                                keyframes: List[Tuple[float, Any]]) -> str:
-        """
-        通用属性关键帧设置。
-
-        Args:
-            name: 图层名
-            prop_path: 属性路径，如 'property("Transform").property("Opacity")'
+            name: Layer name
+            prop: Semantic property name ("position", "opacity", "scale",
+                  "rotation", "anchor_point")
             keyframes: [(time_sec, value), ...]
+                       position: [x, y] or [x, y, z]
+                       scale: [sx, sy, sz] (sz defaults to 100 if 2D given)
+                       opacity/rotation: single number
         """
+        path = _resolve_prop(prop)
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var p=tl.{prop_path};'
+            f'var p=tl.{path};'
         )
         for t, val in keyframes:
+            if prop == "scale" and isinstance(val, (list, tuple)) and len(val) == 2:
+                val = list(val) + [100]
             if isinstance(val, (list, tuple)):
                 jsx += f'p.setValueAtTime({t},{json.dumps(val)});'
             else:
                 jsx += f'p.setValueAtTime({t},{val});'
         jsx += '"ok"'
+        return self.run_jsx(jsx)
+
+    def set_value(self, name: str, prop: str, value: Any,
+                  at_time: float = None) -> str:
+        """
+        Set a transform property value (static or at specific time).
+
+        Args:
+            name: Layer name
+            prop: Semantic property name
+            value: The value to set
+            at_time: If provided, sets value at this time (creates keyframe).
+                     If None, sets static value.
+        """
+        path = _resolve_prop(prop)
+        if prop == "scale" and isinstance(value, (list, tuple)) and len(value) == 2:
+            value = list(value) + [100]
+        val_str = json.dumps(value) if isinstance(value, (list, tuple)) else str(value)
+        if at_time is not None:
+            jsx = (
+                f'var c=app.project.activeItem;'
+                f'var tl=c.layer("{_esc(name)}");'
+                f'tl.{path}.setValueAtTime({at_time},{val_str});'
+                f'"ok"'
+            )
+        else:
+            jsx = (
+                f'var c=app.project.activeItem;'
+                f'var tl=c.layer("{_esc(name)}");'
+                f'tl.{path}.setValue({val_str});'
+                f'"ok"'
+            )
         return self.run_jsx(jsx)
 
     # ── Easing ─────────────────────────────────────────────
@@ -1274,82 +1240,31 @@ class AEBridge:
 
     # ── Property Read-back ─────────────────────────────────
 
-    def get_transform_value(self, name: str, prop: str, at_time: float = None) -> Any:
+    def get_value(self, name: str, prop: str, at_time: float = None) -> Any:
         """
-        读取 Transform 属性当前值或指定时间的值。
+        Read a transform property value.
 
         Args:
-            name: 图层名
-            prop: 属性名 ("position"/"scale"/"rotation"/"opacity"/"anchor_point")
-            at_time: 指定时间(秒)，None 表示当前时间
+            name: Layer name
+            prop: Semantic property name ("position", "opacity", "scale",
+                  "rotation", "anchor_point")
+            at_time: Time in seconds (None = current comp time)
         """
-        info = TRANSFORM_PROPS.get(prop)
-        if not info:
-            raise ValueError(f"Unknown transform prop: {prop}. Available: {list(TRANSFORM_PROPS.keys())}")
-        path = info["path"]
+        path = _resolve_prop(prop)
         if at_time is not None:
             jsx = (
                 f'var c=app.project.activeItem;'
                 f'var tl=c.layer("{_esc(name)}");'
                 f'var p=tl.{path};'
-                f'var v=p.valueAtTime({at_time},false);'
-                f'JSON.stringify(v instanceof Array?v:[v]);'
+                f'var v=p.valueAtTime({at_time},true);'
+                f'JSON.stringify(v);'
             )
         else:
             jsx = (
                 f'var c=app.project.activeItem;'
                 f'var tl=c.layer("{_esc(name)}");'
                 f'var p=tl.{path};'
-                f'var v=p.value;'
-                f'JSON.stringify(v instanceof Array?v:[v]);'
-            )
-        r = self.run_jsx(jsx)
-        try:
-            val = json.loads(r)
-            return val[0] if len(val) == 1 and prop in ("rotation", "opacity") else val
-        except json.JSONDecodeError:
-            return r
-
-    def get_keyframes(self, name: str, prop: str) -> List[Tuple[float, Any]]:
-        """读取 Transform 属性的所有关键帧。"""
-        info = TRANSFORM_PROPS.get(prop)
-        if not info:
-            raise ValueError(f"Unknown transform prop: {prop}")
-        path = info["path"]
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var p=tl.{path};'
-            f'var out=[];'
-            f'for(var i=1;i<=p.numKeys;i++){{'
-            f'var t=p.keyTime(i);var v=p.keyValue(i);'
-            f'out.push({{t:t,v:v}});}}'
-            f'JSON.stringify(out);'
-        )
-        r = self.run_jsx(jsx)
-        try:
-            data = json.loads(r)
-            return [(kf["t"], kf["v"]) for kf in data]
-        except json.JSONDecodeError:
-            return []
-
-    def get_property_value(self, name: str, prop_path: str, at_time: float = None) -> Any:
-        """读取任意属性值。prop_path 如 'property("Transform").property("Opacity")'"""
-        if at_time is not None:
-            jsx = (
-                f'var c=app.project.activeItem;'
-                f'var tl=c.layer("{_esc(name)}");'
-                f'var p=tl.{prop_path};'
-                f'var v=p.valueAtTime({at_time},false);'
-                f'JSON.stringify(v instanceof Array?v:[v]);'
-            )
-        else:
-            jsx = (
-                f'var c=app.project.activeItem;'
-                f'var tl=c.layer("{_esc(name)}");'
-                f'var p=tl.{prop_path};'
-                f'var v=p.value;'
-                f'JSON.stringify(v instanceof Array?v:[v]);'
+                f'JSON.stringify(p.value);'
             )
         r = self.run_jsx(jsx)
         try:
@@ -1357,22 +1272,29 @@ class AEBridge:
         except json.JSONDecodeError:
             return r
 
-    def get_property_keyframes(self, name: str, prop_path: str) -> List[Tuple[float, Any]]:
-        """读取任意属性的所有关键帧。"""
+    def get_keyframes(self, name: str, prop: str) -> List[Tuple[float, Any]]:
+        """
+        Read all keyframes of a transform property.
+
+        Args:
+            name: Layer name
+            prop: Semantic property name
+        Returns:
+            [(time_sec, value), ...]
+        """
+        path = _resolve_prop(prop)
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var p=tl.{prop_path};'
+            f'var p=tl.{path};'
             f'var out=[];'
-            f'for(var i=1;i<=p.numKeys;i++){{'
-            f'var t=p.keyTime(i);var v=p.keyValue(i);'
-            f'out.push({{t:t,v:v}});}}'
-            f'JSON.stringify(out);'
+            f'for(var k=1;k<=p.numKeys;k++){{'
+            f'out.push([p.keyTime(k),p.keyValue(k)]);'
+            f'}}JSON.stringify(out);'
         )
         r = self.run_jsx(jsx)
         try:
-            data = json.loads(r)
-            return [(kf["t"], kf["v"]) for kf in data]
+            return json.loads(r)
         except json.JSONDecodeError:
             return []
 
