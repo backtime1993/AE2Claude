@@ -30,7 +30,7 @@ import urllib.request
 import urllib.error
 from typing import Optional, List, Dict, Any, Tuple, Union
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║              EFFECT MATCHNAME REGISTRY                  ║
@@ -157,6 +157,35 @@ TRANSFORM_PROPS = {
         "spatial": False,
     },
 }
+
+# ╔══════════════════════════════════════════════════════════╗
+# ║              SEMANTIC PROPERTY MAP                      ║
+# ╠══════════════════════════════════════════════════════════╣
+# ║ Agent-facing semantic names → AE property paths.        ║
+# ║ Unknown names raise ValueError — no transparent         ║
+# ║ passthrough of raw AE paths.                            ║
+# ╚══════════════════════════════════════════════════════════╝
+
+PROP_MAP = {
+    "anchor_point": 'property("Transform").property("Anchor Point")',
+    "position":     'property("Transform").property("Position")',
+    "scale":        'property("Transform").property("Scale")',
+    "rotation":     'property("Transform").property("Rotation")',
+    "opacity":      'property("Transform").property("Opacity")',
+}
+
+
+def _resolve_prop(prop: str) -> str:
+    """Resolve semantic property name to AE path. Raises ValueError if unknown."""
+    path = PROP_MAP.get(prop)
+    if path is None:
+        raise ValueError(
+            f"Unknown property '{prop}'. "
+            f"Available: {list(PROP_MAP.keys())}. "
+            f"Use run_jsx() for raw AE property access."
+        )
+    return path
+
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║               BLEND MODE REGISTRY                       ║
@@ -291,19 +320,22 @@ KNOWN_EFFECT_MATCHNAMES = [
 
 class AEBridge:
     """
-    AE2Claude Bridge - 通过 AEGP 插件 HTTP 服务器操控 After Effects。
+    AE2Claude Bridge v3.0 - Atomic API for After Effects.
 
-    关键行为:
-    - 连接 PyShiftAE HTTP 服务器 (默认端口 8089)
-    - 每次 run_jsx() 调用独立执行，避免 AE 对象引用失效
-    - 支持 context manager (with 语句)
-    - 可选启动 Dialog Dismisser 后台线程
+    Design principles:
+    - One method = one AE logical action (no fat methods)
+    - Agent orchestrates: loops, filtering, multi-step workflows are caller's job
+    - Semantic property names: "position", "opacity" etc. (no raw AE paths)
 
-    示例:
+    Connection: PyShiftAE AEGP plugin HTTP server (default port 8089).
+
+    Example:
         with AEBridge() as ae:
-            info = ae.comp_info()
             ae.begin_undo("My Script")
-            ae.add_text_layer("Hello World", start=1.0, end=5.0)
+            ae.add_text_layer("Hello")
+            ae.set_text_style("Hello", font_size=56, fill_color=[1,1,1])
+            ae.set_keyframes("Hello", "opacity", [(0, 0), (1, 100)])
+            ae.apply_transform_easing("Hello", "opacity")
             ae.end_undo()
     """
 
