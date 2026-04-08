@@ -222,12 +222,6 @@
     "note": "MoBar内置高频"
   },
   {
-    "slug": "trim-layers",
-    "name": "Trim Layers",
-    "file": "trim-layers.jsx",
-    "note": "MoBar内置高频"
-  },
-  {
     "slug": "set-anchor-point",
     "name": "Set Anchor Point",
     "file": "set-anchor-point.jsx",
