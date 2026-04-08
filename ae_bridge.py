@@ -82,40 +82,172 @@ EFFECTS = {
             "glow_intensity":  "ADBE Glo2-0003",
         }
     },
-    # --- Stroke ---
-    "stroke_effect": {
-        "matchName": "ADBE Stroke",
-        "props": {}
-    },
     # --- Levels ---
     "levels": {
         "matchName": "ADBE Easy Levels2",
-        "props": {}
-    },
-    # --- Curves ---
-    "curves": {
-        "matchName": "ADBE CurvesCustom",
-        "props": {}
+        "props": {
+            "channel":       "ADBE Easy Levels2-0001",
+            "input_black":   "ADBE Easy Levels2-0003",
+            "input_white":   "ADBE Easy Levels2-0004",
+            "gamma":         "ADBE Easy Levels2-0005",
+            "output_black":  "ADBE Easy Levels2-0006",
+            "output_white":  "ADBE Easy Levels2-0007",
+        }
     },
     # --- Hue/Saturation ---
     "hue_saturation": {
         "matchName": "ADBE HUE SATURATION",
-        "props": {}
+        "props": {
+            "channel_control": "ADBE HUE SATURATION-0002",
+            "master_hue":      "ADBE HUE SATURATION-0004",
+            "master_saturation": "ADBE HUE SATURATION-0005",
+            "master_lightness": "ADBE HUE SATURATION-0006",
+            "colorize":        "ADBE HUE SATURATION-0007",
+        }
+    },
+    # --- Brightness & Contrast ---
+    "brightness_contrast": {
+        "matchName": "ADBE Brightness & Contrast 2",
+        "props": {
+            "brightness": "ADBE Brightness & Contrast 2-0001",
+            "contrast":   "ADBE Brightness & Contrast 2-0002",
+        }
+    },
+    # --- Tint ---
+    "tint": {
+        "matchName": "ADBE Tint",
+        "props": {
+            "map_black_to": "ADBE Tint-0001",
+            "map_white_to": "ADBE Tint-0002",
+            "tint_amount":  "ADBE Tint-0003",
+        }
+    },
+    # --- Tritone ---
+    "tritone": {
+        "matchName": "ADBE Tritone",
+        "props": {
+            "highlights": "ADBE Tritone-0001",
+            "midtones":   "ADBE Tritone-0002",
+            "shadows":    "ADBE Tritone-0003",
+            "blend":      "ADBE Tritone-0004",
+        }
     },
     # --- CC Toner ---
     "cc_toner": {
         "matchName": "CC Toner",
-        "props": {}
+        "props": {
+            "tones":      "CC Toner-0005",
+            "highlights": "CC Toner-0001",
+            "brights":    "CC Toner-0006",
+            "midtones":   "CC Toner-0002",
+            "darktones":  "CC Toner-0007",
+            "shadows":    "CC Toner-0003",
+            "blend":      "CC Toner-0004",
+        }
+    },
+    # --- Invert ---
+    "invert": {
+        "matchName": "ADBE Invert",
+        "props": {
+            "channel": "ADBE Invert-0001",
+            "blend":   "ADBE Invert-0002",
+        }
     },
     # --- Ramp/Gradient ---
     "gradient_ramp": {
         "matchName": "ADBE Ramp",
-        "props": {}
+        "props": {
+            "start_point": "ADBE Ramp-0001",
+            "start_color": "ADBE Ramp-0002",
+            "end_point":   "ADBE Ramp-0003",
+            "end_color":   "ADBE Ramp-0004",
+            "ramp_shape":  "ADBE Ramp-0005",
+            "ramp_scatter": "ADBE Ramp-0006",
+            "blend":       "ADBE Ramp-0007",
+        }
     },
     # --- Turbulent Displace ---
     "turbulent_displace": {
         "matchName": "ADBE Turbulent Displace",
-        "props": {}
+        "props": {
+            "displacement":  "ADBE Turbulent Displace-0001",
+            "amount":        "ADBE Turbulent Displace-0002",
+            "size":          "ADBE Turbulent Displace-0003",
+            "offset":        "ADBE Turbulent Displace-0004",
+            "complexity":    "ADBE Turbulent Displace-0005",
+            "evolution":     "ADBE Turbulent Displace-0006",
+            "random_seed":   "ADBE Turbulent Displace-0010",
+        }
+    },
+    # --- Fractal Noise ---
+    "fractal_noise": {
+        "matchName": "ADBE Fractal Noise",
+        "props": {
+            "fractal_type": "ADBE Fractal Noise-0001",
+            "noise_type":   "ADBE Fractal Noise-0002",
+            "invert":       "ADBE Fractal Noise-0003",
+            "contrast":     "ADBE Fractal Noise-0004",
+            "brightness":   "ADBE Fractal Noise-0005",
+            "overflow":     "ADBE Fractal Noise-0006",
+            "rotation":     "ADBE Fractal Noise-0008",
+            "scale":        "ADBE Fractal Noise-0010",
+            "offset":       "ADBE Fractal Noise-0013",
+            "complexity":   "ADBE Fractal Noise-0015",
+            "evolution":    "ADBE Fractal Noise-0023",
+            "random_seed":  "ADBE Fractal Noise-0027",
+            "opacity":      "ADBE Fractal Noise-0029",
+            "blending_mode": "ADBE Fractal Noise-0030",
+        }
+    },
+    # --- Radial Blur ---
+    "radial_blur": {
+        "matchName": "ADBE Radial Blur",
+        "props": {
+            "amount": "ADBE Radial Blur-0001",
+            "center": "ADBE Radial Blur-0002",
+            "type":   "ADBE Radial Blur-0003",
+        }
+    },
+    # --- Camera Lens Blur ---
+    "camera_lens_blur": {
+        "matchName": "ADBE Camera Lens Blur",
+        "props": {
+            "blur_radius": "ADBE Camera Lens Blur-0001",
+            "iris_shape":  "ADBE Camera Lens Blur-0003",
+            "roundness":   "ADBE Camera Lens Blur-0004",
+            "rotation":    "ADBE Camera Lens Blur-0006",
+            "diffraction":  "ADBE Camera Lens Blur-0007",
+            "highlight_gain": "ADBE Camera Lens Blur-0017",
+            "highlight_threshold": "ADBE Camera Lens Blur-0018",
+        }
+    },
+    # --- Mosaic ---
+    "mosaic": {
+        "matchName": "ADBE Mosaic",
+        "props": {
+            "horizontal_blocks": "ADBE Mosaic-0001",
+            "vertical_blocks":   "ADBE Mosaic-0002",
+        }
+    },
+    # --- Motion Tile ---
+    "motion_tile": {
+        "matchName": "ADBE Tile",
+        "props": {
+            "tile_center":  "ADBE Tile-0001",
+            "tile_width":   "ADBE Tile-0002",
+            "tile_height":  "ADBE Tile-0003",
+            "output_width": "ADBE Tile-0004",
+            "output_height": "ADBE Tile-0005",
+            "mirror_edges": "ADBE Tile-0006",
+            "phase":        "ADBE Tile-0007",
+        }
+    },
+    # --- Posterize ---
+    "posterize": {
+        "matchName": "ADBE Posterize",
+        "props": {
+            "level": "ADBE Posterize-0001",
+        }
     },
 }
 
@@ -1773,7 +1905,7 @@ class AEBridge:
         """设置图层混合模式。mode: normal/multiply/screen/overlay/add/..."""
         bm = BLEND_MODES.get(mode)
         if not bm:
-            return f"ERR: unknown mode '{mode}'. Available: {list(BLEND_MODES.keys())}"
+            raise ValueError(f"Unknown blend mode '{mode}'. Available: {list(BLEND_MODES.keys())}")
         return self.run_jsx(
             f'var c=app.project.activeItem;'
             f'c.layer("{_esc(name)}").blendingMode={bm};"ok";'
@@ -2005,7 +2137,7 @@ class AEBridge:
         }
         mn = style_matchnames.get(style)
         if not mn:
-            return f"ERR: unknown style '{style}'. Available: {list(style_matchnames.keys())}"
+            raise ValueError(f"Unknown layer style '{style}'. Available: {list(style_matchnames.keys())}")
 
         # Layer Styles 需要 AEGP SDK DynamicStreamSuite（C++ 链式调用），
         # 当前架构下从 HTTP 线程调用不稳定（idle hook 死锁风险）。

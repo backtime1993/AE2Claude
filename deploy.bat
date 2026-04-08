@@ -52,11 +52,34 @@ echo Copying ae2claude_server.py...
 copy /Y "%~dp0ae2claude_server.py" "%PLUGIN_DIR%\ae2claude_server.py"
 echo OK
 
+:: Copy bridge + CLI + scripts + presets to plugin dir
+echo Copying ae_bridge.py...
+copy /Y "%~dp0ae_bridge.py" "%PLUGIN_DIR%\ae_bridge.py"
+echo OK
+
+echo Copying ae2claude CLI...
+copy /Y "%~dp0ae2claude" "%PLUGIN_DIR%\ae2claude"
+echo OK
+
+echo Copying scripts...
+if not exist "%PLUGIN_DIR%\scripts" mkdir "%PLUGIN_DIR%\scripts"
+xcopy /Y /E /Q "%~dp0scripts\*" "%PLUGIN_DIR%\scripts\"
+echo OK
+
+echo Copying presets...
+if not exist "%PLUGIN_DIR%\presets" mkdir "%PLUGIN_DIR%\presets"
+xcopy /Y /E /Q "%~dp0presets\*" "%PLUGIN_DIR%\presets\"
+echo OK
+
 :: Ensure python DLLs are present
 if not exist "%AE_DIR%\python312.dll" (
     echo WARNING: python312.dll not found in Support Files.
     echo Copy python312.dll + python3.dll from your Python 3.12 installation.
 )
 
+echo.
 echo === Done. Restart AE to activate. ===
+echo.
+echo To use the CLI, add the plugin dir to PATH or copy ae2claude to a PATH dir:
+echo   copy "%PLUGIN_DIR%\ae2claude" "%%USERPROFILE%%\bin\ae2claude"
 pause
