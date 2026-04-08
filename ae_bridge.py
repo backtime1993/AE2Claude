@@ -887,7 +887,7 @@ class AEBridge:
                 jsx += f'ef.property("{mn}").setValue({json.dumps(val)});'
             else:
                 jsx += f'ef.property("{mn}").setValue({val});'
-        jsx += '"ok";}}'
+        jsx += '"ok";}'
         jsx += f'}}catch(e){{"FX_ERR:"+e.toString()}}'
         return self.run_jsx(jsx)
 
@@ -917,7 +917,7 @@ class AEBridge:
                     jsx += f'ef.property("{mn}").setValueAtTime({t},{json.dumps(val)});'
                 else:
                     jsx += f'ef.property("{mn}").setValueAtTime({t},{val});'
-        jsx += '"ok";}}'
+        jsx += '"ok";}'
         jsx += f'}}catch(e){{"FX_ERR:"+e.toString()}}'
         return self.run_jsx(jsx)
 
