@@ -30,7 +30,7 @@ import urllib.request
 import urllib.error
 from typing import Optional, List, Dict, Any, Tuple, Union
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║              EFFECT MATCHNAME REGISTRY                  ║
@@ -157,6 +157,35 @@ TRANSFORM_PROPS = {
         "spatial": False,
     },
 }
+
+# ╔══════════════════════════════════════════════════════════╗
+# ║              SEMANTIC PROPERTY MAP                      ║
+# ╠══════════════════════════════════════════════════════════╣
+# ║ Agent-facing semantic names → AE property paths.        ║
+# ║ Unknown names raise ValueError — no transparent         ║
+# ║ passthrough of raw AE paths.                            ║
+# ╚══════════════════════════════════════════════════════════╝
+
+PROP_MAP = {
+    "anchor_point": 'property("Transform").property("Anchor Point")',
+    "position":     'property("Transform").property("Position")',
+    "scale":        'property("Transform").property("Scale")',
+    "rotation":     'property("Transform").property("Rotation")',
+    "opacity":      'property("Transform").property("Opacity")',
+}
+
+
+def _resolve_prop(prop: str) -> str:
+    """Resolve semantic property name to AE path. Raises ValueError if unknown."""
+    path = PROP_MAP.get(prop)
+    if path is None:
+        raise ValueError(
+            f"Unknown property '{prop}'. "
+            f"Available: {list(PROP_MAP.keys())}. "
+            f"Use run_jsx() for raw AE property access."
+        )
+    return path
+
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║               BLEND MODE REGISTRY                       ║
@@ -291,19 +320,22 @@ KNOWN_EFFECT_MATCHNAMES = [
 
 class AEBridge:
     """
-    AE2Claude Bridge - 通过 AEGP 插件 HTTP 服务器操控 After Effects。
+    AE2Claude Bridge v3.0 - Atomic API for After Effects.
 
-    关键行为:
-    - 连接 PyShiftAE HTTP 服务器 (默认端口 8089)
-    - 每次 run_jsx() 调用独立执行，避免 AE 对象引用失效
-    - 支持 context manager (with 语句)
-    - 可选启动 Dialog Dismisser 后台线程
+    Design principles:
+    - One method = one AE logical action (no fat methods)
+    - Agent orchestrates: loops, filtering, multi-step workflows are caller's job
+    - Semantic property names: "position", "opacity" etc. (no raw AE paths)
 
-    示例:
+    Connection: PyShiftAE AEGP plugin HTTP server (default port 8089).
+
+    Example:
         with AEBridge() as ae:
-            info = ae.comp_info()
             ae.begin_undo("My Script")
-            ae.add_text_layer("Hello World", start=1.0, end=5.0)
+            ae.add_text_layer("Hello")
+            ae.set_text_style("Hello", font_size=56, fill_color=[1,1,1])
+            ae.set_keyframes("Hello", "opacity", [(0, 0), (1, 100)])
+            ae.apply_transform_easing("Hello", "opacity")
             ae.end_undo()
     """
 
@@ -560,15 +592,6 @@ class AEBridge:
         except json.JSONDecodeError:
             return []
 
-    def layer_exists(self, name: str) -> bool:
-        """检查图层是否存在"""
-        r = self.run_jsx(
-            f'var c=app.project.activeItem;'
-            f'try{{c.layer("{_esc(name)}")?"true":"false"}}'
-            f'catch(e){{"false"}}'
-        )
-        return r == "true"
-
     def get_layer_info(self, name: str) -> dict:
         """获取指定图层详细信息"""
         r = self.run_jsx(
@@ -585,20 +608,6 @@ class AEBridge:
             return {"raw": r}
 
     # ── Layer Management ───────────────────────────────────
-
-    def remove_layers_by_prefix(self, prefix: str) -> int:
-        """按名称前缀批量删除图层"""
-        r = self.run_jsx(
-            f'var c=app.project.activeItem;var rm=0;'
-            f'for(var i=c.numLayers;i>=1;i--){{'
-            f'if(c.layer(i).name.indexOf("{_esc(prefix)}")==0)'
-            f'{{c.layer(i).remove();rm++;}}}}'
-            f'"removed:"+rm;'
-        )
-        try:
-            return int(r.split(":")[1])
-        except (IndexError, ValueError):
-            return 0
 
     def remove_layer(self, name: str) -> str:
         """删除指定图层"""
@@ -637,72 +646,48 @@ class AEBridge:
 
     # ── Text Layers ────────────────────────────────────────
 
-    def add_text_layer(self, text: str, name: str = None,
-                        start: float = None, end: float = None,
-                        font: str = None, font_size: int = None,
-                        fill_color: List[float] = None,
-                        stroke_color: List[float] = None,
-                        stroke_width: float = None,
-                        justification: str = "center",
-                        label: int = None) -> str:
+    def add_text_layer(self, text: str, name: str = None) -> str:
         """
-        创建文本图层 (Step A - 仅创建+样式，不含效果和缓动)。
+        Create a text layer. Returns the layer name.
+
+        Use set_text_style() to configure font/color/size after creation.
+        Use set_layer_timing() to set in/out points.
+        Use set_layer_label() to set label color.
 
         Args:
-            text: 文本内容
-            name: 图层名称 (默认使用 text)
-            start: 图层开始时间 (秒)
-            end: 图层结束时间 (秒)
-            font: 字体名 (如 "SourceHanSansSC-Bold")
-            font_size: 字号 (如 56)
-            fill_color: 填充色 [r,g,b] 0-1 范围
-            stroke_color: 描边色 [r,g,b] 0-1 范围
-            stroke_width: 描边宽度
-            justification: "left" / "center" / "right"
-            label: 标签颜色 (0-16)
-
-        Returns:
-            图层名称 或错误信息
+            text: Text content
+            name: Layer name (defaults to first 20 chars of text)
         """
         safe_txt = _esc(text)
         layer_name = _esc(name or text[:20])
-
-        just_map = {
-            "left": "ParagraphJustification.LEFT_JUSTIFY",
-            "center": "ParagraphJustification.CENTER_JUSTIFY",
-            "right": "ParagraphJustification.RIGHT_JUSTIFY",
-        }
-
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layers.addText("{safe_txt}");'
             f'tl.name="{layer_name}";'
+            f'tl.name;'
         )
-        if label is not None:
-            jsx += f'tl.label={label};'
-        if start is not None:
-            jsx += f'tl.startTime={start};'
-        if end is not None:
-            jsx += f'tl.outPoint={end};'
+        return self.run_jsx(jsx)
 
-        # Text styling
-        jsx += 'var tp=tl.property("ADBE Text Properties").property("ADBE Text Document");var td=tp.value;td.resetCharStyle();'
-        if font_size:
-            jsx += f'td.fontSize={font_size};'
-        if fill_color:
-            jsx += f'td.fillColor=[{fill_color[0]},{fill_color[1]},{fill_color[2]}];td.applyFill=true;'
-        if stroke_color:
-            jsx += (f'td.strokeColor=[{stroke_color[0]},{stroke_color[1]},{stroke_color[2]}];'
-                    f'td.applyStroke=true;td.strokeOverFill=false;')
-        if stroke_width:
-            jsx += f'td.strokeWidth={stroke_width};'
-        if font:
-            jsx += f'td.font="{font}";'
-        if justification in just_map:
-            jsx += f'td.justification={just_map[justification]};'
-        jsx += 'tp.setValue(td);'
-        jsx += f'tl.name;'
+    def add_solid(self, name: str, color: List[float],
+                  width: int = None, height: int = None) -> str:
+        """
+        Create a solid layer. Returns the layer name.
 
+        Args:
+            name: Layer name
+            color: [r, g, b] in 0-1 range
+            width: Solid width (defaults to comp width)
+            height: Solid height (defaults to comp height)
+        """
+        safe_name = _esc(name)
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var w={width if width else "c.width"};'
+            f'var h={height if height else "c.height"};'
+            f'var sl=c.layers.addSolid([{color[0]},{color[1]},{color[2]}],'
+            f'"{safe_name}",w,h,c.pixelAspect,c.duration);'
+            f'sl.name;'
+        )
         return self.run_jsx(jsx)
 
     def center_anchor(self, name: str, at_time: float = 0) -> str:
@@ -718,95 +703,29 @@ class AEBridge:
 
     # ── Keyframes ──────────────────────────────────────────
 
-    def set_position_keyframes(self, name: str,
-                                keyframes: List[Tuple[float, List[float]]]) -> str:
+    def set_keyframes(self, name: str, prop: str,
+                      keyframes: List[Tuple[float, Any]]) -> str:
         """
-        设置 Position 关键帧。
+        Set keyframes on a transform property.
 
         Args:
-            name: 图层名
-            keyframes: [(time_sec, [x, y]), ...] 或 [(time_sec, [x, y, z]), ...]
-        """
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var pos=tl.property("Transform").property("Position");'
-        )
-        for t, val in keyframes:
-            jsx += f'pos.setValueAtTime({t},{json.dumps(val)});'
-        jsx += '"ok"'
-        return self.run_jsx(jsx)
-
-    def set_opacity_keyframes(self, name: str,
-                               keyframes: List[Tuple[float, float]]) -> str:
-        """
-        设置 Opacity 关键帧。
-
-        Args:
-            name: 图层名
-            keyframes: [(time_sec, value_0to100), ...]
-        """
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var opa=tl.property("Transform").property("Opacity");'
-        )
-        for t, val in keyframes:
-            jsx += f'opa.setValueAtTime({t},{val});'
-        jsx += '"ok"'
-        return self.run_jsx(jsx)
-
-    def set_scale_keyframes(self, name: str,
-                             keyframes: List[Tuple[float, List[float]]]) -> str:
-        """
-        设置 Scale 关键帧。注意 AE Scale 始终是 3D: [x, y, z]。
-
-        Args:
-            name: 图层名
-            keyframes: [(time_sec, [sx, sy, sz]), ...]  (sz 通常为 100)
-        """
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var scl=tl.property("Transform").property("Scale");'
-        )
-        for t, val in keyframes:
-            # 确保 3D
-            if len(val) == 2:
-                val = val + [100]
-            jsx += f'scl.setValueAtTime({t},{json.dumps(val)});'
-        jsx += '"ok"'
-        return self.run_jsx(jsx)
-
-    def set_rotation_keyframes(self, name: str,
-                                keyframes: List[Tuple[float, float]]) -> str:
-        """设置 Rotation 关键帧"""
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var rot=tl.property("Transform").property("Rotation");'
-        )
-        for t, val in keyframes:
-            jsx += f'rot.setValueAtTime({t},{val});'
-        jsx += '"ok"'
-        return self.run_jsx(jsx)
-
-    def set_property_keyframes(self, name: str, prop_path: str,
-                                keyframes: List[Tuple[float, Any]]) -> str:
-        """
-        通用属性关键帧设置。
-
-        Args:
-            name: 图层名
-            prop_path: 属性路径，如 'property("Transform").property("Opacity")'
+            name: Layer name
+            prop: Semantic property name ("position", "opacity", "scale",
+                  "rotation", "anchor_point")
             keyframes: [(time_sec, value), ...]
+                       position: [x, y] or [x, y, z]
+                       scale: [sx, sy, sz] (sz defaults to 100 if 2D given)
+                       opacity/rotation: single number
         """
+        path = _resolve_prop(prop)
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var p=tl.{prop_path};'
+            f'var p=tl.{path};'
         )
         for t, val in keyframes:
+            if prop == "scale" and isinstance(val, (list, tuple)) and len(val) == 2:
+                val = list(val) + [100]
             if isinstance(val, (list, tuple)):
                 jsx += f'p.setValueAtTime({t},{json.dumps(val)});'
             else:
@@ -814,85 +733,99 @@ class AEBridge:
         jsx += '"ok"'
         return self.run_jsx(jsx)
 
-    # ── Easing ─────────────────────────────────────────────
-
-    def apply_easing(self, name: str, properties: List[str] = None,
-                      speed: float = 0, influence: float = 80) -> str:
+    def set_value(self, name: str, prop: str, value: Any,
+                  at_time: float = None) -> str:
         """
-        对图层的 Transform 属性关键帧应用缓动。
-
-        ⚠️ 关键: 此操作必须在独立的 HTTP 调用中执行 (不要和 addProperty 混用)。
+        Set a transform property value (static or at specific time).
 
         Args:
-            name: 图层名
-            properties: 要应用缓动的属性列表，如 ["opacity", "position", "scale"]
-                       默认 = ["opacity", "position", "scale"]
-            speed: KeyframeEase speed (通常 0)
-            influence: KeyframeEase influence (通常 33-100, 默认 80)
+            name: Layer name
+            prop: Semantic property name
+            value: The value to set
+            at_time: If provided, sets value at this time (creates keyframe).
+                     If None, sets static value.
         """
-        if properties is None:
-            properties = ["opacity", "position", "scale"]
+        path = _resolve_prop(prop)
+        if prop == "scale" and isinstance(value, (list, tuple)) and len(value) == 2:
+            value = list(value) + [100]
+        val_str = json.dumps(value) if isinstance(value, (list, tuple)) else str(value)
+        if at_time is not None:
+            jsx = (
+                f'var c=app.project.activeItem;'
+                f'var tl=c.layer("{_esc(name)}");'
+                f'tl.{path}.setValueAtTime({at_time},{val_str});'
+                f'"ok"'
+            )
+        else:
+            jsx = (
+                f'var c=app.project.activeItem;'
+                f'var tl=c.layer("{_esc(name)}");'
+                f'tl.{path}.setValue({val_str});'
+                f'"ok"'
+            )
+        return self.run_jsx(jsx)
+
+    # ── Easing ─────────────────────────────────────────────
+
+    def apply_transform_easing(self, name: str, prop: str,
+                                speed: float = 0, influence: float = 80) -> str:
+        """
+        Apply easing to all keyframes of a single transform property.
+
+        Args:
+            name: Layer name
+            prop: Semantic property name ("opacity", "position", "scale", "rotation", "anchor_point")
+            speed: KeyframeEase speed (usually 0 for ease in/out)
+            influence: KeyframeEase influence (33-100, default 80)
+        """
+        info = TRANSFORM_PROPS.get(prop)
+        if not info:
+            raise ValueError(
+                f"Unknown transform property '{prop}'. "
+                f"Available: {list(TRANSFORM_PROPS.keys())}"
+            )
+        dims = info["ease_dims"]
+        ease_in = ",".join([f"new KeyframeEase({speed},{influence})"] * dims)
+        ease_out = ",".join([f"new KeyframeEase({speed},{influence})"] * dims)
+        path = info["path"]
 
         jsx = (
             f'try{{'
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var eI=new KeyframeEase({speed},{influence});'
-            f'var eO=new KeyframeEase({speed},{influence});'
+            f'var _p=tl.{path};'
+            f'for(var k=1;k<=_p.numKeys;k++)'
+            f'_p.setTemporalEaseAtKey(k,[{ease_in}],[{ease_out}]);'
+            f'"ease_ok";'
+            f'}}catch(e){{"EASE_ERR:"+e.toString()+" L:"+e.line;}}'
         )
-
-        for prop_name in properties:
-            info = TRANSFORM_PROPS.get(prop_name)
-            if not info:
-                continue
-            dims = info["ease_dims"]
-            ease_in = ",".join(["eI"] * dims)
-            ease_out = ",".join(["eO"] * dims)
-            path = info["path"]
-            jsx += (
-                f'var _p=tl.{path};'
-                f'for(var k=1;k<=_p.numKeys;k++)'
-                f'_p.setTemporalEaseAtKey(k,[{ease_in}],[{ease_out}]);'
-            )
-
-        jsx += '"ease_ok";'
-        jsx += '}catch(e){"EASE_ERR:"+e.toString()+" L:"+e.line;}'
         return self.run_jsx(jsx)
 
-    def apply_effect_easing(self, name: str, effect_type: str,
+    def apply_effect_easing(self, name: str, effect_index: int,
                              prop_key: str, speed: float = 0,
                              influence: float = 80) -> str:
         """
-        对效果属性的关键帧应用缓动。
-
-        ⚠️ 必须在 add_effect 之后的独立调用中执行。
+        Apply easing to all keyframes of an effect property.
 
         Args:
-            name: 图层名
-            effect_type: 效果类型 key (如 "gaussian_blur")
-            prop_key: 属性 key (如 "blurriness")
+            name: Layer name
+            effect_index: 1-based effect index
+            prop_key: Property key from EFFECTS registry
             speed: KeyframeEase speed
             influence: KeyframeEase influence
         """
-        fx = EFFECTS.get(effect_type)
-        if not fx:
-            return f"ERR: unknown effect {effect_type}"
-        mn = fx["props"].get(prop_key)
-        if not mn:
-            return f"ERR: unknown prop {prop_key}"
-        fx_mn = fx["matchName"]
+        mn = self._resolve_effect_prop(prop_key)
+        if mn is None:
+            raise ValueError(f"Unknown effect prop_key '{prop_key}'")
 
         return self.run_jsx(
             f'try{{'
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var fx=tl.property("Effects");'
+            f'var ef=tl.property("Effects").property({effect_index});'
+            f'if(!ef){{"ERR:effect_not_found"}}else{{'
             f'var eI=new KeyframeEase({speed},{influence});'
             f'var eO=new KeyframeEase({speed},{influence});'
-            # 通过 matchName 查找最后添加的同类效果
-            f'var ef=null;for(var i=fx.numProperties;i>=1;i--){{'
-            f'if(fx.property(i).matchName=="{fx_mn}"){{ef=fx.property(i);break;}}}}'
-            f'if(!ef){{"ERR:effect_not_found"}}else{{'
             f'var p=ef.property("{mn}");'
             f'for(var k=1;k<=p.numKeys;k++)'
             f'p.setTemporalEaseAtKey(k,[eI],[eO]);'
@@ -902,60 +835,90 @@ class AEBridge:
 
     # ── Effects ────────────────────────────────────────────
 
-    def add_effect(self, name: str, effect_type: str,
-                    props: Dict[str, Any] = None,
-                    keyframes: Dict[str, List[Tuple[float, Any]]] = None) -> str:
+    def add_effect(self, name: str, effect_type: str) -> int:
         """
-        为图层添加效果并设置属性值/关键帧。
-
-        ⚠️ 关键设计: 每次调用只添加一个效果 (避免 AE 对象引用失效)。
+        Add an effect to a layer. Returns the effect's 1-based index.
 
         Args:
-            name: 图层名
-            effect_type: 效果类型 key (如 "gaussian_blur", "drop_shadow")
-            props: 静态属性 {prop_key: value}
-            keyframes: 动态属性关键帧 {prop_key: [(time, value), ...]}
-
+            name: Layer name
+            effect_type: Effect type key from EFFECTS registry (e.g. "gaussian_blur")
         Returns:
-            "ok" 或错误信息
+            effect_index (int) — use this for all subsequent effect operations
         """
         fx = EFFECTS.get(effect_type)
         if not fx:
-            return f"ERR: unknown effect '{effect_type}'. Available: {list(EFFECTS.keys())}"
-
+            raise ValueError(f"Unknown effect '{effect_type}'. Available: {list(EFFECTS.keys())}")
         mn = fx["matchName"]
         jsx = (
             f'try{{'
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
             f'var ef=tl.property("Effects").addProperty("{mn}");'
+            f'ef.propertyIndex;'
+            f'}}catch(e){{"ERR:"+e.toString()}}'
         )
+        r = self.run_jsx(jsx)
+        if r.startswith("ERR:"):
+            raise RuntimeError(r)
+        return int(r)
 
-        # 设置静态属性
-        if props:
-            for key, val in props.items():
-                prop_mn = fx["props"].get(key)
-                if not prop_mn:
-                    continue
+    def set_effect_props(self, name: str, effect_index: int,
+                         props: Dict[str, Any]) -> str:
+        """
+        Set static property values on an effect.
+
+        Args:
+            name: Layer name
+            effect_index: 1-based effect index (from add_effect or enumerate_effects)
+            props: {prop_key: value} — prop_key from EFFECTS registry
+        """
+        jsx = (
+            f'try{{'
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var ef=tl.property("Effects").property({effect_index});'
+            f'if(!ef){{"ERR:effect_not_found"}}else{{'
+        )
+        for key, val in props.items():
+            mn = self._resolve_effect_prop(key)
+            if mn is None:
+                continue
+            if isinstance(val, (list, tuple)):
+                jsx += f'ef.property("{mn}").setValue({json.dumps(val)});'
+            else:
+                jsx += f'ef.property("{mn}").setValue({val});'
+        jsx += '"ok";}'
+        jsx += f'}}catch(e){{"FX_ERR:"+e.toString()}}'
+        return self.run_jsx(jsx)
+
+    def set_effect_keyframes(self, name: str, effect_index: int,
+                              keyframes: Dict[str, List[Tuple[float, Any]]]) -> str:
+        """
+        Set keyframes on effect properties.
+
+        Args:
+            name: Layer name
+            effect_index: 1-based effect index
+            keyframes: {prop_key: [(time, value), ...]}
+        """
+        jsx = (
+            f'try{{'
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var ef=tl.property("Effects").property({effect_index});'
+            f'if(!ef){{"ERR:effect_not_found"}}else{{'
+        )
+        for key, kfs in keyframes.items():
+            mn = self._resolve_effect_prop(key)
+            if mn is None:
+                continue
+            for t, val in kfs:
                 if isinstance(val, (list, tuple)):
-                    jsx += f'ef.property("{prop_mn}").setValue({json.dumps(val)});'
+                    jsx += f'ef.property("{mn}").setValueAtTime({t},{json.dumps(val)});'
                 else:
-                    jsx += f'ef.property("{prop_mn}").setValue({val});'
-
-        # 设置关键帧属性
-        if keyframes:
-            for key, kfs in keyframes.items():
-                prop_mn = fx["props"].get(key)
-                if not prop_mn:
-                    continue
-                for t, val in kfs:
-                    if isinstance(val, (list, tuple)):
-                        jsx += f'ef.property("{prop_mn}").setValueAtTime({t},{json.dumps(val)});'
-                    else:
-                        jsx += f'ef.property("{prop_mn}").setValueAtTime({t},{val});'
-
-        jsx += '"ok";'
-        jsx += f'}}catch(e){{"FX_ERR:"+e.toString()+" L:"+e.line;}}'
+                    jsx += f'ef.property("{mn}").setValueAtTime({t},{val});'
+        jsx += '"ok";}'
+        jsx += f'}}catch(e){{"FX_ERR:"+e.toString()}}'
         return self.run_jsx(jsx)
 
     def enumerate_effects(self, name: str) -> List[dict]:
@@ -1242,147 +1205,116 @@ class AEBridge:
 
     # ── Property Read-back ─────────────────────────────────
 
-    def get_transform_value(self, name: str, prop: str, at_time: float = None) -> Any:
+    def get_value(self, name: str, prop: str, at_time: float = None) -> Any:
         """
-        读取 Transform 属性当前值或指定时间的值。
+        Read a transform property value.
 
         Args:
-            name: 图层名
-            prop: 属性名 ("position"/"scale"/"rotation"/"opacity"/"anchor_point")
-            at_time: 指定时间(秒)，None 表示当前时间
+            name: Layer name
+            prop: Semantic property name ("position", "opacity", "scale",
+                  "rotation", "anchor_point")
+            at_time: Time in seconds (None = current comp time)
         """
-        info = TRANSFORM_PROPS.get(prop)
-        if not info:
-            raise ValueError(f"Unknown transform prop: {prop}. Available: {list(TRANSFORM_PROPS.keys())}")
-        path = info["path"]
+        path = _resolve_prop(prop)
         if at_time is not None:
             jsx = (
                 f'var c=app.project.activeItem;'
                 f'var tl=c.layer("{_esc(name)}");'
                 f'var p=tl.{path};'
-                f'var v=p.valueAtTime({at_time},false);'
-                f'JSON.stringify(v instanceof Array?v:[v]);'
+                f'var v=p.valueAtTime({at_time},true);'
+                f'JSON.stringify(v);'
             )
         else:
             jsx = (
                 f'var c=app.project.activeItem;'
                 f'var tl=c.layer("{_esc(name)}");'
                 f'var p=tl.{path};'
-                f'var v=p.value;'
-                f'JSON.stringify(v instanceof Array?v:[v]);'
+                f'JSON.stringify(p.value);'
             )
         r = self.run_jsx(jsx)
         try:
-            val = json.loads(r)
-            return val[0] if len(val) == 1 and prop in ("rotation", "opacity") else val
+            return json.loads(r)
         except json.JSONDecodeError:
             return r
 
     def get_keyframes(self, name: str, prop: str) -> List[Tuple[float, Any]]:
-        """读取 Transform 属性的所有关键帧。"""
-        info = TRANSFORM_PROPS.get(prop)
-        if not info:
-            raise ValueError(f"Unknown transform prop: {prop}")
-        path = info["path"]
+        """
+        Read all keyframes of a transform property.
+
+        Args:
+            name: Layer name
+            prop: Semantic property name
+        Returns:
+            [(time_sec, value), ...]
+        """
+        path = _resolve_prop(prop)
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
             f'var p=tl.{path};'
             f'var out=[];'
-            f'for(var i=1;i<=p.numKeys;i++){{'
-            f'var t=p.keyTime(i);var v=p.keyValue(i);'
-            f'out.push({{t:t,v:v}});}}'
-            f'JSON.stringify(out);'
-        )
-        r = self.run_jsx(jsx)
-        try:
-            data = json.loads(r)
-            return [(kf["t"], kf["v"]) for kf in data]
-        except json.JSONDecodeError:
-            return []
-
-    def get_property_value(self, name: str, prop_path: str, at_time: float = None) -> Any:
-        """读取任意属性值。prop_path 如 'property("Transform").property("Opacity")'"""
-        if at_time is not None:
-            jsx = (
-                f'var c=app.project.activeItem;'
-                f'var tl=c.layer("{_esc(name)}");'
-                f'var p=tl.{prop_path};'
-                f'var v=p.valueAtTime({at_time},false);'
-                f'JSON.stringify(v instanceof Array?v:[v]);'
-            )
-        else:
-            jsx = (
-                f'var c=app.project.activeItem;'
-                f'var tl=c.layer("{_esc(name)}");'
-                f'var p=tl.{prop_path};'
-                f'var v=p.value;'
-                f'JSON.stringify(v instanceof Array?v:[v]);'
-            )
-        r = self.run_jsx(jsx)
-        try:
-            return json.loads(r)
-        except json.JSONDecodeError:
-            return r
-
-    def get_property_keyframes(self, name: str, prop_path: str) -> List[Tuple[float, Any]]:
-        """读取任意属性的所有关键帧。"""
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var p=tl.{prop_path};'
-            f'var out=[];'
-            f'for(var i=1;i<=p.numKeys;i++){{'
-            f'var t=p.keyTime(i);var v=p.keyValue(i);'
-            f'out.push({{t:t,v:v}});}}'
-            f'JSON.stringify(out);'
-        )
-        r = self.run_jsx(jsx)
-        try:
-            data = json.loads(r)
-            return [(kf["t"], kf["v"]) for kf in data]
-        except json.JSONDecodeError:
-            return []
-
-    def get_effect_param(self, name: str, effect_match_name: str,
-                          param_match_name: str, at_time: float = None) -> Any:
-        """读取效果属性值。"""
-        time_part = f'.valueAtTime({at_time},false)' if at_time is not None else '.value'
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var fx=tl.property("Effects");'
-            f'var ef=null;for(var i=fx.numProperties;i>=1;i--){{'
-            f'if(fx.property(i).matchName=="{effect_match_name}"){{ef=fx.property(i);break;}}}}'
-            f'if(!ef)JSON.stringify({{error:"effect_not_found"}});else{{'
-            f'var v=ef.property("{param_match_name}"){time_part};'
-            f'JSON.stringify(v instanceof Array?v:[v]);}}'
-        )
-        r = self.run_jsx(jsx)
-        try:
-            return json.loads(r)
-        except json.JSONDecodeError:
-            return r
-
-    def get_effect_keyframes(self, name: str, effect_match_name: str,
-                              param_match_name: str) -> List[Tuple[float, Any]]:
-        """读取效果属性的所有关键帧。"""
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var fx=tl.property("Effects");'
-            f'var ef=null;for(var i=fx.numProperties;i>=1;i--){{'
-            f'if(fx.property(i).matchName=="{effect_match_name}"){{ef=fx.property(i);break;}}}}'
-            f'if(!ef)JSON.stringify([]);else{{'
-            f'var p=ef.property("{param_match_name}");var out=[];'
             f'for(var k=1;k<=p.numKeys;k++){{'
-            f'out.push({{t:p.keyTime(k),v:p.keyValue(k)}});}}'
-            f'JSON.stringify(out);}}'
+            f'out.push([p.keyTime(k),p.keyValue(k)]);'
+            f'}}JSON.stringify(out);'
         )
         r = self.run_jsx(jsx)
         try:
-            data = json.loads(r)
-            return [(kf["t"], kf["v"]) for kf in data]
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return []
+
+    def get_effect_param(self, name: str, effect_index: int,
+                          prop_key: str) -> Any:
+        """
+        Read an effect property value.
+
+        Args:
+            name: Layer name
+            effect_index: 1-based effect index
+            prop_key: Property key from EFFECTS registry
+        """
+        mn = self._resolve_effect_prop(prop_key)
+        if mn is None:
+            raise ValueError(f"Unknown effect prop_key '{prop_key}'")
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var ef=tl.property("Effects").property({effect_index});'
+            f'if(!ef)"ERR:effect_not_found";'
+            f'else{{var v=ef.property("{mn}").value;JSON.stringify(v);}}'
+        )
+        r = self.run_jsx(jsx)
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError:
+            return r
+
+    def get_effect_keyframes(self, name: str, effect_index: int,
+                              prop_key: str) -> List[Tuple[float, Any]]:
+        """
+        Read keyframes of an effect property.
+
+        Args:
+            name: Layer name
+            effect_index: 1-based effect index
+            prop_key: Property key from EFFECTS registry
+        """
+        mn = self._resolve_effect_prop(prop_key)
+        if mn is None:
+            raise ValueError(f"Unknown effect prop_key '{prop_key}'")
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var ef=tl.property("Effects").property({effect_index});'
+            f'if(!ef)"ERR:effect_not_found";else{{'
+            f'var p=ef.property("{mn}");var out=[];'
+            f'for(var k=1;k<=p.numKeys;k++){{'
+            f'out.push([p.keyTime(k),p.keyValue(k)]);'
+            f'}}JSON.stringify(out);}}'
+        )
+        r = self.run_jsx(jsx)
+        try:
+            return json.loads(r)
         except json.JSONDecodeError:
             return []
 
@@ -1621,25 +1553,6 @@ class AEBridge:
             f'"mask_added";'
         )
         return self.run_jsx(jsx)
-
-    def add_mask_rect(self, name: str, top: float, left: float,
-                       width: float, height: float, **kwargs) -> str:
-        """矩形蒙版快捷方法"""
-        verts = [[left, top], [left + width, top],
-                 [left + width, top + height], [left, top + height]]
-        return self.add_mask(name, verts, **kwargs)
-
-    def add_mask_ellipse(self, name: str, center: List[float],
-                          size: List[float], segments: int = 32, **kwargs) -> str:
-        """椭圆蒙版快捷方法"""
-        import math
-        rx, ry = size[0] / 2, size[1] / 2
-        cx, cy = center
-        verts = []
-        for i in range(segments):
-            angle = 2 * math.pi * i / segments
-            verts.append([cx + rx * math.cos(angle), cy + ry * math.sin(angle)])
-        return self.add_mask(name, verts, **kwargs)
 
     def list_masks(self, name: str) -> List[dict]:
         """列出图层所有蒙版"""
@@ -1891,6 +1804,73 @@ class AEBridge:
             f'c.layer("{_esc(name)}").trackMatteType=TrackMatteType.NO_TRACK_MATTE;"ok";'
         )
 
+    def set_text_content(self, name: str, text: str) -> str:
+        """
+        Change the text content of an existing text layer.
+
+        Args:
+            name: Layer name
+            text: New text content
+        """
+        safe_txt = _esc(text)
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var tp=tl.property("ADBE Text Properties").property("ADBE Text Document");'
+            f'var td=tp.value;'
+            f'td.text="{safe_txt}";'
+            f'tp.setValue(td);'
+            f'"ok";'
+        )
+        return self.run_jsx(jsx)
+
+    def set_text_style(self, name: str, font: str = None,
+                        font_size: int = None,
+                        fill_color: List[float] = None,
+                        stroke_color: List[float] = None,
+                        stroke_width: float = None,
+                        justification: str = None) -> str:
+        """
+        Set text styling properties on a text layer.
+
+        Args:
+            name: Layer name
+            font: Font name (e.g. "SourceHanSansSC-Bold")
+            font_size: Font size in px
+            fill_color: [r, g, b] in 0-1 range
+            stroke_color: [r, g, b] in 0-1 range
+            stroke_width: Stroke width in px
+            justification: "left", "center", or "right"
+        """
+        just_map = {
+            "left": "ParagraphJustification.LEFT_JUSTIFY",
+            "center": "ParagraphJustification.CENTER_JUSTIFY",
+            "right": "ParagraphJustification.RIGHT_JUSTIFY",
+        }
+
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var tp=tl.property("ADBE Text Properties").property("ADBE Text Document");'
+            f'var td=tp.value;'
+        )
+        if font_size is not None:
+            jsx += f'td.fontSize={font_size};'
+        if fill_color is not None:
+            jsx += f'td.fillColor=[{fill_color[0]},{fill_color[1]},{fill_color[2]}];td.applyFill=true;'
+        if stroke_color is not None:
+            jsx += (f'td.strokeColor=[{stroke_color[0]},{stroke_color[1]},{stroke_color[2]}];'
+                    f'td.applyStroke=true;td.strokeOverFill=false;')
+        if stroke_width is not None:
+            jsx += f'td.strokeWidth={stroke_width};'
+        if font is not None:
+            jsx += f'td.font="{font}";'
+        if justification is not None and justification in just_map:
+            jsx += f'td.justification={just_map[justification]};'
+        jsx += 'tp.setValue(td);'
+        jsx += '"ok";'
+        return self.run_jsx(jsx)
+
     # ── Text Animator ──────────────────────────────────────
 
     def add_text_animator(self, name: str, properties: Dict[str, Any] = None) -> str:
@@ -2002,11 +1982,14 @@ class AEBridge:
     def add_layer_style(self, name: str, style: str,
                          props: Dict[str, Any] = None) -> str:
         """
-        为图层启用 Layer Style（通过 AEGP SDK DynamicStreamSuite）。
+        [EXPERIMENTAL] Enable a Layer Style via AEGP SDK DynamicStreamSuite.
+
+        WARNING: AE scripting support for Layer Styles is limited.
+        Many styles return ERR:not_scriptable. Use at own risk.
 
         style: drop_shadow/inner_shadow/outer_glow/inner_glow/bevel_emboss/
                satin/color_overlay/gradient_overlay/pattern_overlay/stroke
-        props: 属性字典（启用后通过 JSX 设置），key 用 AE 属性 matchName
+        props: Property dict (key = AE matchName)
         """
         style_matchnames = {
             "drop_shadow": "dropShadow/enabled",
@@ -2032,7 +2015,12 @@ class AEBridge:
 
     def enable_layer_style(self, name: str, style: str,
                             enabled: bool = True) -> str:
-        """启用/禁用指定 Layer Style — 当前不支持脚本化"""
+        """
+        [EXPERIMENTAL] Toggle a Layer Style on/off.
+
+        WARNING: AE's canSetEnabled returns false for most styles.
+        This method may silently fail.
+        """
         return ("ERR:not_scriptable — Layer Styles require AE menu")
 
     # ── 3D / Camera / Light ────────────────────────────────
@@ -2221,33 +2209,15 @@ class AEBridge:
             timeout=600000
         )
 
-    def render_comp(self, comp_name: str = None, output_path: str = None,
-                     template: str = None) -> str:
-        """快捷方法：加入队列 + 设置输出 + 开始渲染"""
-        self.add_to_render_queue(comp_name, output_path, template)
-        return self.start_render()
-
     # ── Batch / Selection ──────────────────────────────────
 
-    def batch_jsx(self, scripts: List[str]) -> List[Any]:
-        """批量执行多段 JSX（一次 HTTP 调用）。"""
-        wrapped = 'var _results=[];'
-        for i, s in enumerate(scripts):
-            wrapped += f'try{{_results.push({s})}}catch(e){{_results.push("ERR:"+e.toString())}}'
-        wrapped += 'JSON.stringify(_results);'
-        r = self.run_jsx(wrapped)
-        try:
-            return json.loads(r)
-        except json.JSONDecodeError:
-            return [r]
-
-    def select_layers(self, names: List[str]) -> str:
-        """选中指定图层"""
-        jsx = 'var c=app.project.activeItem;'
-        jsx += 'for(var i=1;i<=c.numLayers;i++)c.layer(i).selected=false;'
-        for n in names:
-            jsx += f'try{{c.layer("{_esc(n)}").selected=true;}}catch(e){{}}'
-        jsx += '"ok";'
+    def set_layer_selected(self, name: str, selected: bool = True) -> str:
+        """Set a single layer's selection state."""
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'c.layer("{_esc(name)}").selected={str(selected).lower()};'
+            f'"ok";'
+        )
         return self.run_jsx(jsx)
 
     def deselect_all(self) -> str:
@@ -2328,6 +2298,19 @@ class AEBridge:
         )
         r = self._run_py(code)
         return json.loads(r)
+
+    @staticmethod
+    def _resolve_effect_prop(prop_key: str) -> Optional[str]:
+        """Resolve effect prop_key to matchName by scanning EFFECTS registry.
+
+        Searches all registered effects for a matching prop_key and returns
+        the matchName. Returns None if prop_key not found in any effect.
+        """
+        for fx_data in EFFECTS.values():
+            mn = fx_data["props"].get(prop_key)
+            if mn is not None:
+                return mn
+        return None
 
     def _run_py(self, code: str) -> str:
         """执行 Python 代码并返回 result 变量的值"""
