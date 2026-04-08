@@ -225,13 +225,13 @@
     "slug": "set-anchor-point",
     "name": "Set Anchor Point",
     "file": "set-anchor-point.jsx",
-    "note": "MoBar内置高频"
+    "note": "移动锚点到9宫格位置(tl/tm/tr/ml/mm/mr/bl/bm/br)，--mode指定位置"
   },
   {
     "slug": "auto-trim-comp",
     "name": "Auto Trim Comp",
     "file": "auto-trim-comp.jsx",
-    "note": "MoBar内置高频"
+    "note": "裁剪合成到内容范围，Ctrl=仅选中图层"
   },
   {
     "slug": "separate-xy",
@@ -243,6 +243,6 @@
     "slug": "clean-keyframes",
     "name": "Clean Keyframes",
     "file": "clean-keyframes.jsx",
-    "note": "MoBar内置高频"
+    "note": "删除图层范围外多余帧，Ctrl=全合成"
   }
 ]
