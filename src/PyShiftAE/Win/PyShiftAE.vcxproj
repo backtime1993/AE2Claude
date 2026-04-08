@@ -98,19 +98,19 @@
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.aex</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>F:\claude\deps\vcpkg-repo\installed\x64-windows-static\include;F:\claude\deps\pybind11\include;C:\Users\kensei\scoop\apps\python312\current\include;$(IncludePath)</IncludePath>
+    <IncludePath>$(VCPKG_INSTALLED)\x64-windows-static\include;$(PYBIND11_DIR)\include;$(PYTHON_DIR)\include;$(IncludePath)</IncludePath>
     <ExternalIncludePath>$(ExternalIncludePath)</ExternalIncludePath>
-    <LibraryPath>F:\claude\deps\vcpkg-repo\installed\x64-windows-static\lib;F:\claude\deps\vcpkg-repo\installed\x64-windows-static\debug\lib;C:\Users\kensei\scoop\apps\python312\current\libs;$(LibraryPath)</LibraryPath>
+    <LibraryPath>$(VCPKG_INSTALLED)\x64-windows-static\lib;$(VCPKG_INSTALLED)\x64-windows-static\debug\lib;$(PYTHON_DIR)\libs;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>F:\claude\deps\vcpkg-repo\installed\x64-windows-static\include;F:\claude\deps\pybind11\include;C:\Users\kensei\scoop\apps\python312\current\include;$(IncludePath)</IncludePath>
+    <IncludePath>$(VCPKG_INSTALLED)\x64-windows-static\include;$(PYBIND11_DIR)\include;$(PYTHON_DIR)\include;$(IncludePath)</IncludePath>
     <ExternalIncludePath>$(ExternalIncludePath)</ExternalIncludePath>
-    <LibraryPath>F:\claude\deps\vcpkg-repo\installed\x64-windows-static\lib;C:\Users\kensei\scoop\apps\python312\current\libs;$(LibraryPath)</LibraryPath>
+    <LibraryPath>$(VCPKG_INSTALLED)\x64-windows-static\lib;$(PYTHON_DIR)\libs;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <VcpkgUseStatic>true</VcpkgUseStatic>
     <VcpkgConfiguration>Debug</VcpkgConfiguration>
-    <VcpkgInstalledDir>F:\claude\deps\vcpkg-repo\installed</VcpkgInstalledDir>
+    <VcpkgInstalledDir>$(VCPKG_INSTALLED)</VcpkgInstalledDir>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>false</VcpkgEnableManifest>
@@ -131,7 +131,7 @@
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>F:\claude\deps\vcpkg-repo\installed\x64-windows-static\include;F:\claude\deps\pybind11\include;C:\Users\kensei\scoop\apps\python312\current\include;..\..\..\Headers;..\..\..\Headers\SP;..\..\..\Headers\Win;..\..\..\Resources;..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VCPKG_INSTALLED)\x64-windows-static\include;$(PYBIND11_DIR)\include;$(PYTHON_DIR)\include;..\..\..\Headers;..\..\..\Headers\SP;..\..\..\Headers\Win;..\..\..\Resources;..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>BOOST_ALL_STATIC_LINK;MYSUITEDLL_EXPORTS;MSWindows;WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <StructMemberAlignment>Default</StructMemberAlignment>
       <PrecompiledHeader>
@@ -169,7 +169,7 @@
       <ImportLibrary>$(IntDir)/$(TargetName).lib</ImportLibrary>
       <TargetMachine>MachineX64</TargetMachine>
       <AdditionalDependencies>python312.lib;python3.lib;boost_serialization-vc143-mt-x64-1_90.lib;boost_wserialization-vc143-mt-x64-1_90.lib;boost_date_time-vc143-mt-x64-1_90.lib;boost_thread-vc143-mt-x64-1_90.lib;boost_chrono-vc143-mt-x64-1_90.lib;boost_atomic-vc143-mt-x64-1_90.lib;boost_container-vc143-mt-x64-1_90.lib;ole32.lib;rpcrt4.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\kensei\scoop\apps\python312\current\libs;F:\claude\deps\vcpkg-repo\installed\x64-windows-static\lib;F:\claude\deps\vcpkg-repo\installed\x64-windows-static\debug\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(PYTHON_DIR)\libs;$(VCPKG_INSTALLED)\x64-windows-static\lib;$(VCPKG_INSTALLED)\x64-windows-static\debug\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <Bscmake>
       <OutputFile>$(IntDir)$(TargetName).bsc</OutputFile>
@@ -187,7 +187,7 @@
     </Midl>
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
-      <AdditionalIncludeDirectories>F:\claude\deps\vcpkg-repo\installed\x64-windows-static\include;F:\claude\deps\pybind11\include;C:\Users\kensei\scoop\apps\python312\current\include;..\..\..\Headers;..\..\..\Headers\SP;..\..\..\Headers\Win;..\..\..\Resources;..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VCPKG_INSTALLED)\x64-windows-static\include;$(PYBIND11_DIR)\include;$(PYTHON_DIR)\include;..\..\..\Headers;..\..\..\Headers\SP;..\..\..\Headers\Win;..\..\..\Resources;..\..\..\Util;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>BOOST_ALL_STATIC_LINK;MSWindows;WIN32;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>
       </PrecompiledHeader>
@@ -225,7 +225,7 @@
       <ImportLibrary>$(IntDir)/$(TargetName).lib</ImportLibrary>
       <TargetMachine>MachineX64</TargetMachine>
       <AdditionalDependencies>python312.lib;python3.lib;boost_serialization-vc143-mt-x64-1_90.lib;boost_wserialization-vc143-mt-x64-1_90.lib;boost_date_time-vc143-mt-x64-1_90.lib;boost_thread-vc143-mt-x64-1_90.lib;boost_chrono-vc143-mt-x64-1_90.lib;boost_atomic-vc143-mt-x64-1_90.lib;boost_container-vc143-mt-x64-1_90.lib;ole32.lib;rpcrt4.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\kensei\scoop\apps\python312\current\libs;F:\claude\deps\vcpkg-repo\installed\x64-windows-static\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(PYTHON_DIR)\libs;$(VCPKG_INSTALLED)\x64-windows-static\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <Bscmake>
       <OutputFile>$(IntDir)$(TargetName).bsc</OutputFile>

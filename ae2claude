@@ -126,8 +126,7 @@ import sys, json, os, urllib.request, urllib.error, inspect
 BASE = "http://127.0.0.1:8089"
 # 项目根目录：优先用脚本所在目录，如果找不到 ae_bridge.py 则用已知路径
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_DIR = r"F:\claude\longterm\AE2Claude"
-_BRIDGE_DIR = _SCRIPT_DIR if os.path.exists(os.path.join(_SCRIPT_DIR, "ae_bridge.py")) else _PROJECT_DIR
+_BRIDGE_DIR = _SCRIPT_DIR
 
 def req(path, data=None, timeout=15):
     r = urllib.request.Request(f"{BASE}{path}",
@@ -477,7 +476,7 @@ def main():
         return
     elif cmd == "snapshot":
         _ensure_comp()
-        out = args[1] if len(args) > 1 else "F:/claude/tmp/ae_snapshot.png"
+        out = args[1] if len(args) > 1 else os.path.join(os.environ.get("TEMP", "/tmp"), "ae_snapshot.png")
         out = out.replace("\\", "/")
         r = req("/jsx",
             f'(function(){{var c=app.project.activeItem;if(!c)return"ERR:no_comp";'

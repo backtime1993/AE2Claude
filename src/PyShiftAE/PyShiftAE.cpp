@@ -22,8 +22,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
 {
 	if (reason == DLL_PROCESS_ATTACH) {
 		// Write a marker file as early as possible
+		wchar_t tempDir[MAX_PATH];
+		GetTempPathW(MAX_PATH, tempDir);
+		std::wstring markerPath = std::wstring(tempDir) + L"AE2Claude\\dllmain_attach.txt";
+		CreateDirectoryW((std::wstring(tempDir) + L"AE2Claude").c_str(), NULL);
 		HANDLE hFile = CreateFileW(
-			L"C:\\Users\\kensei\\AppData\\Local\\Temp\\AE2Claude\\dllmain_attach.txt",
+			markerPath.c_str(),
 			GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 		if (hFile != INVALID_HANDLE_VALUE) {
 			const char msg[] = "DllMain DLL_PROCESS_ATTACH reached\r\n";
@@ -218,7 +222,6 @@ void ensurePythonHome() {
 		// Locate python312.dll next to AfterFX.exe, then resolve the real Python prefix
 		// via the registry or a known scoop install path.
 		const wchar_t* candidates[] = {
-			L"C:\\Users\\kensei\\scoop\\apps\\python312\\current",
 			L"C:\\Python312",
 			L"C:\\Program Files\\Python312",
 		};
