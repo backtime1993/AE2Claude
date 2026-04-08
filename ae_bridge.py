@@ -814,83 +814,65 @@ class AEBridge:
 
     # ── Easing ─────────────────────────────────────────────
 
-    def apply_easing(self, name: str, properties: List[str] = None,
-                      speed: float = 0, influence: float = 80) -> str:
+    def apply_transform_easing(self, name: str, prop: str,
+                                speed: float = 0, influence: float = 80) -> str:
         """
-        对图层的 Transform 属性关键帧应用缓动。
-
-        ⚠️ 关键: 此操作必须在独立的 HTTP 调用中执行 (不要和 addProperty 混用)。
+        Apply easing to all keyframes of a single transform property.
 
         Args:
-            name: 图层名
-            properties: 要应用缓动的属性列表，如 ["opacity", "position", "scale"]
-                       默认 = ["opacity", "position", "scale"]
-            speed: KeyframeEase speed (通常 0)
-            influence: KeyframeEase influence (通常 33-100, 默认 80)
+            name: Layer name
+            prop: Semantic property name ("opacity", "position", "scale", "rotation", "anchor_point")
+            speed: KeyframeEase speed (usually 0 for ease in/out)
+            influence: KeyframeEase influence (33-100, default 80)
         """
-        if properties is None:
-            properties = ["opacity", "position", "scale"]
+        info = TRANSFORM_PROPS.get(prop)
+        if not info:
+            raise ValueError(
+                f"Unknown transform property '{prop}'. "
+                f"Available: {list(TRANSFORM_PROPS.keys())}"
+            )
+        dims = info["ease_dims"]
+        ease_in = ",".join([f"new KeyframeEase({speed},{influence})"] * dims)
+        ease_out = ",".join([f"new KeyframeEase({speed},{influence})"] * dims)
+        path = info["path"]
 
         jsx = (
             f'try{{'
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var eI=new KeyframeEase({speed},{influence});'
-            f'var eO=new KeyframeEase({speed},{influence});'
+            f'var _p=tl.{path};'
+            f'for(var k=1;k<=_p.numKeys;k++)'
+            f'_p.setTemporalEaseAtKey(k,[{ease_in}],[{ease_out}]);'
+            f'"ease_ok";'
+            f'}}catch(e){{"EASE_ERR:"+e.toString()+" L:"+e.line;}}'
         )
-
-        for prop_name in properties:
-            info = TRANSFORM_PROPS.get(prop_name)
-            if not info:
-                continue
-            dims = info["ease_dims"]
-            ease_in = ",".join(["eI"] * dims)
-            ease_out = ",".join(["eO"] * dims)
-            path = info["path"]
-            jsx += (
-                f'var _p=tl.{path};'
-                f'for(var k=1;k<=_p.numKeys;k++)'
-                f'_p.setTemporalEaseAtKey(k,[{ease_in}],[{ease_out}]);'
-            )
-
-        jsx += '"ease_ok";'
-        jsx += '}catch(e){"EASE_ERR:"+e.toString()+" L:"+e.line;}'
         return self.run_jsx(jsx)
 
-    def apply_effect_easing(self, name: str, effect_type: str,
+    def apply_effect_easing(self, name: str, effect_index: int,
                              prop_key: str, speed: float = 0,
                              influence: float = 80) -> str:
         """
-        对效果属性的关键帧应用缓动。
-
-        ⚠️ 必须在 add_effect 之后的独立调用中执行。
+        Apply easing to all keyframes of an effect property.
 
         Args:
-            name: 图层名
-            effect_type: 效果类型 key (如 "gaussian_blur")
-            prop_key: 属性 key (如 "blurriness")
+            name: Layer name
+            effect_index: 1-based effect index
+            prop_key: Property key from EFFECTS registry
             speed: KeyframeEase speed
             influence: KeyframeEase influence
         """
-        fx = EFFECTS.get(effect_type)
-        if not fx:
-            return f"ERR: unknown effect {effect_type}"
-        mn = fx["props"].get(prop_key)
-        if not mn:
-            return f"ERR: unknown prop {prop_key}"
-        fx_mn = fx["matchName"]
+        mn = self._resolve_effect_prop(prop_key)
+        if mn is None:
+            raise ValueError(f"Unknown effect prop_key '{prop_key}'")
 
         return self.run_jsx(
             f'try{{'
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var fx=tl.property("Effects");'
+            f'var ef=tl.property("Effects").property({effect_index});'
+            f'if(!ef){{"ERR:effect_not_found"}}else{{'
             f'var eI=new KeyframeEase({speed},{influence});'
             f'var eO=new KeyframeEase({speed},{influence});'
-            # 通过 matchName 查找最后添加的同类效果
-            f'var ef=null;for(var i=fx.numProperties;i>=1;i--){{'
-            f'if(fx.property(i).matchName=="{fx_mn}"){{ef=fx.property(i);break;}}}}'
-            f'if(!ef){{"ERR:effect_not_found"}}else{{'
             f'var p=ef.property("{mn}");'
             f'for(var k=1;k<=p.numKeys;k++)'
             f'p.setTemporalEaseAtKey(k,[eI],[eO]);'
