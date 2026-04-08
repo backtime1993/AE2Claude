@@ -565,7 +565,7 @@ def main():
         print(__doc__.strip())
         return
     elif cmd == "--version":
-        print("ae2claude 3.0.0")
+        print("ae2claude 3.1.0")
         return
     elif cmd == "info":
         # 快捷: 当前合成概况
