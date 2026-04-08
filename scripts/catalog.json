@@ -40,13 +40,12 @@
     "Twitch": "Videocopilot Twitch"
   },
   "presets": {
+    "高光提取v2": "presets/高光提取v2.ffx",
+    "灰尘": "presets/灰尘.ffx",
+    "常用光流": "presets/常用光流.ffx",
+    "提取边缘(HP)": "presets/提取边缘(HP).ffx",
     "摆动 - 位置": "Behaviors/摆动 - 位置.ffx",
-    "摆动 - 旋转": "Behaviors/摆动 - 旋转.ffx",
-    "摆动 - 缩放": "Behaviors/摆动 - 缩放.ffx",
-    "淡入淡出 - 帧": "Behaviors/淡入淡出 - 帧.ffx",
     "反转 Alpha": "Image - Utilities/反转 Alpha.ffx",
-    "翻转": "Image - Utilities/翻转.ffx",
-    "裁切边缘": "Image - Utilities/裁切边缘.ffx",
-    "抠像 - 绿色模糊": "Image - Utilities/抠像 - 绿色模糊.ffx"
+    "摆动 - 旋转": "Behaviors/摆动 - 旋转.ffx"
   }
 }
