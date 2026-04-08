@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AE2Claude CLI v2.0 - talk to After Effects from the terminal.
+"""AE2Claude CLI v3.0 - talk to After Effects from the terminal.
 
 Built-in:
   ae2claude                              health check
@@ -8,9 +8,9 @@ Built-in:
   ae2claude version                      AE version
   ae2claude comps                        list compositions
   ae2claude layers                       list layers in active comp
-  ae2claude run <name>                   run user script (MoBar scriptlets)
+  ae2claude run <name>                   run user script
   ae2claude scripts                      list all user scripts
-  ae2claude snapshot [path]               save current frame as PNG
+  ae2claude snapshot [path]              save current frame as PNG
   ae2claude methods                      list all bridge methods
   ae2claude help                         this help
 
@@ -20,8 +20,8 @@ Bridge (ae2claude call <method> [args...] [--key value]):
     project_info                         project info
     list_layers                          all layers
     list_comps                           all compositions
-    layer_exists <name>                  check layer
     get_layer_info <name>                layer detail
+    get_layer_by_id <id>                 layer by ID
     get_selected_layers                  selected layers
     list_masks <name>                    layer masks
     list_comp_markers                    comp markers
@@ -29,34 +29,44 @@ Bridge (ae2claude call <method> [args...] [--key value]):
     list_precomps                        precomp list
     enumerate_effects <name>             layer effects
     render_queue_info                    render queue
+    list_available_effects               available effects
+    describe_effect <matchName>          effect detail
 
   Read Properties:
-    get_transform_value <name> <prop>    position/scale/rotation/opacity
-    get_keyframes <name> <prop>          keyframe list
-    get_property_value <name> <path>     any property
-    get_property_keyframes <name> <path> any keyframes
-    get_effect_param <name> <fx> <param> effect value
+    get_value <name> <prop>              transform value (position/scale/...)
+    get_keyframes <name> <prop>          transform keyframes
+    get_effect_param <name> <idx> <key>  effect value by index
+    get_effect_keyframes <n> <idx> <key> effect keyframes by index
     get_blending_mode <name>             blend mode
     get_parent <name>                    parent layer
 
   Create:
-    add_text_layer <text>                text layer
+    add_text_layer <text>                text layer (use set_text_style for styling)
+    add_solid <name> <color>             solid layer
     add_shape_layer <name>               shape layer
     add_shape_rect <name> --size [w,h]   rectangle
     add_shape_ellipse <name> --size [w,h] ellipse
+    add_shape_path <name> <verts>        freeform path
     add_shape_fill <name> --color [r,g,b] fill
     add_shape_stroke <name>              stroke
-    create_comp <name> <w> <h> [fps=30] [dur=10] new comp
+    create_comp <name> <w> <h>           new comp
     create_camera <name>                 camera
     create_light <name>                  light
     create_null_control <name>           null + parent
     import_file <path>                   import footage
 
-  Modify:
-    set_position_keyframes <name> <kfs>  position KFs
-    set_opacity_keyframes <name> <kfs>   opacity KFs
-    set_scale_keyframes <name> <kfs>     scale KFs
-    set_rotation_keyframes <name> <kfs>  rotation KFs
+  Transform:
+    set_value <name> <prop> <val>        set property value
+    set_keyframes <name> <prop> <kfs>    set keyframes (JSON)
+    apply_transform_easing <name> <prop> ease transform property
+
+  Effect:
+    add_effect <name> <type>             add effect -> returns index
+    set_effect_props <n> <idx> <props>   set effect values by index
+    set_effect_keyframes <n> <idx> <kfs> set effect keyframes by index
+    apply_effect_easing <n> <idx> <key>  ease effect property
+
+  Layer:
     set_blending_mode <name> <mode>      blend mode
     set_parent <child> <parent>          parenting
     remove_parent <name>                 unparent
@@ -64,15 +74,21 @@ Bridge (ae2claude call <method> [args...] [--key value]):
     set_track_matte <name> <matte> <type> track matte
     set_layer_timing <name>              in/out point
     set_layer_label <name> <label>       label color
+    set_layer_selected <name> <bool>     selection state
     rename_layer <old> <new>             rename
     reorder_layer <name> <index>         reorder
-    apply_easing <name>                  ease transform
-    set_expression <name> <path> <expr>  expression
-    clear_expression <name> <path>       clear expr
+    duplicate_layer <name>               duplicate
+    remove_layer <name>                  delete
+    deselect_all                         deselect all
+
+  Text:
+    set_text_content <name> <text>       change text
+    set_text_style <name> --font X ...   font/color/size
+    add_text_animator <name>             text animator
+    animate_text_selector <name>         selector KFs
 
   Mask:
     add_mask <name> <verts>              custom mask
-    add_mask_rect <name> <t> <l> <w> <h> rect mask
     set_mask_feather <name> <idx> <val>  feather
     set_mask_opacity <name> <idx> <val>  mask opacity
     animate_mask_path <name> <idx> <kfs> animate mask
@@ -83,29 +99,23 @@ Bridge (ae2claude call <method> [args...] [--key value]):
     add_layer_marker <name> <time>       layer marker
     remove_comp_marker <idx>             delete marker
 
-  Text:
-    add_text_animator <name> --properties {...} text animator
-    animate_text_selector <name>         selector KFs
-
   Time:
     enable_time_remap <name>             enable remap
     freeze_frame <name> <time>           freeze
     reverse_layer <name>                 reverse
+    set_expression <name> <path> <expr>  expression
+    clear_expression <name> <path>       clear expr
 
   Render:
     add_to_render_queue                  queue active comp
-    render_comp                          queue + render
     start_render                         start render
+    set_render_output <idx> <path>       set output
     clear_render_queue                   clear queue
 
-  Batch:
-    batch_jsx <scripts>                  multi-JSX
-    select_layers <names>                select
-    deselect_all                         deselect
-    duplicate_layer <name>               duplicate
-    remove_layer <name>                  delete
-    remove_layers_by_prefix <prefix>     batch delete
+  Comp:
     precompose <names> <comp_name>       precompose
+    open_precomp <name>                  open precomp
+    add_comp_to_comp <src> [target]      nest comp
 
   Undo:
     begin_undo <name>                    start undo group
@@ -463,7 +473,7 @@ def main():
         return
     elif cmd == "snapshot":
         _ensure_comp()
-        out = args[1] if len(args) > 1 else os.path.join(os.environ.get("TEMP", "/tmp"), "ae_snapshot.png").replace("\\", "/")
+        out = args[1] if len(args) > 1 else "F:/claude/tmp/ae_snapshot.png"
         out = out.replace("\\", "/")
         r = req("/jsx",
             f'(function(){{var c=app.project.activeItem;if(!c)return"ERR:no_comp";'
@@ -484,7 +494,7 @@ def main():
         print(__doc__.strip())
         return
     elif cmd == "--version":
-        print("ae2claude 2.0.0")
+        print("ae2claude 3.0.0")
         return
     elif cmd == "info":
         # 快捷: 当前合成概况
