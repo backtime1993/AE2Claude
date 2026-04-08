@@ -213,7 +213,7 @@
     "slug": "align-keys-to-cti",
     "name": "Align Keys to Current Time",
     "file": "align-keys-to-cti.jsx",
-    "note": "MoBar内置高频"
+    "note": "移动选中帧到CTI"
   },
   {
     "slug": "clone-keys",
