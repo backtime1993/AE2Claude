@@ -1823,6 +1823,73 @@ class AEBridge:
             f'c.layer("{_esc(name)}").trackMatteType=TrackMatteType.NO_TRACK_MATTE;"ok";'
         )
 
+    def set_text_content(self, name: str, text: str) -> str:
+        """
+        Change the text content of an existing text layer.
+
+        Args:
+            name: Layer name
+            text: New text content
+        """
+        safe_txt = _esc(text)
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var tp=tl.property("ADBE Text Properties").property("ADBE Text Document");'
+            f'var td=tp.value;'
+            f'td.text="{safe_txt}";'
+            f'tp.setValue(td);'
+            f'"ok";'
+        )
+        return self.run_jsx(jsx)
+
+    def set_text_style(self, name: str, font: str = None,
+                        font_size: int = None,
+                        fill_color: List[float] = None,
+                        stroke_color: List[float] = None,
+                        stroke_width: float = None,
+                        justification: str = None) -> str:
+        """
+        Set text styling properties on a text layer.
+
+        Args:
+            name: Layer name
+            font: Font name (e.g. "SourceHanSansSC-Bold")
+            font_size: Font size in px
+            fill_color: [r, g, b] in 0-1 range
+            stroke_color: [r, g, b] in 0-1 range
+            stroke_width: Stroke width in px
+            justification: "left", "center", or "right"
+        """
+        just_map = {
+            "left": "ParagraphJustification.LEFT_JUSTIFY",
+            "center": "ParagraphJustification.CENTER_JUSTIFY",
+            "right": "ParagraphJustification.RIGHT_JUSTIFY",
+        }
+
+        jsx = (
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var tp=tl.property("ADBE Text Properties").property("ADBE Text Document");'
+            f'var td=tp.value;'
+        )
+        if font_size is not None:
+            jsx += f'td.fontSize={font_size};'
+        if fill_color is not None:
+            jsx += f'td.fillColor=[{fill_color[0]},{fill_color[1]},{fill_color[2]}];td.applyFill=true;'
+        if stroke_color is not None:
+            jsx += (f'td.strokeColor=[{stroke_color[0]},{stroke_color[1]},{stroke_color[2]}];'
+                    f'td.applyStroke=true;td.strokeOverFill=false;')
+        if stroke_width is not None:
+            jsx += f'td.strokeWidth={stroke_width};'
+        if font is not None:
+            jsx += f'td.font="{font}";'
+        if justification is not None and justification in just_map:
+            jsx += f'td.justification={just_map[justification]};'
+        jsx += 'tp.setValue(td);'
+        jsx += '"ok";'
+        return self.run_jsx(jsx)
+
     # ── Text Animator ──────────────────────────────────────
 
     def add_text_animator(self, name: str, properties: Dict[str, Any] = None) -> str:
