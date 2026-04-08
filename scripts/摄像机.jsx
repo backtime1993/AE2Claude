@@ -9,8 +9,8 @@
     // ========== 1. 创建空对象（承载所有位置信息） ==========
     var nullLayer = comp.layers.addNull();
     nullLayer.threeDLayer = true;
-    nullLayer.name = "Camera Ctrl";
-    if (nullLayer.source) nullLayer.source.name = "Camera Ctrl";
+    nullLayer.name = "Camera Control";
+    if (nullLayer.source) nullLayer.source.name = "Camera Control";
     nullLayer.transform.position.setValue([comp.width / 2, comp.height / 2, -zoom]);
     nullLayer.label = 2;
     nullLayer.inPoint  = 0;
