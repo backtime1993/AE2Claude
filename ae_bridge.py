@@ -900,60 +900,90 @@ class AEBridge:
 
     # ── Effects ────────────────────────────────────────────
 
-    def add_effect(self, name: str, effect_type: str,
-                    props: Dict[str, Any] = None,
-                    keyframes: Dict[str, List[Tuple[float, Any]]] = None) -> str:
+    def add_effect(self, name: str, effect_type: str) -> int:
         """
-        为图层添加效果并设置属性值/关键帧。
-
-        ⚠️ 关键设计: 每次调用只添加一个效果 (避免 AE 对象引用失效)。
+        Add an effect to a layer. Returns the effect's 1-based index.
 
         Args:
-            name: 图层名
-            effect_type: 效果类型 key (如 "gaussian_blur", "drop_shadow")
-            props: 静态属性 {prop_key: value}
-            keyframes: 动态属性关键帧 {prop_key: [(time, value), ...]}
-
+            name: Layer name
+            effect_type: Effect type key from EFFECTS registry (e.g. "gaussian_blur")
         Returns:
-            "ok" 或错误信息
+            effect_index (int) — use this for all subsequent effect operations
         """
         fx = EFFECTS.get(effect_type)
         if not fx:
-            return f"ERR: unknown effect '{effect_type}'. Available: {list(EFFECTS.keys())}"
-
+            raise ValueError(f"Unknown effect '{effect_type}'. Available: {list(EFFECTS.keys())}")
         mn = fx["matchName"]
         jsx = (
             f'try{{'
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
             f'var ef=tl.property("Effects").addProperty("{mn}");'
+            f'ef.propertyIndex;'
+            f'}}catch(e){{"ERR:"+e.toString()}}'
         )
+        r = self.run_jsx(jsx)
+        if r.startswith("ERR:"):
+            raise RuntimeError(r)
+        return int(r)
 
-        # 设置静态属性
-        if props:
-            for key, val in props.items():
-                prop_mn = fx["props"].get(key)
-                if not prop_mn:
-                    continue
+    def set_effect_props(self, name: str, effect_index: int,
+                         props: Dict[str, Any]) -> str:
+        """
+        Set static property values on an effect.
+
+        Args:
+            name: Layer name
+            effect_index: 1-based effect index (from add_effect or enumerate_effects)
+            props: {prop_key: value} — prop_key from EFFECTS registry
+        """
+        jsx = (
+            f'try{{'
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var ef=tl.property("Effects").property({effect_index});'
+            f'if(!ef){{"ERR:effect_not_found"}}else{{'
+        )
+        for key, val in props.items():
+            mn = self._resolve_effect_prop(key)
+            if mn is None:
+                continue
+            if isinstance(val, (list, tuple)):
+                jsx += f'ef.property("{mn}").setValue({json.dumps(val)});'
+            else:
+                jsx += f'ef.property("{mn}").setValue({val});'
+        jsx += '"ok";}}'
+        jsx += f'}}catch(e){{"FX_ERR:"+e.toString()}}'
+        return self.run_jsx(jsx)
+
+    def set_effect_keyframes(self, name: str, effect_index: int,
+                              keyframes: Dict[str, List[Tuple[float, Any]]]) -> str:
+        """
+        Set keyframes on effect properties.
+
+        Args:
+            name: Layer name
+            effect_index: 1-based effect index
+            keyframes: {prop_key: [(time, value), ...]}
+        """
+        jsx = (
+            f'try{{'
+            f'var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");'
+            f'var ef=tl.property("Effects").property({effect_index});'
+            f'if(!ef){{"ERR:effect_not_found"}}else{{'
+        )
+        for key, kfs in keyframes.items():
+            mn = self._resolve_effect_prop(key)
+            if mn is None:
+                continue
+            for t, val in kfs:
                 if isinstance(val, (list, tuple)):
-                    jsx += f'ef.property("{prop_mn}").setValue({json.dumps(val)});'
+                    jsx += f'ef.property("{mn}").setValueAtTime({t},{json.dumps(val)});'
                 else:
-                    jsx += f'ef.property("{prop_mn}").setValue({val});'
-
-        # 设置关键帧属性
-        if keyframes:
-            for key, kfs in keyframes.items():
-                prop_mn = fx["props"].get(key)
-                if not prop_mn:
-                    continue
-                for t, val in kfs:
-                    if isinstance(val, (list, tuple)):
-                        jsx += f'ef.property("{prop_mn}").setValueAtTime({t},{json.dumps(val)});'
-                    else:
-                        jsx += f'ef.property("{prop_mn}").setValueAtTime({t},{val});'
-
-        jsx += '"ok";'
-        jsx += f'}}catch(e){{"FX_ERR:"+e.toString()+" L:"+e.line;}}'
+                    jsx += f'ef.property("{mn}").setValueAtTime({t},{val});'
+        jsx += '"ok";}}'
+        jsx += f'}}catch(e){{"FX_ERR:"+e.toString()}}'
         return self.run_jsx(jsx)
 
     def enumerate_effects(self, name: str) -> List[dict]:
@@ -1298,19 +1328,25 @@ class AEBridge:
         except json.JSONDecodeError:
             return []
 
-    def get_effect_param(self, name: str, effect_match_name: str,
-                          param_match_name: str, at_time: float = None) -> Any:
-        """读取效果属性值。"""
-        time_part = f'.valueAtTime({at_time},false)' if at_time is not None else '.value'
+    def get_effect_param(self, name: str, effect_index: int,
+                          prop_key: str) -> Any:
+        """
+        Read an effect property value.
+
+        Args:
+            name: Layer name
+            effect_index: 1-based effect index
+            prop_key: Property key from EFFECTS registry
+        """
+        mn = self._resolve_effect_prop(prop_key)
+        if mn is None:
+            raise ValueError(f"Unknown effect prop_key '{prop_key}'")
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var fx=tl.property("Effects");'
-            f'var ef=null;for(var i=fx.numProperties;i>=1;i--){{'
-            f'if(fx.property(i).matchName=="{effect_match_name}"){{ef=fx.property(i);break;}}}}'
-            f'if(!ef)JSON.stringify({{error:"effect_not_found"}});else{{'
-            f'var v=ef.property("{param_match_name}"){time_part};'
-            f'JSON.stringify(v instanceof Array?v:[v]);}}'
+            f'var ef=tl.property("Effects").property({effect_index});'
+            f'if(!ef)"ERR:effect_not_found";'
+            f'else{{var v=ef.property("{mn}").value;JSON.stringify(v);}}'
         )
         r = self.run_jsx(jsx)
         try:
@@ -1318,25 +1354,32 @@ class AEBridge:
         except json.JSONDecodeError:
             return r
 
-    def get_effect_keyframes(self, name: str, effect_match_name: str,
-                              param_match_name: str) -> List[Tuple[float, Any]]:
-        """读取效果属性的所有关键帧。"""
+    def get_effect_keyframes(self, name: str, effect_index: int,
+                              prop_key: str) -> List[Tuple[float, Any]]:
+        """
+        Read keyframes of an effect property.
+
+        Args:
+            name: Layer name
+            effect_index: 1-based effect index
+            prop_key: Property key from EFFECTS registry
+        """
+        mn = self._resolve_effect_prop(prop_key)
+        if mn is None:
+            raise ValueError(f"Unknown effect prop_key '{prop_key}'")
         jsx = (
             f'var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'var fx=tl.property("Effects");'
-            f'var ef=null;for(var i=fx.numProperties;i>=1;i--){{'
-            f'if(fx.property(i).matchName=="{effect_match_name}"){{ef=fx.property(i);break;}}}}'
-            f'if(!ef)JSON.stringify([]);else{{'
-            f'var p=ef.property("{param_match_name}");var out=[];'
+            f'var ef=tl.property("Effects").property({effect_index});'
+            f'if(!ef)"ERR:effect_not_found";else{{'
+            f'var p=ef.property("{mn}");var out=[];'
             f'for(var k=1;k<=p.numKeys;k++){{'
-            f'out.push({{t:p.keyTime(k),v:p.keyValue(k)}});}}'
-            f'JSON.stringify(out);}}'
+            f'out.push([p.keyTime(k),p.keyValue(k)]);'
+            f'}}JSON.stringify(out);}}'
         )
         r = self.run_jsx(jsx)
         try:
-            data = json.loads(r)
-            return [(kf["t"], kf["v"]) for kf in data]
+            return json.loads(r)
         except json.JSONDecodeError:
             return []
 
@@ -2282,6 +2325,19 @@ class AEBridge:
         )
         r = self._run_py(code)
         return json.loads(r)
+
+    @staticmethod
+    def _resolve_effect_prop(prop_key: str) -> Optional[str]:
+        """Resolve effect prop_key to matchName by scanning EFFECTS registry.
+
+        Searches all registered effects for a matching prop_key and returns
+        the matchName. Returns None if prop_key not found in any effect.
+        """
+        for fx_data in EFFECTS.values():
+            mn = fx_data["props"].get(prop_key)
+            if mn is not None:
+                return mn
+        return None
 
     def _run_py(self, code: str) -> str:
         """执行 Python 代码并返回 result 变量的值"""
