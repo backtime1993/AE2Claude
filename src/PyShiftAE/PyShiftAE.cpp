@@ -215,25 +215,39 @@ std::vector<Manifest> getManifests() {
 }
 
 void ensurePythonHome() {
-	// Embedded Python needs PYTHONHOME to find the standard library (encodings, etc.)
-	// Only set if not already defined by the environment.
+	// Embedded Python needs PYTHONHOME to find the standard library.
+	// Always force-set to ensure runpy/http.server/multiprocessing are reachable.
 	static std::wstring pythonHome;
-	if (pythonHome.empty() && !std::getenv("PYTHONHOME")) {
-		// Locate python312.dll next to AfterFX.exe, then resolve the real Python prefix
-		// via the registry or a known scoop install path.
-		const wchar_t* candidates[] = {
-			L"C:\\Python312",
-			L"C:\\Program Files\\Python312",
-		};
-		for (auto* c : candidates) {
-			auto lib = std::filesystem::path(c) / "Lib" / "encodings" / "__init__.py";
-			if (std::filesystem::exists(lib)) {
-				pythonHome = c;
-				Py_SetPythonHome(pythonHome.c_str());
-				return;
-			}
+	if (!pythonHome.empty()) return;  // already resolved in this process
+
+	// Build candidate list: scoop first (most common dev setup), then standard paths
+	std::vector<std::wstring> candidates;
+
+	// 1. Scoop install (dynamic from %USERPROFILE%)
+	wchar_t userProfile[MAX_PATH];
+	if (GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH) > 0) {
+		candidates.push_back(std::wstring(userProfile) + L"\\scoop\\apps\\python312\\current");
+		candidates.push_back(std::wstring(userProfile) + L"\\scoop\\apps\\python\\current");
+	}
+	// 2. Microsoft Store / python.org install
+	wchar_t localAppData[MAX_PATH];
+	if (GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH) > 0) {
+		candidates.push_back(std::wstring(localAppData) + L"\\Programs\\Python\\Python312");
+	}
+	// 3. System-wide installs
+	candidates.push_back(L"C:\\Python312");
+	candidates.push_back(L"C:\\Program Files\\Python312");
+
+	for (const auto& c : candidates) {
+		auto runpyPath = std::filesystem::path(c) / "Lib" / "runpy.py";
+		if (std::filesystem::exists(runpyPath)) {
+			pythonHome = c;
+			Py_SetPythonHome(pythonHome.c_str());
+			OutputDebugStringW((L"AE2Claude: PYTHONHOME set to " + pythonHome + L"\n").c_str());
+			return;
 		}
 	}
+	OutputDebugStringW(L"AE2Claude: WARNING — no valid Python home found in any candidate path\n");
 }
 
 void startPythonThread(std::atomic<bool>& shouldExitPythonThread, std::mutex& scriptQueueMutex, std::condition_variable& scriptAddedCond, std::queue<ScriptTask>& scriptExecutionQueue) {
@@ -286,13 +300,19 @@ with open(__pyshiftae_alive_path, 'w', encoding='utf-8') as f:
 					AppendTextFile(cppErrorLogPath, "Server script not found next to plugin or build output.\n");
 				}
 			}
+			catch (const py::error_already_set& e) {
+				std::string msg = std::string("AE2Claude server Python error: ") + e.what() + "\n";
+				AppendTextFile(cppErrorLogPath, msg);
+				OutputDebugStringA(msg.c_str());
+			}
 			catch (const std::exception& e) {
-				std::cerr << "AE2Claude server error: " << e.what() << std::endl;
-				AppendTextFile(cppErrorLogPath, std::string("AE2Claude server error: ") + e.what() + "\n");
+				std::string msg = std::string("AE2Claude server error: ") + e.what() + "\n";
+				AppendTextFile(cppErrorLogPath, msg);
+				OutputDebugStringA(msg.c_str());
 			}
 			catch (...) {
-				std::cerr << "AE2Claude server unknown error" << std::endl;
 				AppendTextFile(cppErrorLogPath, "AE2Claude server unknown error\n");
+				OutputDebugStringA("AE2Claude server unknown error\n");
 			}
 
 			while (!shouldExitPythonThread.load()) {
