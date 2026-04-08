@@ -1554,25 +1554,6 @@ class AEBridge:
         )
         return self.run_jsx(jsx)
 
-    def add_mask_rect(self, name: str, top: float, left: float,
-                       width: float, height: float, **kwargs) -> str:
-        """矩形蒙版快捷方法"""
-        verts = [[left, top], [left + width, top],
-                 [left + width, top + height], [left, top + height]]
-        return self.add_mask(name, verts, **kwargs)
-
-    def add_mask_ellipse(self, name: str, center: List[float],
-                          size: List[float], segments: int = 32, **kwargs) -> str:
-        """椭圆蒙版快捷方法"""
-        import math
-        rx, ry = size[0] / 2, size[1] / 2
-        cx, cy = center
-        verts = []
-        for i in range(segments):
-            angle = 2 * math.pi * i / segments
-            verts.append([cx + rx * math.cos(angle), cy + ry * math.sin(angle)])
-        return self.add_mask(name, verts, **kwargs)
-
     def list_masks(self, name: str) -> List[dict]:
         """列出图层所有蒙版"""
         r = self.run_jsx(
@@ -2001,11 +1982,14 @@ class AEBridge:
     def add_layer_style(self, name: str, style: str,
                          props: Dict[str, Any] = None) -> str:
         """
-        为图层启用 Layer Style（通过 AEGP SDK DynamicStreamSuite）。
+        [EXPERIMENTAL] Enable a Layer Style via AEGP SDK DynamicStreamSuite.
+
+        WARNING: AE scripting support for Layer Styles is limited.
+        Many styles return ERR:not_scriptable. Use at own risk.
 
         style: drop_shadow/inner_shadow/outer_glow/inner_glow/bevel_emboss/
                satin/color_overlay/gradient_overlay/pattern_overlay/stroke
-        props: 属性字典（启用后通过 JSX 设置），key 用 AE 属性 matchName
+        props: Property dict (key = AE matchName)
         """
         style_matchnames = {
             "drop_shadow": "dropShadow/enabled",
@@ -2031,7 +2015,12 @@ class AEBridge:
 
     def enable_layer_style(self, name: str, style: str,
                             enabled: bool = True) -> str:
-        """启用/禁用指定 Layer Style — 当前不支持脚本化"""
+        """
+        [EXPERIMENTAL] Toggle a Layer Style on/off.
+
+        WARNING: AE's canSetEnabled returns false for most styles.
+        This method may silently fail.
+        """
         return ("ERR:not_scriptable — Layer Styles require AE menu")
 
     # ── 3D / Camera / Light ────────────────────────────────
@@ -2220,25 +2209,7 @@ class AEBridge:
             timeout=600000
         )
 
-    def render_comp(self, comp_name: str = None, output_path: str = None,
-                     template: str = None) -> str:
-        """快捷方法：加入队列 + 设置输出 + 开始渲染"""
-        self.add_to_render_queue(comp_name, output_path, template)
-        return self.start_render()
-
     # ── Batch / Selection ──────────────────────────────────
-
-    def batch_jsx(self, scripts: List[str]) -> List[Any]:
-        """批量执行多段 JSX（一次 HTTP 调用）。"""
-        wrapped = 'var _results=[];'
-        for i, s in enumerate(scripts):
-            wrapped += f'try{{_results.push({s})}}catch(e){{_results.push("ERR:"+e.toString())}}'
-        wrapped += 'JSON.stringify(_results);'
-        r = self.run_jsx(wrapped)
-        try:
-            return json.loads(r)
-        except json.JSONDecodeError:
-            return [r]
 
     def set_layer_selected(self, name: str, selected: bool = True) -> str:
         """Set a single layer's selection state."""
