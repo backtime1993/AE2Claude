@@ -2,3 +2,15 @@
 __pycache__/
 *.pyc
 /docs/
+
+# Local Adobe SDK links/junctions used for Windows builds.
+/Headers/
+/Resources/
+/Util/
+
+# Visual Studio and local build outputs.
+/build/
+/src/PyShiftAE/Win/x64/
+/src/PyShiftAE/Win/.vs/
+/src/PyShiftAE/Win/*.user
+/src/PyShiftAE/Win/*.VC.db
