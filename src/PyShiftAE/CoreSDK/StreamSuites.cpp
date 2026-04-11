@@ -17,6 +17,22 @@ Result<AEGP_StreamRefH> getNewLayerStream(
     return result;
 }
 
+Result<A_Boolean> isStreamLegal(
+    Result<AEGP_LayerH> layerH, AEGP_LayerStream which_stream)
+{
+    AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+    A_Err err = A_Err_NONE;
+    A_Boolean isLegal = FALSE;
+
+    ERR(suites.StreamSuite6()->AEGP_IsStreamLegal(
+        layerH.value, which_stream, &isLegal));
+
+    Result<A_Boolean> result;
+    result.value = isLegal;
+    result.error = err;
+    return result;
+}
+
 Result<AEGP_StreamValue2> getNewStreamValue(
     Result<AEGP_StreamRefH> streamH,
     AEGP_LTimeMode time_mode,
@@ -95,6 +111,70 @@ Result<A_Boolean> isStreamTimevarying(Result<AEGP_StreamRefH> streamH)
     return result;
 }
 
+Result<AEGP_StreamGroupingType> getStreamGroupingType(Result<AEGP_StreamRefH> streamH)
+{
+    AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+    A_Err err = A_Err_NONE;
+    AEGP_StreamGroupingType groupType = AEGP_StreamGroupingType_NONE;
+
+    ERR(suites.DynamicStreamSuite4()->AEGP_GetStreamGroupingType(streamH.value, &groupType));
+
+    Result<AEGP_StreamGroupingType> result;
+    result.value = groupType;
+    result.error = err;
+    return result;
+}
+
+Result<std::string> getStreamName(Result<AEGP_StreamRefH> streamH, bool forceEnglish)
+{
+    AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+    A_Err err = A_Err_NONE;
+    AEGP_MemHandle utfStreamNameMH = NULL;
+    A_UTF16Char* utfStreamNameP = NULL;
+    std::string streamName;
+
+    PT_XTE_START {
+        AEGP_PluginID* pluginIDPtr = SuiteManager::GetInstance().GetPluginID();
+        if (!pluginIDPtr) {
+            throw A_Err_STRUCT;
+        }
+
+        PT_ETX(suites.StreamSuite6()->AEGP_GetStreamName(
+            *pluginIDPtr,
+            streamH.value,
+            forceEnglish ? TRUE : FALSE,
+            &utfStreamNameMH));
+
+        if (utfStreamNameMH) {
+            PT_ETX(suites.MemorySuite1()->AEGP_LockMemHandle(utfStreamNameMH, (void**)&utfStreamNameP));
+            streamName = convertUTF16ToUTF8(utfStreamNameP);
+            PT_ETX(suites.MemorySuite1()->AEGP_UnlockMemHandle(utfStreamNameMH));
+            PT_ETX(suites.MemorySuite1()->AEGP_FreeMemHandle(utfStreamNameMH));
+            utfStreamNameMH = NULL;
+        }
+
+        Result<std::string> result;
+        result.value = streamName;
+        result.error = err;
+        return result;
+    }
+    PT_XTE_CATCH_RETURN_ERR;
+}
+
+Result<std::string> getStreamMatchName(Result<AEGP_StreamRefH> streamH)
+{
+    AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+    A_Err err = A_Err_NONE;
+    A_char matchName[AEGP_MAX_STREAM_MATCH_NAME_SIZE] = {};
+
+    ERR(suites.DynamicStreamSuite4()->AEGP_GetMatchName(streamH.value, matchName));
+
+    Result<std::string> result;
+    result.value = std::string(matchName);
+    result.error = err;
+    return result;
+}
+
 Result<void> disposeStream(Result<AEGP_StreamRefH> streamH)
 {
     AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
@@ -157,15 +237,73 @@ Result<AEGP_StreamRefH> getNewStreamByMatchname(
 {
     AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
     AEGP_PluginID* pluginIDPtr = SuiteManager::GetInstance().GetPluginID();
-    A_Err err = A_Err_NONE;
-    AEGP_StreamRefH streamH = NULL;
-
-    ERR(suites.DynamicStreamSuite4()->AEGP_GetNewStreamRefByMatchname(
-        *pluginIDPtr, groupH.value, matchname.c_str(), &streamH));
-
     Result<AEGP_StreamRefH> result;
-    result.value = streamH;
-    result.error = err;
+    result.value = NULL;
+
+    if (groupH.error != A_Err_NONE) {
+        result.error = groupH.error;
+        return result;
+    }
+    if (groupH.value == NULL || pluginIDPtr == NULL) {
+        result.error = A_Err_STRUCT;
+        return result;
+    }
+
+    AEGP_StreamGroupingType groupType = AEGP_StreamGroupingType_NONE;
+    A_Err err = suites.DynamicStreamSuite4()->AEGP_GetStreamGroupingType(
+        groupH.value, &groupType);
+    if (err != A_Err_NONE) {
+        result.error = err;
+        return result;
+    }
+
+    if (groupType != AEGP_StreamGroupingType_NAMED_GROUP &&
+        groupType != AEGP_StreamGroupingType_INDEXED_GROUP) {
+        result.error = A_Err_GENERIC;
+        return result;
+    }
+
+    A_long numStreams = 0;
+    err = suites.DynamicStreamSuite4()->AEGP_GetNumStreamsInGroup(
+        groupH.value, &numStreams);
+    if (err != A_Err_NONE) {
+        result.error = err;
+        return result;
+    }
+
+    for (A_long index = 0; index < numStreams; ++index) {
+        AEGP_StreamRefH candidateH = NULL;
+        err = suites.DynamicStreamSuite4()->AEGP_GetNewStreamRefByIndex(
+            *pluginIDPtr, groupH.value, index, &candidateH);
+        if (err != A_Err_NONE) {
+            result.error = err;
+            return result;
+        }
+        if (candidateH == NULL) {
+            continue;
+        }
+
+        A_char candidateMatchName[AEGP_MAX_STREAM_MATCH_NAME_SIZE] = {};
+        err = suites.DynamicStreamSuite4()->AEGP_GetMatchName(
+            candidateH, candidateMatchName);
+        if (err == A_Err_NONE && matchname == candidateMatchName) {
+            result.value = candidateH;
+            result.error = A_Err_NONE;
+            return result;
+        }
+
+        A_Err disposeErr = suites.StreamSuite6()->AEGP_DisposeStream(candidateH);
+        if (err != A_Err_NONE) {
+            result.error = err;
+            return result;
+        }
+        if (disposeErr != A_Err_NONE) {
+            result.error = disposeErr;
+            return result;
+        }
+    }
+
+    result.error = A_Err_GENERIC;
     return result;
 }
 

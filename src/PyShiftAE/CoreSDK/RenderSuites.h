@@ -5,6 +5,7 @@
 
 
 Result<AEGP_FrameReceiptH> renderAndCheckoutFrame(Result<AEGP_RenderOptionsH> roH);
+Result<AEGP_FrameReceiptH> renderAndCheckoutLayerFrame(Result<AEGP_LayerRenderOptionsH> roH);
 
 Result<AEGP_WorldH> getReceiptWorld(Result<AEGP_FrameReceiptH> receiptH);
 

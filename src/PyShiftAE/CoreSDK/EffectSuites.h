@@ -21,6 +21,8 @@ Result<void> DisposeEffect(Result<AEGP_EffectRefH> effectH);
 
 Result<AEGP_EffectRefH> ApplyEffect(Result<AEGP_LayerH> layerH, Result<AEGP_InstalledEffectKey> installed_key);
 
+Result<int> ApplyEffectByMatchName(Result<AEGP_LayerH> layerH, const std::string& matchName);
+
 Result<void> DeleteLayerEffect(Result<AEGP_EffectRefH> effect_refH);
 
 Result<int> GetNumInstalledEffects();

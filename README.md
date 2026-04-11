@@ -7,6 +7,7 @@
 - 在终端输入命令，AE 就会执行对应操作
 - AI Agent（如 Claude）可以通过它自动化 AE 工作流
 - 支持几乎所有 AE 操作：图层、关键帧、效果、蒙版、文字、摄像机、渲染等
+- 可检测并删除 PSD/纯色素材里的纯灰/纯白底色层（适合原画包装流程）
 
 ## 快速上手
 
@@ -22,14 +23,26 @@
 ```bash
 ae2claude                              # 检查连接状态
 ae2claude layers                       # 查看当前合成里的图层
+ae2claude pixel 100 200               # 精确读取单个像素
+ae2claude pixels 100 200 300 400      # 精确读取多个像素点
+ae2claude color 31                    # 快速判断第 31 层的大概颜色（32x32 降采样）
+ae2claude colors 31 32                # 批量快速判断多层的大概颜色
 ae2claude call add_text_layer "Hello"  # 创建文字图层
 ae2claude call set_text_style "Hello" --font_size 72 --fill_color "[1,0,0]"
 ae2claude call set_keyframes "Hello" opacity "[[0,0],[1,100]]"  # 淡入动画
 ae2claude call add_effect "Hello" gaussian_blur                  # 加模糊
 ae2claude call set_effect_props "Hello" 1 "{\"blurriness\": 20}" # 设模糊值
+ae2claude call remove_solid_background_layers --max_layers 2     # 清理底部灰/白底色层
 ae2claude snapshot                     # 截图保存当前帧
 ae2claude help                         # 查看所有命令
 ```
+
+### 像素读取两档
+
+- `ae2claude pixel` / `ae2claude pixels`
+  精确取点。适合确认某个坐标的真实颜色。
+- `ae2claude color` / `ae2claude colors`
+  快速近似取色。内部会把目标层按 `32x32` 级别降采样，再返回整层的大概颜色、透明度范围等统计。
 
 ### Python 调用
 
@@ -44,6 +57,13 @@ with AEBridge() as ae:
 
     idx = ae.add_effect("Hello", "gaussian_blur")
     ae.set_effect_props("Hello", idx, {"blurriness": 10})
+
+    # 精确取点
+    pixel = ae.sample_pixel(100, 200)
+
+    # 单层 / 多层快速近似取色
+    color = ae.approximate_layer_color(31)
+    colors = ae.approximate_layers_color([31, 32])
 ```
 
 ## 设计原则

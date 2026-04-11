@@ -13,6 +13,7 @@
 #include "PyShiftAE.h"
 #include <filesystem>
 #include <fstream>
+#include <queue>
 #include "CoreLib/Json.h"
 #include "MessageManager.h"
 
@@ -409,16 +410,20 @@ UpdateMenuHook(
 static A_Err IdleHook(AEGP_GlobalRefcon plugin_refconP, AEGP_IdleRefcon refconP, A_long* max_sleepPL) {
 	A_Err err = A_Err_NONE;
 
-	// Process all pending messages (not just one)
-	auto message = MessageQueue::getInstance().dequeue();
-	while (message != nullptr) {
+	// Keep each idle slice bounded so stale backlogs cannot monopolize AE.
+	constexpr int kMaxMessagesPerIdle = 32;
+	int processed = 0;
+	for (; processed < kMaxMessagesPerIdle; ++processed) {
+		auto message = MessageQueue::getInstance().dequeue();
+		if (message == nullptr) {
+			break;
+		}
 		message->execute();
-		message = MessageQueue::getInstance().dequeue();
 	}
 
-	// Request fast idle callback (10ms) so HTTP thread waits are short
 	if (max_sleepPL) {
-		*max_sleepPL = 10;  // milliseconds
+		// PostMessage wakes AE when work arrives; idle polling can stay slow when empty.
+		*max_sleepPL = MessageQueue::getInstance().hasPending() ? 10 : 250;
 	}
 
 	return err;

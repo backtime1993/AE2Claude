@@ -53,7 +53,7 @@ public:
     void SetLayerName(std::string name);
     int index();
     void changeIndex(int index);    
-    std::shared_ptr<FootageItem> duplicate();
+    std::shared_ptr<Layer> duplicate();
     float layerTime(); //gets the current time in layer time 
     float layerCompTime(); //gets the current time in comp time
     float inPoint(); //gets the in point in layer time
@@ -86,6 +86,7 @@ public:
     void setSamplingQuality(int quality);
     float convertCompToLayerTime(float compTime);
     float convertLayerToCompTime(float layerTime);
+    py::array_t<uint8_t> renderFramePixels(float time = -1.0f, int maxDimension = 0);
 protected:
     Result<AEGP_LayerH> layerHandle_;
     int index_;
@@ -112,6 +113,7 @@ public:
     bool isSelected();
     void setSelected(bool select);
     std::string getType();
+    py::array_t<uint8_t> renderFramePixels(float time = -1.0f, int maxDimension = 0);
 protected:
     Result<AEGP_ItemH> itemHandle_;
 };
@@ -240,7 +242,7 @@ public:
     void setDisplayStartTime(float time);
     std::shared_ptr<CompItem> duplicateComp();
     // Render a frame and return pixel data as numpy array (BGRA, uint8)
-    py::array_t<uint8_t> renderFramePixels(float time = -1.0f);
+    py::array_t<uint8_t> renderFramePixels(float time = -1.0f, int maxDimension = 0);
     // Static factory method to create a new CompItem
     static std::shared_ptr<CompItem> CreateNew(std::string name, float width, float height, float frameRate, float duration, float aspectRatio) {
         Result<AEGP_ItemH> itemHandle;

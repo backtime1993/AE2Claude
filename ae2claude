@@ -9,6 +9,10 @@ Built-in:
   ae2claude                              health check
   ae2claude jsx <code>                   run ExtendScript
   ae2claude py <code>                    run Python (PyShiftCore)
+  ae2claude pixel <x> <y>                precise single-pixel sample
+  ae2claude pixels <pts...>              precise multi-pixel sample
+  ae2claude color <layer>                fast approximate layer color
+  ae2claude colors <layers...>           fast approximate colors for many layers
   ae2claude version                      AE version
   ae2claude comps                        list compositions
   ae2claude layers                       list layers in active comp
@@ -25,6 +29,7 @@ Bridge (ae2claude call <method> [args...] [--key value]):
     project_info                         project info
     list_layers                          all layers
     list_comps                           all compositions
+    detect_solid_background_layers       detect white/gray bg layers near comp bottom
     get_layer_info <name>                layer detail
     get_layer_by_id <id>                 layer by ID
     get_selected_layers                  selected layers
@@ -83,6 +88,7 @@ Bridge (ae2claude call <method> [args...] [--key value]):
     rename_layer <old> <new>             rename
     reorder_layer <name> <index>         reorder
     duplicate_layer <name>               duplicate
+    remove_solid_background_layers       detect + remove white/gray bg layers
     remove_layer <name>                  delete
     deselect_all                         deselect all
 
@@ -333,15 +339,8 @@ def _parse_arg(s):
     except (json.JSONDecodeError, ValueError):
         return s
 
-def _call_method(method_name, args):
-    ae = _get_bridge()
-    method = getattr(ae, method_name, None)
-    if method is None:
-        print(f"error: unknown method '{method_name}'", file=sys.stderr)
-        print(f"hint: ae2claude methods", file=sys.stderr)
-        sys.exit(1)
-
-    # Parse --key value kwargs and positional args
+def _split_call_args(args):
+    """Split CLI args into positional / kwargs for bridge calls."""
     positional = []
     kwargs = {}
     i = 0
@@ -357,20 +356,77 @@ def _call_method(method_name, args):
         else:
             positional.append(_parse_arg(args[i]))
             i += 1
+    return positional, kwargs
+
+def _print_method_result(result):
+    if isinstance(result, (dict, list)):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    elif result is not None:
+        s = str(result)
+        if s.startswith("ERR:"):
+            print(s, file=sys.stderr)
+            sys.exit(1)
+        print(s)
+
+def _invoke_method(method_name, positional=None, kwargs=None):
+    ae = _get_bridge()
+    method = getattr(ae, method_name, None)
+    if method is None:
+        print(f"error: unknown method '{method_name}'", file=sys.stderr)
+        print(f"hint: ae2claude methods", file=sys.stderr)
+        sys.exit(1)
+
+    positional = positional or []
+    kwargs = kwargs or {}
 
     try:
         result = method(*positional, **kwargs)
-        if isinstance(result, (dict, list)):
-            print(json.dumps(result, indent=2, ensure_ascii=False))
-        elif result is not None:
-            s = str(result)
-            if s.startswith("ERR:"):
-                print(s, file=sys.stderr)
-                sys.exit(1)
-            print(s)
+        _print_method_result(result)
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
+
+def _call_method(method_name, args):
+    positional, kwargs = _split_call_args(args)
+    _invoke_method(method_name, positional=positional, kwargs=kwargs)
+
+def _normalize_points_args(positional):
+    """Normalize pixels command arguments into [[x, y], ...]."""
+    if len(positional) == 1 and isinstance(positional[0], list):
+        raw_points = positional[0]
+    else:
+        if len(positional) < 2 or len(positional) % 2 != 0:
+            raise ValueError("pixels needs either [[x,y], ...] or flat x y pairs")
+        raw_points = [
+            [positional[i], positional[i + 1]]
+            for i in range(0, len(positional), 2)
+        ]
+
+    points = []
+    for pt in raw_points:
+        if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+            raise ValueError("points must be [[x, y], ...]")
+        points.append([int(pt[0]), int(pt[1])])
+    return points
+
+def _normalize_layers_args(positional):
+    """Normalize colors command arguments into [layer, ...]."""
+    if len(positional) == 1 and isinstance(positional[0], list):
+        raw_layers = positional[0]
+    else:
+        raw_layers = positional
+
+    if not raw_layers:
+        raise ValueError("colors needs at least one layer")
+
+    layers = []
+    for layer in raw_layers:
+        if isinstance(layer, float) and layer.is_integer():
+            layer = int(layer)
+        if not isinstance(layer, (int, str)):
+            raise ValueError("layers must be indices or names")
+        layers.append(layer)
+    return layers
 
 def _list_methods():
     ae = _get_bridge()
@@ -438,6 +494,46 @@ def main():
         r = req("/jsx",
             'var c=app.project.activeItem;if(!c)"no active comp";'
             'else{var r=[];for(var i=1;i<=c.numLayers;i++)r.push(i+": "+c.layer(i).name);r.join("\\n")}')
+    elif cmd == "pixel":
+        _ensure_comp()
+        positional, kwargs = _split_call_args(args[1:])
+        if len(positional) != 2:
+            print("usage: ae2claude pixel <x> <y> [--time T]", file=sys.stderr)
+            sys.exit(1)
+        _invoke_method("sample_pixel", positional=positional, kwargs=kwargs)
+        return
+    elif cmd == "pixels":
+        _ensure_comp()
+        positional, kwargs = _split_call_args(args[1:])
+        try:
+            points = _normalize_points_args(positional)
+        except ValueError as e:
+            print(f"usage: ae2claude pixels <x1> <y1> [x2 y2 ...] [--time T]", file=sys.stderr)
+            print(f"       ae2claude pixels '[[x1,y1],[x2,y2]]' [--time T]", file=sys.stderr)
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(1)
+        _invoke_method("sample_pixels", positional=[points], kwargs=kwargs)
+        return
+    elif cmd == "color":
+        _ensure_comp()
+        positional, kwargs = _split_call_args(args[1:])
+        if len(positional) != 1:
+            print("usage: ae2claude color <layer> [--time T] [--max-dimension N] [--tolerance N]", file=sys.stderr)
+            sys.exit(1)
+        _invoke_method("approximate_layer_color", positional=positional, kwargs=kwargs)
+        return
+    elif cmd == "colors":
+        _ensure_comp()
+        positional, kwargs = _split_call_args(args[1:])
+        try:
+            layers = _normalize_layers_args(positional)
+        except ValueError as e:
+            print("usage: ae2claude colors <layer1> [layer2 ...] [--time T] [--max-dimension N] [--tolerance N]", file=sys.stderr)
+            print("       ae2claude colors '[31,32,\"Layer Name\"]' [--time T] [--max-dimension N] [--tolerance N]", file=sys.stderr)
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(1)
+        _invoke_method("approximate_layers_color", positional=[layers], kwargs=kwargs)
+        return
     elif cmd in ("health", "status"):
         r = req("/")
         print(json.dumps(r, indent=2, ensure_ascii=False))

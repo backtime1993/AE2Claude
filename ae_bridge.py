@@ -1179,44 +1179,49 @@ class AEBridge:
     def list_available_effects(self) -> dict:
         """
         探测当前 AE 中所有可用效果。
-        创建临时 solid，对 KNOWN_EFFECT_MATCHNAMES 逐一 canAddProperty + addProperty
-        获取 displayName，完成后 undo 清理。
+        创建临时 solid，对 KNOWN_EFFECT_MATCHNAMES 分批 canAddProperty + addProperty
+        获取 displayName，完成后 undo 清理。分批避免 5s IdleHook 超时。
         """
-        mn_json = json.dumps(KNOWN_EFFECT_MATCHNAMES)
-        jsx = (
-            '(function(){'
-            'var c=app.project.activeItem;'
-            'if(!c||!(c instanceof CompItem))return JSON.stringify({error:"No active comp"});'
-            'app.beginUndoGroup("__probe__");'
-            'try{'
-            'var solid=c.layers.addSolid([0,0,0],"__effect_probe__",10,10,1);'
-            'var efx=solid.property("Effects");'
-            'var mns=' + mn_json + ';'
-            'var out=[];'
-            'for(var i=0;i<mns.length;i++){'
-            'try{if(efx.canAddProperty(mns[i])){'
-            'var e=efx.addProperty(mns[i]);'
-            'out.push({matchName:mns[i],displayName:e.name});'
-            '}}catch(x){}}'
-            'solid.remove();'
-            'app.endUndoGroup();'
-            'app.executeCommand(16);'
-            'return JSON.stringify(out);'
-            '}catch(e){'
-            'app.endUndoGroup();'
-            'try{app.executeCommand(16);}catch(x){}'
-            'return JSON.stringify({error:e.toString()});'
-            '}'
-            '})()'
-        )
-        r = self.run_jsx(jsx, timeout=120000)
-        try:
-            data = json.loads(r)
-            if isinstance(data, dict) and 'error' in data:
-                return data
-            return {"count": len(data), "effects": data}
-        except json.JSONDecodeError:
-            return {"error": r}
+        BATCH_SIZE = 25
+        all_effects: list = []
+        for start in range(0, len(KNOWN_EFFECT_MATCHNAMES), BATCH_SIZE):
+            batch = KNOWN_EFFECT_MATCHNAMES[start:start + BATCH_SIZE]
+            mn_json = json.dumps(batch)
+            jsx = (
+                '(function(){'
+                'var c=app.project.activeItem;'
+                'if(!c||!(c instanceof CompItem))return JSON.stringify({error:"No active comp"});'
+                'app.beginUndoGroup("__probe__");'
+                'try{'
+                'var solid=c.layers.addSolid([0,0,0],"__effect_probe__",10,10,1);'
+                'var efx=solid.property("Effects");'
+                'var mns=' + mn_json + ';'
+                'var out=[];'
+                'for(var i=0;i<mns.length;i++){'
+                'try{if(efx.canAddProperty(mns[i])){'
+                'var e=efx.addProperty(mns[i]);'
+                'out.push({matchName:mns[i],displayName:e.name});'
+                '}}catch(x){}}'
+                'solid.remove();'
+                'app.endUndoGroup();'
+                'app.executeCommand(16);'
+                'return JSON.stringify(out);'
+                '}catch(e){'
+                'app.endUndoGroup();'
+                'try{app.executeCommand(16);}catch(x){}'
+                'return JSON.stringify({error:e.toString()});'
+                '}'
+                '})()'
+            )
+            try:
+                r = self.run_jsx(jsx, timeout=30000)
+                data = json.loads(r)
+                if isinstance(data, dict) and 'error' in data:
+                    return data
+                all_effects.extend(data)
+            except (json.JSONDecodeError, RuntimeError):
+                continue
+        return {"count": len(all_effects), "effects": all_effects}
 
     def describe_effect(self, match_name: str) -> dict:
         """
@@ -2056,7 +2061,7 @@ class AEBridge:
                                     shape: str = "square",
                                     based_on: str = "characters",
                                     mode: str = "add") -> str:
-        """配置文本 Animator 的 Range Selector。"""
+        """配置文本 Animator 的 Range Selector。如果不存在则自动创建。"""
         shape_map = {
             "square": 1, "ramp_up": 2, "ramp_down": 3,
             "triangle": 4, "round": 5, "smooth": 6,
@@ -2068,14 +2073,18 @@ class AEBridge:
             f'var tl=c.layer("{_esc(name)}");'
             f'var animators=tl.property("ADBE Text Properties").property("ADBE Text Animators");'
             f'var anim=animators.property({animator_index});'
-            f'var sel=anim.property("ADBE Text Selectors").property(1);'
+            f'if(!anim)"ERR:no_animator";else{{'
+            f'var sels=anim.property("ADBE Text Selectors");'
+            f'var sel;'
+            f'if(sels.numProperties<1){{sel=sels.addProperty("ADBE Text Selector");}}else{{sel=sels.property(1);}}'
             f'sel.property("ADBE Text Percent Start").setValue({start});'
             f'sel.property("ADBE Text Percent End").setValue({end});'
             f'sel.property("ADBE Text Percent Offset").setValue({offset});'
-            f'sel.property("ADBE Text Selector Mode").setValue({mode_val});'
-            f'sel.property("ADBE Text Range Shape").setValue({shape_map.get(shape, 1)});'
-            f'sel.property("ADBE Text Range Type2").setValue({based_map.get(based_on, 1)});'
-            f'"selector_set";'
+            f'var adv=sel.property("ADBE Text Range Advanced");'
+            f'adv.property("ADBE Text Selector Mode").setValue({mode_val});'
+            f'adv.property("ADBE Text Range Shape").setValue({shape_map.get(shape, 1)});'
+            f'adv.property("ADBE Text Range Type2").setValue({based_map.get(based_on, 1)});'
+            f'"selector_set";}}'
         )
         return self.run_jsx(jsx)
 
@@ -2392,44 +2401,342 @@ class AEBridge:
     # ── Pixel Access (requires C++ renderFramePixels) ─────
 
     def sample_pixel(self, x: int, y: int, time: float = -1) -> dict:
-        """采样单个像素，返回 {r, g, b, a}"""
-        code = (
-            f'p=app.project\n'
-            f'comp=None\n'
-            f'for i in p.items:\n'
-            f'    if type(i).__name__=="CompItem":\n'
-            f'        comp=i; break\n'
-            f'if comp is None: raise RuntimeError("no comp")\n'
-            f'px=comp.renderFramePixels({time})\n'
-            f'r=int(px[{y},{x},0]); g=int(px[{y},{x},1]); b=int(px[{y},{x},2]); a=int(px[{y},{x},3])\n'
-            f'_result=f"{{r}},{{g}},{{b}},{{a}}"'
-        )
-        r = self._run_py(code)
-        parts = r.split(",")
-        return {"r": int(parts[0]), "g": int(parts[1]),
-                "b": int(parts[2]), "a": int(parts[3])}
+        """精确采样单个像素，返回 {r, g, b, a}。"""
+        return self.sample_pixels([[x, y]], time=time)[0]
 
     def sample_pixels(self, points: List[List[int]], time: float = -1) -> List[dict]:
-        """批量采样多个像素点，points: [[x,y], ...]"""
-        pts_str = repr(points)
+        """精确批量采样多个像素点，points: [[x,y], ...]。"""
+        pts = []
+        for pt in points:
+            if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                raise ValueError("points must be [[x, y], ...]")
+            pts.append([int(pt[0]), int(pt[1])])
+
+        pts_str = repr(pts)
         code = (
-            f'p=app.project\n'
-            f'comp=None\n'
-            f'for i in p.items:\n'
-            f'    if type(i).__name__=="CompItem":\n'
-            f'        comp=i; break\n'
-            f'if comp is None: raise RuntimeError("no comp")\n'
+            f'comp=app.project.activeItem\n'
+            f'if comp is None or type(comp).__name__ != "CompItem":\n'
+            f'    raise RuntimeError("no active comp")\n'
             f'import json\n'
             f'px=comp.renderFramePixels({time})\n'
+            f'height=int(px.shape[0])\n'
+            f'width=int(px.shape[1])\n'
             f'pts={pts_str}\n'
             f'out=[]\n'
             f'for pt in pts:\n'
             f'    x,y=pt[0],pt[1]\n'
+            f'    if x < 0 or y < 0 or x >= width or y >= height:\n'
+            f'        raise IndexError(f\"pixel_out_of_bounds:{{x}},{{y}}:{{width}}x{{height}}\")\n'
             f'    out.append({{"r":int(px[y,x,0]),"g":int(px[y,x,1]),"b":int(px[y,x,2]),"a":int(px[y,x,3])}})\n'
             f'_result=json.dumps(out)'
         )
         r = self._run_py(code)
         return json.loads(r)
+
+    def detect_solid_background_layers(self, max_layers: int = 2,
+                                       tolerance: int = 5) -> List[dict]:
+        """检测合成底部的纯色图层（不限颜色/亮度/透明度，只要像素一致即为纯色）。"""
+        max_layers = max(1, int(max_layers))
+        tolerance = max(0, int(tolerance))
+
+        matches = []
+        for candidate in self._get_solid_bg_candidates(max_layers):
+            if candidate.get("skipReason"):
+                continue
+
+            solid_rgb = candidate.get("solidColor8")
+            if solid_rgb:
+                matches.append({
+                    "index": candidate["index"],
+                    "name": candidate["name"],
+                    "sourceName": candidate.get("sourceName", ""),
+                    "method": "solid_source",
+                    "rgba": solid_rgb + [255],
+                })
+                continue
+
+            pixel_info = self._analyze_layer_pixels(
+                int(candidate["index"]),
+                tolerance=tolerance,
+            )
+            if pixel_info.get("uniform"):
+                matches.append({
+                    "index": candidate["index"],
+                    "name": candidate["name"],
+                    "sourceName": candidate.get("sourceName", ""),
+                    "method": "pixel_check",
+                    "rgba": pixel_info.get("rgba", []),
+                })
+
+        return matches
+
+    def _get_layer_lookup_maps(self) -> tuple[Dict[str, int], Dict[int, str]]:
+        """Build name/index lookup maps from the active comp layer list."""
+        name_to_index: Dict[str, int] = {}
+        index_to_name: Dict[int, str] = {}
+        for row in self.list_layers():
+            if "index" not in row:
+                continue
+            idx = int(row["index"])
+            name = str(row.get("name", ""))
+            index_to_name[idx] = name
+            if name and name not in name_to_index:
+                name_to_index[name] = idx
+        return name_to_index, index_to_name
+
+    def _resolve_layer_ref(self, layer: Union[str, int],
+                           name_to_index: Optional[Dict[str, int]] = None,
+                           index_to_name: Optional[Dict[int, str]] = None
+                           ) -> tuple[Optional[int], Optional[str]]:
+        """Resolve layer reference to (index, name)."""
+        if isinstance(layer, int):
+            layer_index = int(layer)
+            layer_name = index_to_name.get(layer_index) if index_to_name else None
+            return layer_index, layer_name
+
+        layer_name = str(layer)
+        if name_to_index is None:
+            name_to_index, _ = self._get_layer_lookup_maps()
+        layer_index = name_to_index.get(layer_name)
+        if layer_index is None:
+            return None, layer_name
+        return layer_index, layer_name
+
+    def approximate_layer_color(self, layer: Union[str, int],
+                                time: float = -1,
+                                max_dimension: int = 32,
+                                tolerance: int = 5) -> Dict[str, Any]:
+        """快速读取单层近似颜色统计，内部走 32x32 级别的 C++ renderFramePixels。"""
+        name_to_index, index_to_name = self._get_layer_lookup_maps()
+        layer_index, layer_name = self._resolve_layer_ref(
+            layer,
+            name_to_index=name_to_index,
+            index_to_name=index_to_name,
+        )
+        if layer_index is None:
+            return {"error": f"layer_not_found:{layer_name}"}
+
+        stats = self._analyze_layer_pixels(
+            layer_index,
+            tolerance=tolerance,
+            time=time,
+            max_dimension=max_dimension,
+        )
+        stats["index"] = layer_index
+        resolved_name = index_to_name.get(layer_index) or layer_name
+        if resolved_name:
+            stats["name"] = resolved_name
+        return stats
+
+    def approximate_layers_color(self, layers: List[Union[str, int]],
+                                 time: float = -1,
+                                 max_dimension: int = 32,
+                                 tolerance: int = 5) -> List[Dict[str, Any]]:
+        """批量快速读取多层近似颜色统计。"""
+        if not isinstance(layers, (list, tuple)) or not layers:
+            raise ValueError("layers must be [layer, ...]")
+
+        name_to_index, index_to_name = self._get_layer_lookup_maps()
+        results: List[Dict[str, Any]] = []
+
+        for layer in layers:
+            layer_index, layer_name = self._resolve_layer_ref(
+                layer,
+                name_to_index=name_to_index,
+                index_to_name=index_to_name,
+            )
+            if layer_index is None:
+                results.append({
+                    "error": f"layer_not_found:{layer_name}",
+                    "requested": layer_name,
+                })
+                continue
+
+            stats = self._analyze_layer_pixels(
+                layer_index,
+                tolerance=tolerance,
+                time=time,
+                max_dimension=max_dimension,
+            )
+            stats["index"] = layer_index
+            resolved_name = index_to_name.get(layer_index) or layer_name
+            if resolved_name:
+                stats["name"] = resolved_name
+            results.append(stats)
+
+        return results
+
+    def remove_solid_background_layers(self, max_layers: int = 2,
+                                       tolerance: int = 5) -> Dict[str, Any]:
+        """检测并删除合成底部的纯色图层。"""
+        matches = self.detect_solid_background_layers(
+            max_layers=max_layers,
+            tolerance=tolerance,
+        )
+        if not matches:
+            return {"removed": 0, "layers": []}
+
+        indices = sorted((int(item["index"]) for item in matches), reverse=True)
+        jsx = (
+            '(function(){'
+            'var c=app.project.activeItem;'
+            'if(!c||!(c instanceof CompItem))return"ERR:no_comp";'
+            f'var idxs={json.dumps(indices)};'
+            'var removed=0;'
+            'app.beginUndoGroup("Remove Solid Background Layers");'
+            'for(var i=0;i<idxs.length;i++){'
+            '  try{c.layer(idxs[i]).remove();removed++;}catch(e){}'
+            '}'
+            'app.endUndoGroup();'
+            'return JSON.stringify({removed:removed});'
+            '})()'
+        )
+        raw = self.run_jsx(jsx)
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError:
+            result = {"removed": len(indices)}
+        result["layers"] = matches
+        return result
+
+    def _get_solid_bg_candidates(self, max_layers: int) -> List[dict]:
+        jsx = (
+            '(function(){'
+            'var comp=app.project.activeItem;'
+            'if(!comp||!(comp instanceof CompItem))return"ERR:no_comp";'
+            'var out=[];'
+            f'var start=Math.max(1,comp.numLayers-{max_layers}+1);'
+            'for(var i=comp.numLayers;i>=start;i--){'
+            '  var l=comp.layer(i);'
+            '  var src=null;'
+            '  try{src=l.source;}catch(e){}'
+            '  var mainSource=null;'
+            '  try{mainSource=src?src.mainSource:null;}catch(e){}'
+            '  var row={'
+            '    index:i,'
+            '    name:l.name,'
+            '    hasSource:!!src,'
+            '    hasVideo:!!l.hasVideo,'
+            '    isAdjustment:!!l.adjustmentLayer,'
+            '    isCamera:(l instanceof CameraLayer),'
+            '    isLight:(l instanceof LightLayer),'
+            '    isNull:!!l.nullLayer,'
+            '    sourceName:src?src.name:""'
+            '  };'
+            '  if(mainSource && mainSource instanceof SolidSource){'
+            '    row.solidColor=[mainSource.color[0],mainSource.color[1],mainSource.color[2]];'
+            '  }'
+            '  out.push(row);'
+            '}'
+            'return JSON.stringify(out);'
+            '})()'
+        )
+        raw = self.run_jsx(jsx)
+        candidates = json.loads(raw)
+        for row in candidates:
+            if row.get("solidColor"):
+                row["solidColor8"] = _normalize_rgb_255(row["solidColor"])
+            if row.get("isCamera"):
+                row["skipReason"] = "camera"
+            elif row.get("isLight"):
+                row["skipReason"] = "light"
+            elif row.get("isNull"):
+                row["skipReason"] = "null"
+            elif row.get("isAdjustment"):
+                row["skipReason"] = "adjustment"
+            elif not row.get("hasVideo"):
+                row["skipReason"] = "no_video"
+            elif not row.get("hasSource"):
+                row["skipReason"] = "no_source"
+        return candidates
+
+    def _analyze_layer_pixels(self, layer_index: int, tolerance: int = 5,
+                              time: float = -1, max_dimension: int = 32) -> Dict[str, Any]:
+        setup_jsx = (
+            '(function(){'
+            'var comp=app.project.activeItem;'
+            'if(!comp||!(comp instanceof CompItem))return JSON.stringify({error:"no_comp"});'
+            f'var target={int(layer_index)};'
+            'if(target<1||target>comp.numLayers)return JSON.stringify({error:"no_layer"});'
+            'var solos=[];'
+            'for(var i=1;i<=comp.numLayers;i++){'
+            '  var l=comp.layer(i);'
+            '  var enabled=!!l.enabled;'
+            '  solos.push(enabled ? !!l.solo : null);'
+            '  if(enabled){'
+            '    if(i===target){'
+            '      l.solo=true;'
+            '    }else if(l.solo){'
+            '      l.solo=false;'
+            '    }'
+            '  }'
+            '}'
+            'return JSON.stringify({solo:solos,videoActive:!!comp.layer(target).enabled});'
+            '})()'
+        )
+        setup = json.loads(self.run_jsx(setup_jsx, timeout=30000))
+        if setup.get("error"):
+            return {"uniform": False, "error": f"ERR:{setup['error']}"}
+
+        py_code = (
+            'import json\n'
+            f'time_value={float(time)}\n'
+            f'max_dim={max(1, int(max_dimension))}\n'
+            f'tol={max(0, int(tolerance))}\n'
+            'comp=app.project.activeItem\n'
+            'if comp is None or type(comp).__name__ != "CompItem":\n'
+            '    raise RuntimeError("no_active_comp")\n'
+            'px=comp.renderFramePixels(time_value, max_dim)\n'
+            'height=int(px.shape[0])\n'
+            'width=int(px.shape[1])\n'
+            'center_y=height//2\n'
+            'center_x=width//2\n'
+            'sample=[int(px[center_y,center_x,0]), int(px[center_y,center_x,1]), int(px[center_y,center_x,2]), int(px[center_y,center_x,3])]\n'
+            'alpha_min=255\n'
+            'alpha_max=0\n'
+            'sum_r=sum_g=sum_b=sum_a=0\n'
+            'uniform=True\n'
+            'for y in range(height):\n'
+            '    for x in range(width):\n'
+            '        r=int(px[y,x,0]); g=int(px[y,x,1]); b=int(px[y,x,2]); a=int(px[y,x,3])\n'
+            '        sum_r += r; sum_g += g; sum_b += b; sum_a += a\n'
+            '        alpha_min=min(alpha_min, a)\n'
+            '        alpha_max=max(alpha_max, a)\n'
+            '        if abs(r-sample[0])>tol or abs(g-sample[1])>tol or abs(b-sample[2])>tol or abs(a-sample[3])>tol:\n'
+            '            uniform=False\n'
+            'count=max(1, width*height)\n'
+            '_result=json.dumps({'
+            '    "uniform":uniform,'
+            '    "rgba":sample,'
+            '    "avg_rgba":[round(sum_r/count,1), round(sum_g/count,1), round(sum_b/count,1), round(sum_a/count,1)],'
+            '    "center_rgba":sample,'
+            '    "alpha_min":alpha_min,'
+            '    "alpha_max":alpha_max,'
+            '    "width":width,'
+            '    "height":height'
+            '})\n'
+        )
+        try:
+            pixel_info = json.loads(self._run_py(py_code, timeout=60))
+        finally:
+            restore_jsx = (
+                '(function(){'
+                'var comp=app.project.activeItem;'
+                'if(!comp||!(comp instanceof CompItem))return"no_comp";'
+                f'var solos={json.dumps(setup.get("solo", []))};'
+                'for(var i=1;i<=comp.numLayers&&i<=solos.length;i++){'
+                '  if(solos[i-1]!==null){comp.layer(i).solo=!!solos[i-1];}'
+                '}'
+                'return"ok";'
+                '})()'
+            )
+            try:
+                self.run_jsx(restore_jsx, timeout=30000)
+            except Exception:
+                pass
+
+        pixel_info["video_active"] = bool(setup.get("videoActive"))
+        return pixel_info
 
     @staticmethod
     def _resolve_effect_prop(prop_key: str) -> Optional[str]:
@@ -2444,7 +2751,7 @@ class AEBridge:
                 return mn
         return None
 
-    def _run_py(self, code: str) -> str:
+    def _run_py(self, code: str, timeout: int = 30) -> str:
         """执行 Python 代码并返回 result 变量的值"""
         data = code.encode('utf-8')
         req = urllib.request.Request(
@@ -2452,7 +2759,7 @@ class AEBridge:
             data=data,
             headers={'Content-Type': 'text/plain; charset=utf-8'}
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             r = json.loads(resp.read())
         if r.get("ok"):
             val = r.get("result", "")
@@ -2474,6 +2781,26 @@ def _esc(s: str) -> str:
         .replace("'", "\\'")
         .replace('\n', '\\n')
         .replace('\r', ''))
+
+
+def _normalize_rgb_255(values: List[Any]) -> List[int]:
+    """Normalize float RGB [0-1] or integer RGB [0-255] into 8-bit ints."""
+    rgb = []
+    for value in values[:3]:
+        num = float(value)
+        if 0.0 <= num <= 1.0:
+            num *= 255.0
+        rgb.append(int(round(max(0.0, min(255.0, num)))))
+    return rgb
+
+
+def _is_grayish_rgb(values: List[int], tolerance: int, min_luma: int) -> bool:
+    """Return True when RGB is near-neutral and bright enough to be a bg plate."""
+    if len(values) < 3:
+        return False
+    lo = min(values[:3])
+    hi = max(values[:3])
+    return (hi - lo) <= tolerance and lo >= min_luma
 
 
 # ╔══════════════════════════════════════════════════════════╗

@@ -23,12 +23,22 @@ auto enqueueSyncTaskQuiet(Func&& func, Args&&... args) {
     MessageQueue::getInstance().enqueue(message);
 
     // Wake AE's message pump via PostMessage (thread-safe, no main-thread requirement)
-    // WM_NULL is a no-op message that just pokes the event loop
+    // EnumWindows to find AE_CApplication_* regardless of version
 #ifdef AE_OS_WIN
-    HWND aeWnd = FindWindowW(L"AE_CApplication_26.1", NULL);
-    if (!aeWnd) aeWnd = FindWindowW(L"AE_CApplication_25.0", NULL);
-    if (!aeWnd) aeWnd = FindWindowW(NULL, NULL);  // fallback
-    if (aeWnd) PostMessageW(aeWnd, WM_NULL, 0, 0);
+    struct FindAE {
+        HWND result = NULL;
+        static BOOL CALLBACK cb(HWND hwnd, LPARAM lp) {
+            wchar_t cls[64] = {};
+            GetClassNameW(hwnd, cls, 64);
+            if (wcsstr(cls, L"AE_CApplication") != NULL) {
+                reinterpret_cast<FindAE*>(lp)->result = hwnd;
+                return FALSE; // stop
+            }
+            return TRUE;
+        }
+    } finder;
+    EnumWindows(FindAE::cb, reinterpret_cast<LPARAM>(&finder));
+    if (finder.result) PostMessageW(finder.result, WM_NULL, 0, 0);
 #endif
 
     return message;

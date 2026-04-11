@@ -4,6 +4,8 @@
 // ── Layer Stream ──
 Result<AEGP_StreamRefH> getNewLayerStream(
     Result<AEGP_LayerH> layerH, AEGP_LayerStream which_stream);
+Result<A_Boolean> isStreamLegal(
+    Result<AEGP_LayerH> layerH, AEGP_LayerStream which_stream);
 
 // ── Stream Value ──
 Result<AEGP_StreamValue2> getNewStreamValue(
@@ -20,6 +22,9 @@ Result<void> setStreamValue(
 Result<AEGP_StreamType> getStreamType(Result<AEGP_StreamRefH> streamH);
 Result<A_Boolean> canVaryOverTime(Result<AEGP_StreamRefH> streamH);
 Result<A_Boolean> isStreamTimevarying(Result<AEGP_StreamRefH> streamH);
+Result<AEGP_StreamGroupingType> getStreamGroupingType(Result<AEGP_StreamRefH> streamH);
+Result<std::string> getStreamName(Result<AEGP_StreamRefH> streamH, bool forceEnglish = false);
+Result<std::string> getStreamMatchName(Result<AEGP_StreamRefH> streamH);
 
 // ── Dispose ──
 Result<void> disposeStream(Result<AEGP_StreamRefH> streamH);

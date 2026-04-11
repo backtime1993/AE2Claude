@@ -3,6 +3,75 @@
 #include "../CoreSDK/RenderSuites.h"
 #include "../CoreSDK/WorldSuites.h"
 
+#include <cmath>
+
+namespace {
+struct DownsampleFactor {
+	int x;
+	int y;
+};
+
+DownsampleFactor computeDownsampleFactor(float width, float height, int maxDimension)
+{
+	const int safeMax = maxDimension > 0 ? maxDimension : 1;
+	const int rawWidth = static_cast<int>(std::lround(width));
+	const int rawHeight = static_cast<int>(std::lround(height));
+	const int safeWidth = rawWidth > 0 ? rawWidth : 1;
+	const int safeHeight = rawHeight > 0 ? rawHeight : 1;
+
+	DownsampleFactor factor;
+	factor.x = static_cast<int>(std::ceil(static_cast<double>(safeWidth) / safeMax));
+	factor.y = static_cast<int>(std::ceil(static_cast<double>(safeHeight) / safeMax));
+	if (factor.x < 1) {
+		factor.x = 1;
+	}
+	if (factor.y < 1) {
+		factor.y = 1;
+	}
+	return factor;
+}
+
+py::array_t<uint8_t> copyRenderedWorldToArray(Result<AEGP_FrameReceiptH> receiptH)
+{
+	auto& worldMsg = enqueueSyncTaskQuiet(getReceiptWorld, receiptH);
+	worldMsg->wait();
+	auto worldH = worldMsg->getResult();
+
+	auto& sizeMsg = enqueueSyncTaskQuiet(getSize, worldH);
+	sizeMsg->wait();
+	auto sz = sizeMsg->getResult();
+	int w = static_cast<int>(sz.value.width);
+	int h = static_cast<int>(sz.value.height);
+
+	auto& addrMsg = enqueueSyncTaskQuiet(getBaseAddr8, worldH);
+	addrMsg->wait();
+	auto baseAddr = addrMsg->getResult();
+
+	auto& rbMsg = enqueueSyncTaskQuiet(getRowBytes, worldH);
+	rbMsg->wait();
+	auto rowBytes = rbMsg->getResult().value;
+
+	if (baseAddr.error != A_Err_NONE || baseAddr.value == nullptr) {
+		throw std::runtime_error("Failed to get pixel data");
+	}
+
+	auto result = py::array_t<uint8_t>({ h, w, 4 });
+	auto buf = result.mutable_unchecked<3>();
+	uint8_t* base = reinterpret_cast<uint8_t*>(baseAddr.value);
+	for (int y = 0; y < h; y++) {
+		PF_Pixel8* row = reinterpret_cast<PF_Pixel8*>(base + y * rowBytes);
+		for (int x = 0; x < w; x++) {
+			buf(y, x, 0) = row[x].red;
+			buf(y, x, 1) = row[x].green;
+			buf(y, x, 2) = row[x].blue;
+			buf(y, x, 3) = row[x].alpha;
+		}
+	}
+
+	return result;
+}
+}
+
 void Item::deleteItem()
 {
 	auto item = this->itemHandle_;
@@ -180,6 +249,61 @@ float Item::getDuration()
 
 	float time = result.value;
 	return time;
+}
+
+py::array_t<uint8_t> Item::renderFramePixels(float time, int maxDimension) {
+    if (time < 0) {
+        try {
+            time = getCurrentTime();
+        } catch (...) {
+            time = 0.0f;
+        }
+    }
+
+    auto& roMsg = enqueueSyncTaskQuiet(getRenderOptions, itemHandle_);
+    roMsg->wait();
+    auto roH = roMsg->getResult();
+    if (roH.error != A_Err_NONE || roH.value == NULL)
+        throw std::runtime_error("Failed to get render options");
+
+    auto& timeMsg = enqueueSyncTaskQuiet(setTime, roH, time);
+    timeMsg->wait();
+    roH = timeMsg->getResult();
+
+    if (maxDimension > 0) {
+        const DownsampleFactor factor = computeDownsampleFactor(getWidth(), getHeight(), maxDimension);
+
+        auto& dsMsg = enqueueSyncTaskQuiet(setDownsampleFactor, roH, factor.x, factor.y);
+        dsMsg->wait();
+        roH = dsMsg->getResult();
+    }
+
+    auto& wtMsg = enqueueSyncTaskQuiet(setWorldType, roH, AEGP_WorldType_8);
+    wtMsg->wait();
+    roH = wtMsg->getResult();
+
+    auto& renderMsg = enqueueSyncTaskQuiet(renderAndCheckoutFrame, roH);
+    renderMsg->wait();
+    auto receiptH = renderMsg->getResult();
+    if (receiptH.error != A_Err_NONE || receiptH.value == NULL) {
+        enqueueSyncTaskQuiet(disposeRenderOptions, roH)->wait();
+        throw std::runtime_error("Failed to render frame");
+    }
+
+    py::array_t<uint8_t> result;
+    try {
+        result = copyRenderedWorldToArray(receiptH);
+    }
+    catch (...) {
+        enqueueSyncTaskQuiet(checkinFrame, receiptH)->wait();
+        enqueueSyncTaskQuiet(disposeRenderOptions, roH)->wait();
+        throw;
+    }
+
+    enqueueSyncTaskQuiet(checkinFrame, receiptH)->wait();
+    enqueueSyncTaskQuiet(disposeRenderOptions, roH)->wait();
+
+    return result;
 }
 
 void Item::setCurrentTime(float time)
@@ -718,7 +842,7 @@ void Layer::changeIndex(int index)
 	return;
 }
 
-std::shared_ptr<FootageItem> Layer::duplicate()
+std::shared_ptr<Layer> Layer::duplicate()
 {
 	auto layer = this->layerHandle_;
 	if (layer.value == NULL) {
@@ -728,14 +852,11 @@ std::shared_ptr<FootageItem> Layer::duplicate()
 	message->wait();
 
 	Result<AEGP_LayerH> result = message->getResult();
+	if (result.error != A_Err_NONE || result.value == NULL) {
+		throw std::runtime_error("Failed to duplicate layer");
+	}
 
-	auto& message2 = enqueueSyncTaskQuiet(getLayerSourceItem, result);
-	message2->wait();
-
-	Result<AEGP_ItemH> result2 = message2->getResult();
-
-	std::shared_ptr<FootageItem> footageItem = std::make_shared<FootageItem>(result2);	
-	return footageItem;
+	return std::make_shared<Layer>(result);
 }
 
 
@@ -973,6 +1094,74 @@ bool Layer::getFlag(LayerFlag specificFlag)
 Result<AEGP_LayerH> Layer::getLayerHandle()
 {
 return this->layerHandle_;
+}
+
+py::array_t<uint8_t> Layer::renderFramePixels(float time, int maxDimension)
+{
+	if (time < 0) {
+		try {
+			time = layerCompTime();
+		}
+		catch (...) {
+			time = 0.0f;
+		}
+	}
+
+	auto& roMsg = enqueueSyncTaskQuiet(getLayerRenderOptions, layerHandle_);
+	roMsg->wait();
+	auto roH = roMsg->getResult();
+	if (roH.error != A_Err_NONE || roH.value == NULL) {
+		throw std::runtime_error("Failed to get layer render options");
+	}
+
+	auto& timeMsg = enqueueSyncTaskQuiet(setLayerTime, roH, time);
+	timeMsg->wait();
+	roH = timeMsg->getResult();
+
+	if (maxDimension > 0) {
+		float width = 1.0f;
+		float height = 1.0f;
+		try {
+			auto source = getSource();
+			if (source) {
+				width = source->getWidth();
+				height = source->getHeight();
+			}
+		}
+		catch (...) {}
+
+		const DownsampleFactor factor = computeDownsampleFactor(width, height, maxDimension);
+		auto& dsMsg = enqueueSyncTaskQuiet(setLayerDownsampleFactor, roH, factor.x, factor.y);
+		dsMsg->wait();
+		roH = dsMsg->getResult();
+	}
+
+	auto& wtMsg = enqueueSyncTaskQuiet(setLayerWorldType, roH, AEGP_WorldType_8);
+	wtMsg->wait();
+	roH = wtMsg->getResult();
+
+	auto& renderMsg = enqueueSyncTaskQuiet(renderAndCheckoutLayerFrame, roH);
+	renderMsg->wait();
+	auto receiptH = renderMsg->getResult();
+	if (receiptH.error != A_Err_NONE || receiptH.value == NULL) {
+		enqueueSyncTaskQuiet(disposeLayerRenderOptions, roH)->wait();
+		throw std::runtime_error("Failed to render layer frame");
+	}
+
+	py::array_t<uint8_t> result;
+	try {
+		result = copyRenderedWorldToArray(receiptH);
+	}
+	catch (...) {
+		enqueueSyncTaskQuiet(checkinFrame, receiptH)->wait();
+		enqueueSyncTaskQuiet(disposeLayerRenderOptions, roH)->wait();
+		throw;
+	}
+
+	enqueueSyncTaskQuiet(checkinFrame, receiptH)->wait();
+	enqueueSyncTaskQuiet(disposeLayerRenderOptions, roH)->wait();
+
+	return result;
 }
 
 void Layer::addEffect(std::shared_ptr<CustomEffect>  effect)
@@ -1541,82 +1730,8 @@ std::shared_ptr<CompItem> CompItem::duplicateComp() {
     return std::make_shared<CompItem>(itemMsg->getResult());
 }
 
-py::array_t<uint8_t> CompItem::renderFramePixels(float time) {
-    // Use current comp time if not specified
-    if (time < 0) time = getCurrentTime();
-
-    // 1. Get render options from item
-    auto& roMsg = enqueueSyncTaskQuiet(getRenderOptions, itemHandle_);
-    roMsg->wait();
-    auto roH = roMsg->getResult();
-    if (roH.error != A_Err_NONE || roH.value == NULL)
-        throw std::runtime_error("Failed to get render options");
-
-    // 2. Set time and force 8bpc
-    auto& timeMsg = enqueueSyncTaskQuiet(setTime, roH, time);
-    timeMsg->wait();
-    roH = timeMsg->getResult();
-
-    auto& wtMsg = enqueueSyncTaskQuiet(setWorldType, roH, AEGP_WorldType_8);
-    wtMsg->wait();
-    roH = wtMsg->getResult();
-
-    // 3. Render and checkout frame
-    auto& renderMsg = enqueueSyncTaskQuiet(renderAndCheckoutFrame, roH);
-    renderMsg->wait();
-    auto receiptH = renderMsg->getResult();
-    if (receiptH.error != A_Err_NONE || receiptH.value == NULL) {
-        enqueueSyncTaskQuiet(disposeRenderOptions, roH)->wait();
-        throw std::runtime_error("Failed to render frame");
-    }
-
-    // 4. Get world from receipt
-    auto& worldMsg = enqueueSyncTaskQuiet(getReceiptWorld, receiptH);
-    worldMsg->wait();
-    auto worldH = worldMsg->getResult();
-
-    // 5. Get dimensions
-    auto& sizeMsg = enqueueSyncTaskQuiet(getSize, worldH);
-    sizeMsg->wait();
-    auto sz = sizeMsg->getResult();
-    int w = sz.value.width;
-    int h = sz.value.height;
-
-    // 6. Get pixel base address and row bytes
-    auto& addrMsg = enqueueSyncTaskQuiet(getBaseAddr8, worldH);
-    addrMsg->wait();
-    auto baseAddr = addrMsg->getResult();
-
-    auto& rbMsg = enqueueSyncTaskQuiet(getRowBytes, worldH);
-    rbMsg->wait();
-    auto rowBytes = rbMsg->getResult().value;
-
-    if (baseAddr.error != A_Err_NONE || baseAddr.value == nullptr) {
-        enqueueSyncTaskQuiet(checkinFrame, receiptH)->wait();
-        enqueueSyncTaskQuiet(disposeRenderOptions, roH)->wait();
-        throw std::runtime_error("Failed to get pixel data");
-    }
-
-    // 7. Copy pixels to numpy array RGBA
-    // PF_Pixel8 fields: alpha, red, green, blue
-    auto result = py::array_t<uint8_t>({h, w, 4});
-    auto buf = result.mutable_unchecked<3>();
-    uint8_t* base = reinterpret_cast<uint8_t*>(baseAddr.value);
-    for (int y = 0; y < h; y++) {
-        PF_Pixel8* row = reinterpret_cast<PF_Pixel8*>(base + y * rowBytes);
-        for (int x = 0; x < w; x++) {
-            buf(y, x, 0) = row[x].red;
-            buf(y, x, 1) = row[x].green;
-            buf(y, x, 2) = row[x].blue;
-            buf(y, x, 3) = row[x].alpha;
-        }
-    }
-
-    // 8. Cleanup
-    enqueueSyncTaskQuiet(checkinFrame, receiptH)->wait();
-    enqueueSyncTaskQuiet(disposeRenderOptions, roH)->wait();
-
-    return result;
+py::array_t<uint8_t> CompItem::renderFramePixels(float time, int maxDimension) {
+    return Item::renderFramePixels(time, maxDimension);
 }
 
 // ── Layer Phase 3 ──

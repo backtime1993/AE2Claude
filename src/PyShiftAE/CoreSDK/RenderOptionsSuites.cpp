@@ -32,6 +32,36 @@ Result<AEGP_RenderOptionsH> getRenderOptions(Result<AEGP_ItemH> itemH)
 	return Result<AEGP_RenderOptionsH>();
 }
 
+Result<AEGP_LayerRenderOptionsH> getLayerRenderOptions(Result<AEGP_LayerH> layerH)
+{
+	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+	AEGP_PluginID* pluginIDPtr = SuiteManager::GetInstance().GetPluginID();
+
+	if (pluginIDPtr != nullptr) {
+		AEGP_PluginID pluginID = *pluginIDPtr;
+		A_Err err = A_Err_NONE;
+		AEGP_LayerRenderOptionsH roH = NULL;
+		AEGP_LayerH layer = layerH.value;
+		ERR(suites.LayerRenderOptionsSuite1()->AEGP_NewFromLayer(pluginID, layer, &roH));
+
+		Result<AEGP_LayerRenderOptionsH> result;
+		if (err != A_Err_NONE) {
+			result.value = nullptr;
+			throw std::runtime_error("Error getting layer render options. Error code: " + std::to_string(err));
+		}
+		else {
+			result.value = roH;
+		}
+		result.error = err;
+
+		return result;
+	}
+	else {
+		throw std::runtime_error("Plugin ID is null");
+	}
+	return Result<AEGP_LayerRenderOptionsH>();
+}
+
 Result<AEGP_RenderOptionsH> setTime(Result<AEGP_RenderOptionsH> roH, float time)
 {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
@@ -42,6 +72,22 @@ Result<AEGP_RenderOptionsH> setTime(Result<AEGP_RenderOptionsH> roH, float time)
 	ERR(suites.RenderOptionsSuite1()->AEGP_SetTime(roH.value, timeT));  // Set render time.
 
 	Result<AEGP_RenderOptionsH> result;
+	result.value = roH.value;
+	result.error = err;
+
+	return result;
+}
+
+Result<AEGP_LayerRenderOptionsH> setLayerTime(Result<AEGP_LayerRenderOptionsH> roH, float time)
+{
+	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+	A_Err err = A_Err_NONE;
+	A_Time timeT;
+	timeT.value = static_cast<A_long>(time * 1000000);
+	timeT.scale = 1000000;
+	ERR(suites.LayerRenderOptionsSuite1()->AEGP_SetTime(roH.value, timeT));
+
+	Result<AEGP_LayerRenderOptionsH> result;
 	result.value = roH.value;
 	result.error = err;
 
@@ -62,6 +108,36 @@ Result<AEGP_RenderOptionsH> getWorldType(Result<AEGP_RenderOptionsH> roH)
 	return result;
 }
 
+Result<AEGP_RenderOptionsH> setDownsampleFactor(Result<AEGP_RenderOptionsH> roH, int x, int y)
+{
+	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+	A_Err err = A_Err_NONE;
+	ERR(suites.RenderOptionsSuite1()->AEGP_SetDownsampleFactor(
+		roH.value,
+		static_cast<A_short>(x),
+		static_cast<A_short>(y)));
+
+	Result<AEGP_RenderOptionsH> result;
+	result.value = roH.value;
+	result.error = err;
+	return result;
+}
+
+Result<AEGP_LayerRenderOptionsH> setLayerDownsampleFactor(Result<AEGP_LayerRenderOptionsH> roH, int x, int y)
+{
+	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+	A_Err err = A_Err_NONE;
+	ERR(suites.LayerRenderOptionsSuite1()->AEGP_SetDownsampleFactor(
+		roH.value,
+		static_cast<A_short>(x),
+		static_cast<A_short>(y)));
+
+	Result<AEGP_LayerRenderOptionsH> result;
+	result.value = roH.value;
+	result.error = err;
+	return result;
+}
+
 
 Result<AEGP_RenderOptionsH> setWorldType(Result<AEGP_RenderOptionsH> roH, AEGP_WorldType type)
 {
@@ -70,6 +146,18 @@ Result<AEGP_RenderOptionsH> setWorldType(Result<AEGP_RenderOptionsH> roH, AEGP_W
 	ERR(suites.RenderOptionsSuite1()->AEGP_SetWorldType(roH.value, type));
 
 	Result<AEGP_RenderOptionsH> result;
+	result.value = roH.value;
+	result.error = err;
+	return result;
+}
+
+Result<AEGP_LayerRenderOptionsH> setLayerWorldType(Result<AEGP_LayerRenderOptionsH> roH, AEGP_WorldType type)
+{
+	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+	A_Err err = A_Err_NONE;
+	ERR(suites.LayerRenderOptionsSuite1()->AEGP_SetWorldType(roH.value, type));
+
+	Result<AEGP_LayerRenderOptionsH> result;
 	result.value = roH.value;
 	result.error = err;
 	return result;
@@ -86,5 +174,16 @@ Result<void> disposeRenderOptions(Result <AEGP_RenderOptionsH> roH)
 
 	result.error = err;
 
+	return result;
+}
+
+Result<void> disposeLayerRenderOptions(Result<AEGP_LayerRenderOptionsH> roH)
+{
+	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+	A_Err err = A_Err_NONE;
+	ERR(suites.LayerRenderOptionsSuite1()->AEGP_Dispose(roH.value));
+
+	Result<void> result;
+	result.error = err;
 	return result;
 }
