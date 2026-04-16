@@ -1,0 +1,9 @@
+{
+  "name": "ae2claude-pinclicker",
+  "version": "0.1.0",
+  "description": "CEP extension: precise Puppet pin click endpoint for AE2Claude",
+  "private": true,
+  "dependencies": {
+    "koffi": "^2.12.0"
+  }
+}
