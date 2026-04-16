@@ -83,6 +83,7 @@
     // --- Mouse click via koffi + SendInput -----------------------------------
     // Loaded lazily so HTTP can still answer /health even if koffi fails.
     let sendInputClick = null;
+    let sendInputDrag = null;
     let sendKeySequence = null;
     let focusAEWindow = null;
     let enumerateAEWindows = null;
@@ -259,6 +260,76 @@
                     center_x: Math.round((rc.left + rc.right) / 2),
                     center_y: Math.round((rc.top + rc.bottom) / 2)
                 };
+            };
+
+            // --- SendInput drag (multi-segment LEFTDOWN...MOVE...LEFTUP) ---
+            sendInputDrag = function (fromX, fromY, toX, toY, opts) {
+                opts = opts || {};
+                const preHoldMs = opts.preHoldMs != null ? opts.preHoldMs : 60;
+                const segMs = opts.segMs != null ? opts.segMs : 12;
+                const segments = opts.segments != null ? Math.max(4, opts.segments) : 16;
+                const postMs = opts.postMs != null ? opts.postMs : 60;
+
+                function toAbs(px, py) {
+                    const vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                    const vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                    const vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                    const vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                    return [
+                        Math.round(((px - vx) * 65535) / Math.max(1, vw - 1)),
+                        Math.round(((py - vy) * 65535) / Math.max(1, vh - 1))
+                    ];
+                }
+
+                function buildMouseAt(ax, ay, flags) {
+                    const b = Buffer.alloc(INPUT_SIZE);
+                    b.writeUInt32LE(INPUT_MOUSE, 0);
+                    b.writeInt32LE(ax, 8);
+                    b.writeInt32LE(ay, 12);
+                    b.writeUInt32LE(0, 16);
+                    b.writeUInt32LE(flags | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, 20);
+                    return b;
+                }
+
+                function fire(ax, ay, flags) {
+                    const buf = buildMouseAt(ax, ay, flags);
+                    const n = SendInput(1, buf, INPUT_SIZE);
+                    if (n !== 1) throw new Error('SendInput DRAG ' + flags.toString(16) + ' returned ' + n + ' lastErr=' + GetLastError());
+                }
+
+                return new Promise(function (resolve, reject) {
+                    try {
+                        SetCursorPos(fromX, fromY);
+                        const [ax0, ay0] = toAbs(fromX, fromY);
+                        fire(ax0, ay0, MOUSEEVENTF_MOVE);
+                        fire(ax0, ay0, MOUSEEVENTF_LEFTDOWN);
+
+                        let step = 0;
+                        function stepFn() {
+                            step += 1;
+                            const t = step / segments;
+                            const x = Math.round(fromX + (toX - fromX) * t);
+                            const y = Math.round(fromY + (toY - fromY) * t);
+                            const [ax, ay] = toAbs(x, y);
+                            try {
+                                fire(ax, ay, MOUSEEVENTF_MOVE);
+                            } catch (e) { reject(e); return; }
+                            if (step < segments) {
+                                setTimeout(stepFn, segMs);
+                            } else {
+                                setTimeout(function () {
+                                    try {
+                                        fire(ax, ay, MOUSEEVENTF_LEFTUP);
+                                        setTimeout(function () {
+                                            resolve({ ok: true, from: [fromX, fromY], to: [toX, toY], segments: segments });
+                                        }, postMs);
+                                    } catch (e) { reject(e); }
+                                }, segMs);
+                            }
+                        }
+                        setTimeout(stepFn, preHoldMs);
+                    } catch (e) { reject(e); }
+                });
             };
 
             sendInputClick = function (screenX, screenY, opts) {
@@ -498,6 +569,60 @@
         const seq = parseCombo(String(body.hotkey));
         await sendKeySequence(seq, { betweenMs: body.between_ms != null ? Number(body.between_ms) : 20 });
         return { ok: true, sent: body.hotkey };
+    }
+
+    async function handleDrag(body) {
+        initMouse();
+        if (!sendInputDrag) throw new Error('drag_unavailable:' + mouseLoadError);
+        if (!body || body.from_x == null || body.from_y == null || body.to_x == null || body.to_y == null) {
+            throw new Error('missing from_x/from_y/to_x/to_y');
+        }
+        return await sendInputDrag(
+            Number(body.from_x), Number(body.from_y),
+            Number(body.to_x), Number(body.to_y),
+            {
+                preHoldMs: body.pre_hold_ms != null ? Number(body.pre_hold_ms) : undefined,
+                segMs: body.seg_ms != null ? Number(body.seg_ms) : undefined,
+                segments: body.segments != null ? Number(body.segments) : undefined,
+                postMs: body.post_ms != null ? Number(body.post_ms) : undefined,
+            }
+        );
+    }
+
+    // High-level: switch to Hand Tool, drag viewer by (dx, dy) screen pixels,
+    // then (optionally) switch back. Panning in AE = Hand Tool drag.
+    async function handleViewerPan(body) {
+        initMouse();
+        if (!sendInputDrag || !sendKeySequence || !focusAEWindow)
+            throw new Error('pan_unavailable:' + mouseLoadError);
+        const dx = Number(body && body.dx);
+        const dy = Number(body && body.dy);
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) throw new Error('bad_dx_dy');
+
+        // Need a (from_x, from_y) inside the Composition viewer panel so that
+        // the drag is interpreted by the viewer, not some other panel.
+        const ae = getAEWindowRect();
+        const fromX = body.from_x != null ? Number(body.from_x) : ae.center_x;
+        const fromY = body.from_y != null ? Number(body.from_y) : ae.center_y;
+        const toX = fromX + dx;
+        const toY = fromY + dy;
+
+        focusAEWindow();
+        await new Promise(r => setTimeout(r, 80));
+        // Click the viewer first to give it keyboard focus before hotkeys.
+        // Tiny move-only click pattern, no LEFTDOWN/UP.
+        await sendInputClick(fromX, fromY, { preMoveMs: 20, holdMs: 20 });
+        await new Promise(r => setTimeout(r, 120));
+
+        // Press H (Hand Tool)
+        await sendKeySequence([{ vk: 0x48 }, { vk: 0x48, up: true }], { betweenMs: 20 });
+        await new Promise(r => setTimeout(r, 180));
+
+        const dragRes = await sendInputDrag(fromX, fromY, toX, toY, {
+            preHoldMs: 80, segMs: 10, segments: 20, postMs: 80,
+        });
+
+        return { ok: true, drag: dragRes, from: [fromX, fromY], to: [toX, toY] };
     }
 
     async function handleFocusAE() {
@@ -776,6 +901,8 @@
         'POST /eval':         function (req, body) { return handleEval(body); },
         'GET /viewer-state':  function () { return handleViewerState(); },
         'POST /click-screen': function (req, body) { return handleClickScreen(body); },
+        'POST /drag':         function (req, body) { return handleDrag(body); },
+        'POST /viewer-pan':   function (req, body) { return handleViewerPan(body); },
         'POST /set-tool':     function (req, body) { return handleSetTool(body); },
         'POST /press-key':    function (req, body) { return handlePressKey(body); },
         'POST /focus-ae':     function () { return handleFocusAE(); },
