@@ -319,11 +319,13 @@ class PinPlacer:
         self.tx = sx - cx * self.zoom
         self.ty = sy - cy * self.zoom
         self.seed_pin_pos = [cx, cy]
+        self.viewer_rect = self.find_viewer_rect((sx, sy))
         return {
             "tx": self.tx, "ty": self.ty, "zoom": self.zoom,
             "seed_comp": [cx, cy], "seed_screen": [sx, sy],
             "seed_vtx": seed_info["vtx_index"],
             "rotations": ens["rotations"],
+            "viewer_rect": self.viewer_rect,
         }
 
     def comp_to_screen(self, cx: float, cy: float):
@@ -331,10 +333,51 @@ class PinPlacer:
             raise CEPError("calibrate() must be called first")
         return self.tx + cx * self.zoom, self.ty + cy * self.zoom
 
-    def place_at_comp(self, cx: float, cy: float, retries: int = 1, inset_dir=None):
+    def find_viewer_rect(self, point_screen):
+        """Given a screen point known to be inside the Composition viewer (the
+        seed pin's click position), return the rect of the smallest
+        'DroverLord - Frame Window' that contains it — that's the viewer
+        panel's screen bbox. Future place_at_comp calls can refuse targets
+        that map outside this box.
+        """
+        r = self._get("/enum-ae-windows")
+        rows = r.get("rows", [])
+        px, py = point_screen
+        best = None
+        for row in rows:
+            if not row.get("visible"):
+                continue
+            if "Frame Window" not in row.get("text", ""):
+                continue
+            rect = row.get("rect")
+            if not rect:
+                continue
+            if rect["left"] <= px <= rect["right"] and rect["top"] <= py <= rect["bottom"]:
+                if best is None or (rect["w"] * rect["h"]) < (best["w"] * best["h"]):
+                    best = rect
+        return best
+
+    def screen_in_viewer(self, sx, sy, margin: int = 4) -> bool:
+        """True iff (sx, sy) lies inside self.viewer_rect (set by calibrate)."""
+        if not getattr(self, "viewer_rect", None):
+            return True  # no constraint yet
+        vr = self.viewer_rect
+        return (vr["left"] + margin <= sx <= vr["right"] - margin
+                and vr["top"] + margin <= sy <= vr["bottom"] - margin)
+
+    def place_at_comp(self, cx: float, cy: float, retries: int = 1, inset_dir=None,
+                      skip_outside_viewer: bool = True):
         if self.tx is None:
             raise CEPError("calibrate() must be called first")
         sx, sy = self.comp_to_screen(cx, cy)
+        if skip_outside_viewer and self.viewer_rect is not None and not self.screen_in_viewer(sx, sy):
+            return {
+                "placed": False,
+                "target_comp": [cx, cy],
+                "screen": [int(round(sx)), int(round(sy))],
+                "reason": "target_outside_viewer",
+                "viewer_rect": self.viewer_rect,
+            }
         idir = inset_dir if inset_dir is not None else (0, 0)
         res = self._click_place(sx, sy, retries=retries, inset_dir=idir)
         if res.get("placed"):

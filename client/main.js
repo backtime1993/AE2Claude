@@ -138,26 +138,31 @@
                 const rows = [];
                 const classBuf = Buffer.alloc(256);
                 const textBuf = Buffer.alloc(512);
-                const rectObj = { left: 0, top: 0, right: 0, bottom: 0 };
 
-                // Callback must be registered with koffi.register(fn, proto)
                 const cb = koffi.register(function (hwnd, lparam) {
+                    let row = { hwnd: '?' };
+                    try {
+                        row.hwnd = '0x' + koffi.address(hwnd).toString(16);
+                    } catch (_) {}
                     try {
                         classBuf.fill(0);
+                        const n = GetClassNameA(hwnd, classBuf, 255);
+                        row.cls = classBuf.toString('utf8', 0, Math.max(0, n));
+                    } catch (_) { row.cls = ''; }
+                    try {
                         textBuf.fill(0);
-                        const clsLen = GetClassNameA(hwnd, classBuf, 255);
-                        const txtLen = GetWindowTextA(hwnd, textBuf, 511);
-                        const visible = IsWindowVisible(hwnd) !== 0;
-                        const gotRect = GetWindowRect(hwnd, rectObj);
-                        rows.push({
-                            hwnd: String(hwnd),
-                            cls: classBuf.toString('utf8', 0, clsLen),
-                            text: textBuf.toString('utf8', 0, txtLen),
-                            visible: visible,
-                            rect: gotRect ? { left: rectObj.left, top: rectObj.top, right: rectObj.right, bottom: rectObj.bottom, w: rectObj.right - rectObj.left, h: rectObj.bottom - rectObj.top } : null
-                        });
-                    } catch (e) { /* swallow — keep enumeration going */ }
-                    return 1; // continue
+                        const n = GetWindowTextA(hwnd, textBuf, 511);
+                        row.text = textBuf.toString('utf8', 0, Math.max(0, n));
+                    } catch (_) { row.text = ''; }
+                    try { row.visible = IsWindowVisible(hwnd) !== 0; } catch (_) { row.visible = false; }
+                    try {
+                        const rectObj = { left: 0, top: 0, right: 0, bottom: 0 };
+                        if (GetWindowRect(hwnd, rectObj)) {
+                            row.rect = { left: rectObj.left, top: rectObj.top, right: rectObj.right, bottom: rectObj.bottom, w: rectObj.right - rectObj.left, h: rectObj.bottom - rectObj.top };
+                        }
+                    } catch (_) {}
+                    rows.push(row);
+                    return 1;
                 }, koffi.pointer(EnumChildWindowsProc));
 
                 try {
@@ -165,7 +170,9 @@
                 } finally {
                     koffi.unregister(cb);
                 }
-                return { ae_hwnd: String(aeHwnd), count: rows.length, rows: rows };
+                let aeHwndStr = '?';
+                try { aeHwndStr = '0x' + koffi.address(aeHwnd).toString(16); } catch (_) {}
+                return { ae_hwnd: aeHwndStr, count: rows.length, rows: rows };
             };
 
             const SM_CXSCREEN = 0, SM_CYSCREEN = 1;
@@ -485,6 +492,12 @@
         return focusAEWindow();
     }
 
+    async function handleEnumAE() {
+        initMouse();
+        if (!enumerateAEWindows) throw new Error('enum_unavailable:' + mouseLoadError);
+        return enumerateAEWindows();
+    }
+
     async function handleAERect() {
         initMouse();
         if (!getAEWindowRect) throw new Error('ae_rect_unavailable:' + mouseLoadError);
@@ -753,6 +766,7 @@
         'POST /press-key':    function (req, body) { return handlePressKey(body); },
         'POST /focus-ae':     function () { return handleFocusAE(); },
         'GET /ae-rect':       function () { return handleAERect(); },
+        'GET /enum-ae-windows': function () { return handleEnumAE(); },
         'POST /ensure-viewer':function (req, body) { return handleEnsureViewer(body); },
         'POST /place-pin':    function (req, body) { return handlePlacePin(body); },
         'POST /begin-session':function (req, body) { return handleBeginSession(body); },
