@@ -83,6 +83,7 @@
     // --- Mouse click via koffi + SendInput -----------------------------------
     // Loaded lazily so HTTP can still answer /health even if koffi fails.
     let sendInputClick = null;
+    let focusAEWindow = null;
     let mouseLoadError = null;
 
     function initMouse() {
@@ -112,6 +113,11 @@
             const SendInput = user32.func('uint32 SendInput(uint32, _In_ INPUT*, int32)');
             const GetSystemMetrics = user32.func('int32 GetSystemMetrics(int32)');
             const SetCursorPos = user32.func('int32 SetCursorPos(int32, int32)');
+            const FindWindowA = user32.func('void* FindWindowA(const char*, const char*)');
+            const SetForegroundWindow = user32.func('int32 SetForegroundWindow(void*)');
+            const ShowWindow = user32.func('int32 ShowWindow(void*, int32)');
+            const BringWindowToTop = user32.func('int32 BringWindowToTop(void*)');
+            const SW_RESTORE = 9;
 
             const SM_CXSCREEN = 0, SM_CYSCREEN = 1;
             const INPUT_MOUSE = 0;
@@ -120,6 +126,22 @@
             const MOUSEEVENTF_LEFTUP = 0x0004;
             const MOUSEEVENTF_ABSOLUTE = 0x8000;
             const MOUSEEVENTF_VIRTUALDESK = 0x4000;
+
+            // --- AE window focus ---
+            // AE classname "AE_CApplication_26.3" (varies by version). Find by class prefix.
+            focusAEWindow = function () {
+                const candidates = ['AE_CApplication_26.3', 'AE_CApplication_26.2', 'AE_CApplication_26.1', 'AE_CApplication_26.0', 'AE_CApplication_25.0', 'AE_CApplication_24.0'];
+                for (let i = 0; i < candidates.length; i++) {
+                    const hwnd = FindWindowA(candidates[i], null);
+                    if (hwnd) {
+                        ShowWindow(hwnd, SW_RESTORE);
+                        BringWindowToTop(hwnd);
+                        SetForegroundWindow(hwnd);
+                        return { ok: true, class: candidates[i] };
+                    }
+                }
+                return { ok: false, tried: candidates };
+            };
 
             sendInputClick = function (screenX, screenY, opts) {
                 opts = opts || {};
@@ -279,6 +301,144 @@
         return r;
     }
 
+    async function handleFocusAE() {
+        initMouse();
+        if (!focusAEWindow) throw new Error('focus_unavailable:' + mouseLoadError);
+        return focusAEWindow();
+    }
+
+    async function handleEnsureViewer(body) {
+        const compName = body && typeof body.comp_name === 'string' ? body.comp_name.replace(/\"/g, '\\"') : null;
+        const compId = body && body.comp_id != null ? Number(body.comp_id) : null;
+        const layerIndex = body && body.layer_index != null ? Number(body.layer_index) : null;
+
+        const code = [
+            'var target_comp=null;',
+            'if(' + (compId != null ? 1 : 0) + '){',
+            '  for(var i=1;i<=app.project.numItems;i++){var it=app.project.item(i); if(it.id==' + (compId || 0) + '){target_comp=it;break;}}',
+            '}',
+            'if(!target_comp && ' + (compName ? 1 : 0) + '){',
+            '  for(var i2=1;i2<=app.project.numItems;i2++){var it2=app.project.item(i2); if(it2 instanceof CompItem && it2.name=="' + (compName || '') + '"){target_comp=it2;break;}}',
+            '}',
+            'if(target_comp){target_comp.openInViewer();}',
+            'var ai=app.project.activeItem;',
+            'if(!ai || !(ai instanceof CompItem)) return {error:"no_active_comp",active:(ai?ai.name:null)};',
+            'try{app.activeViewer.setActive();}catch(_a){}',
+            'var layer=null;',
+            'if(' + (layerIndex != null ? 1 : 0) + '){',
+            '  if(' + (layerIndex || 0) + '>=1 && ' + (layerIndex || 0) + '<=ai.numLayers){layer=ai.layer(' + (layerIndex || 0) + ');}',
+            '}',
+            'var sel_info=null;',
+            'if(layer){',
+            '  for(var k=1;k<=ai.numLayers;k++){ai.layer(k).selected=(ai.layer(k)==layer);}',
+            '  sel_info={index:layer.index,name:layer.name,enabled:layer.enabled,solo:layer.solo};',
+            '}',
+            'return {ok:true,comp:{id:ai.id,name:ai.name,width:ai.width,height:ai.height,time:ai.time},layer:sel_info,tool:app.toolName};'
+        ].join('');
+        return await evalJSXJson(code);
+    }
+
+    // --- Puppet pin count reader -----------------------------------------
+    async function readPuppetPinCount(compId, layerIndex) {
+        const code = [
+            'var target=null;',
+            'for(var i=1;i<=app.project.numItems;i++){var it=app.project.item(i); if(it.id==' + compId + '){target=it;break;}}',
+            'if(!target) return {error:"comp_not_found"};',
+            'if(' + layerIndex + '<1 || ' + layerIndex + '>target.numLayers) return {error:"layer_index_out_of_range"};',
+            'var layer=target.layer(' + layerIndex + ');',
+            'var effects=null;',
+            'try{effects=layer.property("ADBE Effect Parade");}catch(_1){}',
+            'if(!effects) return {pin_count:0,has_effect:false,has_mesh:false};',
+            'var fx=null;',
+            'try{fx=effects.property("ADBE FreePin3");}catch(_2){}',
+            'if(!fx) return {pin_count:0,has_effect:false,has_mesh:false};',
+            'var arap=fx.property("ADBE FreePin3 ARAP Group");',
+            'if(!arap) return {pin_count:0,has_effect:true,has_mesh:false};',
+            'var mg=arap.property("ADBE FreePin3 Mesh Group");',
+            'if(!mg || mg.numProperties<1) return {pin_count:0,has_effect:true,has_mesh:false};',
+            'var mesh=mg.property(1);',
+            'var pins=mesh.property("ADBE FreePin3 PosPins");',
+            'var flags=[];',
+            'for(var p=1;p<=pins.numProperties;p++){',
+            '  var pp=pins.property(p);',
+            '  try{',
+            '    var vtx=pp.property("ADBE FreePin3 PosPin Vtx Index"); var vtxV=vtx ? vtx.value : null;',
+            '    flags.push({index:p,name:pp.name,vtx_index:vtxV});',
+            '  }catch(_p){flags.push({index:p,name:pp.name,err:String(_p)});}',
+            '}',
+            'return {pin_count:pins.numProperties,has_effect:true,has_mesh:true,mesh_tri_count:(mesh.property("ADBE FreePin3 Mesh Tri Count")?mesh.property("ADBE FreePin3 Mesh Tri Count").value:null),pins:flags};'
+        ].join('');
+        return await evalJSXJson(code);
+    }
+
+    // --- /place-pin atomic -----------------------------------------------
+    // { comp_id, layer_index, screen_x, screen_y, retries=3, inset_px=3,
+    //   inset_dir=[dx,dy], poll_ms=150, poll_timeout_ms=2500,
+    //   pre_focus=true, pre_click_ms=40, hold_ms=40 }
+    async function handlePlacePin(body) {
+        if (!body) throw new Error('missing_body');
+        initMouse();
+        if (!sendInputClick) throw new Error('mouse_unavailable:' + mouseLoadError);
+
+        const compId = Number(body.comp_id);
+        const layerIndex = Number(body.layer_index);
+        if (!compId || !layerIndex) throw new Error('missing_comp_id_or_layer_index');
+        const sx0 = Number(body.screen_x), sy0 = Number(body.screen_y);
+        if (!Number.isFinite(sx0) || !Number.isFinite(sy0)) throw new Error('bad_screen_xy');
+
+        const retries = body.retries != null ? Math.max(0, Number(body.retries)) : 3;
+        const insetPx = body.inset_px != null ? Math.max(0, Number(body.inset_px)) : 3;
+        const insetDir = Array.isArray(body.inset_dir) && body.inset_dir.length === 2
+            ? [Number(body.inset_dir[0]), Number(body.inset_dir[1])]
+            : [0, 0];
+        const dirLen = Math.hypot(insetDir[0], insetDir[1]) || 1;
+        const stepX = (insetDir[0] / dirLen) * insetPx;
+        const stepY = (insetDir[1] / dirLen) * insetPx;
+
+        const pollMs = body.poll_ms != null ? Math.max(50, Number(body.poll_ms)) : 150;
+        const pollTimeoutMs = body.poll_timeout_ms != null ? Math.max(500, Number(body.poll_timeout_ms)) : 2500;
+        const preClickMs = body.pre_click_ms != null ? Number(body.pre_click_ms) : 40;
+        const holdMs = body.hold_ms != null ? Number(body.hold_ms) : 40;
+        const preFocus = body.pre_focus !== false;
+
+        const before = await readPuppetPinCount(compId, layerIndex);
+        if (before && before.error) return { placed: false, reason: before.error };
+        const beforeCount = Number(before.pin_count || 0);
+
+        if (preFocus && focusAEWindow) focusAEWindow();
+        // Short delay so the AE main window has foreground before we inject the click.
+        await new Promise(r => setTimeout(r, 80));
+
+        const attempts = [];
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            const sx = Math.round(sx0 + stepX * attempt);
+            const sy = Math.round(sy0 + stepY * attempt);
+            const clickRes = await sendInputClick(sx, sy, { preMoveMs: preClickMs, holdMs: holdMs });
+            const deadline = Date.now() + pollTimeoutMs;
+            let after = null;
+            while (Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, pollMs));
+                after = await readPuppetPinCount(compId, layerIndex);
+                if (after && Number(after.pin_count || 0) > beforeCount) break;
+            }
+            const afterCount = after ? Number(after.pin_count || 0) : beforeCount;
+            attempts.push({ attempt: attempt, screen: [sx, sy], after_count: afterCount, click: clickRes });
+            if (afterCount > beforeCount) {
+                const newPin = after && after.pins ? after.pins[after.pins.length - 1] : null;
+                return {
+                    placed: true,
+                    attempts: attempts.length,
+                    pin_index: afterCount,
+                    before_count: beforeCount,
+                    after_count: afterCount,
+                    new_pin: newPin,
+                    tries: attempts
+                };
+            }
+        }
+        return { placed: false, attempts: attempts.length, before_count: beforeCount, tries: attempts };
+    }
+
     async function handleBeginSession(body) {
         const code = [
             'var snap={};',
@@ -348,13 +508,16 @@
     }
 
     const ROUTES = {
-        'GET /health':       function () { return handleHealth(); },
-        'GET /logs':         function (req) { return handleLogs(req); },
-        'POST /eval':        function (req, body) { return handleEval(body); },
-        'GET /viewer-state': function () { return handleViewerState(); },
-        'POST /click-screen':function (req, body) { return handleClickScreen(body); },
+        'GET /health':        function () { return handleHealth(); },
+        'GET /logs':          function (req) { return handleLogs(req); },
+        'POST /eval':         function (req, body) { return handleEval(body); },
+        'GET /viewer-state':  function () { return handleViewerState(); },
+        'POST /click-screen': function (req, body) { return handleClickScreen(body); },
+        'POST /focus-ae':     function () { return handleFocusAE(); },
+        'POST /ensure-viewer':function (req, body) { return handleEnsureViewer(body); },
+        'POST /place-pin':    function (req, body) { return handlePlacePin(body); },
         'POST /begin-session':function (req, body) { return handleBeginSession(body); },
-        'POST /end-session': function () { return handleEndSession(); }
+        'POST /end-session':  function () { return handleEndSession(); }
     };
 
     async function dispatch(req, res) {
