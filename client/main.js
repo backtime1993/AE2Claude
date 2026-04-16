@@ -530,6 +530,10 @@
     }
 
     // --- Puppet pin count reader -----------------------------------------
+    // Reads PosPins + HghtPins + StarchPins and returns per-group + total
+    // counts. pin_count is the sum so that /place-pin can detect a landing
+    // regardless of which Puppet sub-tool (Position/Starch/Bend/Advanced/
+    // Overlap) Ctrl+P happened to be cycled into.
     async function readPuppetPinCount(compId, layerIndex) {
         const code = [
             'var target=null;',
@@ -548,16 +552,30 @@
             'var mg=arap.property("ADBE FreePin3 Mesh Group");',
             'if(!mg || mg.numProperties<1) return {pin_count:0,has_effect:true,has_mesh:false};',
             'var mesh=mg.property(1);',
-            'var pins=mesh.property("ADBE FreePin3 PosPins");',
+            'var posPins=mesh.property("ADBE FreePin3 PosPins");',
+            'var hghtPins=null; try{hghtPins=mesh.property("ADBE FreePin3 HghtPins");}catch(_h){}',
+            'var starchPins=null; try{starchPins=mesh.property("ADBE FreePin3 StarchPins");}catch(_s){}',
+            'var nPos=posPins?posPins.numProperties:0;',
+            'var nHght=hghtPins?hghtPins.numProperties:0;',
+            'var nStarch=starchPins?starchPins.numProperties:0;',
             'var flags=[];',
-            'for(var p=1;p<=pins.numProperties;p++){',
-            '  var pp=pins.property(p);',
+            'for(var p=1;p<=nPos;p++){',
+            '  var pp=posPins.property(p);',
             '  try{',
             '    var vtx=pp.property("ADBE FreePin3 PosPin Vtx Index"); var vtxV=vtx ? vtx.value : null;',
-            '    flags.push({index:p,name:pp.name,vtx_index:vtxV});',
-            '  }catch(_p){flags.push({index:p,name:pp.name,err:String(_p)});}',
+            '    var typ=pp.property("ADBE FreePin3 PosPin Type"); var typV=typ ? typ.value : null;',
+            '    flags.push({index:p,name:pp.name,vtx_index:vtxV,type:typV,group:"PosPins"});',
+            '  }catch(_p){flags.push({index:p,name:pp.name,err:String(_p),group:"PosPins"});}',
             '}',
-            'return {pin_count:pins.numProperties,has_effect:true,has_mesh:true,mesh_tri_count:(mesh.property("ADBE FreePin3 Mesh Tri Count")?mesh.property("ADBE FreePin3 Mesh Tri Count").value:null),pins:flags};'
+            'return {',
+            '  pin_count:nPos+nHght+nStarch,',
+            '  pos_count:nPos,',
+            '  hght_count:nHght,',
+            '  starch_count:nStarch,',
+            '  has_effect:true,has_mesh:true,',
+            '  mesh_tri_count:(mesh.property("ADBE FreePin3 Mesh Tri Count")?mesh.property("ADBE FreePin3 Mesh Tri Count").value:null),',
+            '  pins:flags',
+            '};'
         ].join('');
         return await evalJSXJson(code);
     }
@@ -613,17 +631,19 @@
                 if (after && Number(after.pin_count || 0) > beforeCount) break;
             }
             const afterCount = after ? Number(after.pin_count || 0) : beforeCount;
-            attempts.push({ attempt: attempt, screen: [sx, sy], after_count: afterCount, click: clickRes });
+            const posDelta = (after ? Number(after.pos_count || 0) : 0) - (before ? Number(before.pos_count || 0) : 0);
+            const hghtDelta = (after ? Number(after.hght_count || 0) : 0) - (before ? Number(before.hght_count || 0) : 0);
+            const starchDelta = (after ? Number(after.starch_count || 0) : 0) - (before ? Number(before.starch_count || 0) : 0);
+            attempts.push({ attempt: attempt, screen: [sx, sy], after_count: afterCount, pos_delta: posDelta, hght_delta: hghtDelta, starch_delta: starchDelta, click: clickRes });
             if (afterCount > beforeCount) {
                 const newPin = after && after.pins ? after.pins[after.pins.length - 1] : null;
-                // Optionally force the newest pin to Position type (PosPin Type = 1).
-                // AE Ctrl+P cycles through Position/Starch/Bend/Advanced/Overlap and
-                // the first two (Starch is actually in StarchPins) have the same 6
-                // sub-properties here, just different solver behavior. Default to
-                // coercing to Position (Type 1) unless caller sets force_type=false.
+                const pinGroup = posDelta > 0 ? 'PosPins' : (hghtDelta > 0 ? 'HghtPins' : (starchDelta > 0 ? 'StarchPins' : 'unknown'));
+                // Force PosPin Type = 1 only when the new pin actually lives in
+                // PosPins. Hght/Starch pins are separate property groups; caller
+                // must retry after Ctrl+P rotation to land in PosPins.
                 const forceType = body.force_type === false ? false : (body.force_type != null ? Number(body.force_type) : 1);
                 let typeResult = null;
-                if (forceType) {
+                if (forceType && pinGroup === 'PosPins') {
                     const coerceCode = (
                         'var t=null;for(var i=1;i<=app.project.numItems;i++){var it=app.project.item(i); if(it.id==' + compId + '){t=it;break;}}'
                         + 'if(!t) return {err:"no_comp"};'
@@ -643,6 +663,10 @@
                     before_count: beforeCount,
                     after_count: afterCount,
                     new_pin: newPin,
+                    pin_group: pinGroup,
+                    pos_delta: posDelta,
+                    hght_delta: hghtDelta,
+                    starch_delta: starchDelta,
                     type_coerce: typeResult,
                     tries: attempts
                 };

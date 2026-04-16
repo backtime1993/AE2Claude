@@ -85,17 +85,97 @@ class PinPlacer:
         self.layer_index = int(layer_index)
         return r
 
-    def set_puppet_pin_tool(self):
-        """Enter the Puppet tool family. AE 26 cycles Ctrl+P through Position /
-        Starch / Bend / Advanced / Overlap, but `/place-pin` will coerce the
-        resulting pin's `PosPin Type` to 1 (Position) after it lands, so the
-        caller never has to know which sub-tool is currently active.
+    def _remove_last_pin_in_group(self, group: str):
+        """Remove the property at index 1 (newest) in the given pin group.
+        group ∈ {'PosPins','HghtPins','StarchPins'}.
         """
+        code = (
+            'var target=null;'
+            'for(var i=1;i<=app.project.numItems;i++){var it=app.project.item(i); if(it.id==' + str(self.comp_id) + '){target=it;break;}}'
+            'if(!target) return {err:"no_comp"};'
+            'var layer=target.layer(' + str(self.layer_index) + ');'
+            'var fx=layer.property("ADBE Effect Parade").property("ADBE FreePin3");'
+            'if(!fx) return {err:"no_fx"};'
+            'var mesh=fx.property("ADBE FreePin3 ARAP Group").property("ADBE FreePin3 Mesh Group").property(1);'
+            'var g=mesh.property("' + group + '".indexOf("PosPins")===0?"ADBE FreePin3 PosPins":("' + group + '".indexOf("Hght")===0?"ADBE FreePin3 HghtPins":"ADBE FreePin3 StarchPins"));'
+            'if(!g||g.numProperties<1) return {err:"no_pin_in_group",group:"' + group + '"};'
+            'g.property(1).remove();'
+            'return {ok:true,remaining:g.numProperties};'
+        )
+        return self.jsx(code)
+
+    def _pin_group_counts(self):
+        code = (
+            'var target=null;'
+            'for(var i=1;i<=app.project.numItems;i++){var it=app.project.item(i); if(it.id==' + str(self.comp_id) + '){target=it;break;}}'
+            'if(!target) return {err:"no_comp"};'
+            'var layer=target.layer(' + str(self.layer_index) + ');'
+            'var fx=null; try{fx=layer.property("ADBE Effect Parade").property("ADBE FreePin3");}catch(_){}'
+            'if(!fx) return {pos:0,hght:0,starch:0,has_fx:false};'
+            'var m=fx.property("ADBE FreePin3 ARAP Group").property("ADBE FreePin3 Mesh Group");'
+            'if(!m||m.numProperties<1) return {pos:0,hght:0,starch:0,has_fx:true};'
+            'var mm=m.property(1);'
+            'return {pos:mm.property("ADBE FreePin3 PosPins").numProperties,'
+            'hght:mm.property("ADBE FreePin3 HghtPins").numProperties,'
+            'starch:mm.property("ADBE FreePin3 StarchPins").numProperties,has_fx:true};'
+        )
+        return self.jsx(code)
+
+    def set_puppet_pin_tool(self):
+        """Send Ctrl+P once. Does NOT guarantee which Puppet sub-tool AE lands
+        on (cycle is Position/Starch/Bend/Advanced/Overlap). Prefer
+        ensure_pospin_tool() which actually verifies by probing."""
         r = self._post("/set-tool", {"hotkey": "Ctrl+P"})
         if not r.get("ok"):
             raise CEPError(f"set-tool failed: {r}")
         time.sleep(0.3)
         return r
+
+    def ensure_pospin_tool(self, max_rotations: int = 6):
+        """Rotate Ctrl+P until the next click lands a pin in `PosPins` (not in
+        Hght/Starch). Uses the AE window centre as the probe click point, so
+        the target layer's alpha must cover that point — calibrate expects
+        the same thing.
+
+        Returns {rotations, final_group, pos_delta, ...}. On failure raises.
+        """
+        if self.comp_id is None or self.layer_index is None:
+            raise CEPError("call ensure_target first")
+
+        ae = self.ae_window_rect()
+        if ae.get("error"):
+            raise CEPError(f"ae_window_rect failed: {ae}")
+        probe_x, probe_y = int(ae["center_x"]), int(ae["center_y"])
+
+        # Focus Composition viewer first with a "warm-up" click. Needed because
+        # the CEP panel often holds keyboard focus; Ctrl+P would otherwise go
+        # nowhere. A plain /click-screen (not a /place-pin) just gives AE focus
+        # without demanding pin semantics from whatever tool is active.
+        self._post("/focus-ae")
+        time.sleep(0.1)
+        self._post("/click-screen", {"x": probe_x, "y": probe_y})
+        time.sleep(0.25)
+
+        for rot in range(max_rotations):
+            # Now that viewer has keyboard focus, Ctrl+P actually reaches AE.
+            self._post("/set-tool", {"hotkey": "Ctrl+P"})
+            time.sleep(0.3)
+            r = self._click_place(probe_x, probe_y, retries=0)
+            if not r.get("placed"):
+                raise CEPError(
+                    "probe click did not create any pin at AE centre "
+                    f"({probe_x},{probe_y}) after Ctrl+P rotation {rot}. "
+                    "Verify viewer shows the solo'd layer's alpha there."
+                )
+            group = r.get("pin_group")
+            if group == "PosPins":
+                return {"rotations": rot, "final_group": group, "seed_result": r}
+            # Wrong group — remove this probe pin and cycle Ctrl+P.
+            rm = self._remove_last_pin_in_group(group)
+            if rm.get("err"):
+                raise CEPError(f"could not remove probe pin from {group}: {rm}")
+
+        raise CEPError(f"PosPins never reached after {max_rotations} Ctrl+P rotations")
 
     def read_last_pin_type(self):
         """Return PosPin Type of the most recently placed pin (1=Position)."""
@@ -218,48 +298,32 @@ class PinPlacer:
             "pre_focus": False,
         })
 
-    def calibrate(self, seed_screen=None):
-        """Place a single seed pin at `seed_screen` and derive (tx, ty) so
-        `screen = (tx, ty) + comp * zoom`.
-
-        If `seed_screen` is None we aim at the AE main window centre (via
-        /ae-rect), NOT the physical screen centre. On multi-monitor setups
-        the screen centre could land on another app entirely.
-
-        No retries, no spiral. If the seed click misses we raise immediately so
-        the caller — not us — decides what to do (adjust AE viewer, disable ROI,
-        etc.). Spiralling 30+ clicks previously corrupted AE UI state.
+    def calibrate(self):
+        """Land a single PosPin seed and derive affine (tx, ty) so
+        `screen = (tx, ty) + comp * zoom`. Does the full flow:
+          1) warm-up click to grab viewer keyboard focus (CEP panel tends
+             to steal it)
+          2) rotate Ctrl+P up to 6 times until a probe click lands in PosPins
+             (not Hght/Starch), cleaning up probe pins from wrong groups
+          3) the PosPin that finally lands becomes the calibration seed
+          4) /place-pin already forced PosPin Type=1, so the seed is Position
+          5) read seed's comp coord, solve for tx/ty
         """
         if self.zoom is None:
             self.read_zoom()
-        if seed_screen is None:
-            ae = self.ae_window_rect()
-            if ae.get("error"):
-                raise CEPError(f"ae_window_rect failed: {ae}")
-            seed_screen = (int(ae["center_x"]), int(ae["center_y"]))
-
-        sx, sy = seed_screen
-        r = self._click_place(sx, sy, retries=0)
-        if not r.get("placed"):
-            raise CEPError(
-                "seed pin did not land at screen=({}, {}). "
-                "Verify: (a) target comp is the active viewer, (b) no ROI/crop, "
-                "(c) target layer is solo'd and its alpha covers the seed point."
-                .format(sx, sy)
-            )
-        placed_info = self._last_pin_info()
-        placed_info["seed_screen"] = [sx, sy]
-
-        cx, cy = placed_info["pos"]
-        sx, sy = placed_info["seed_screen"]
+        ens = self.ensure_pospin_tool()
+        seed_result = ens["seed_result"]
+        sx, sy = seed_result["tries"][-1]["screen"]
+        seed_info = self._last_pin_info()
+        cx, cy = seed_info["pos"]
         self.tx = sx - cx * self.zoom
         self.ty = sy - cy * self.zoom
         self.seed_pin_pos = [cx, cy]
         return {
             "tx": self.tx, "ty": self.ty, "zoom": self.zoom,
             "seed_comp": [cx, cy], "seed_screen": [sx, sy],
-            "seed_vtx": placed_info["vtx_index"],
-            "attempts": len(tried),
+            "seed_vtx": seed_info["vtx_index"],
+            "rotations": ens["rotations"],
         }
 
     def comp_to_screen(self, cx: float, cy: float):
