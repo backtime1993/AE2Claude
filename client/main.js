@@ -112,6 +112,7 @@
             const SetForegroundWindow = user32.func('int32 SetForegroundWindow(void*)');
             const ShowWindow = user32.func('int32 ShowWindow(void*, int32)');
             const BringWindowToTop = user32.func('int32 BringWindowToTop(void*)');
+            const IsIconic = user32.func('int32 IsIconic(void*)');
             const SW_RESTORE = 9;
 
             const SM_CXSCREEN = 0, SM_CYSCREEN = 1;
@@ -171,10 +172,13 @@
                 for (let i = 0; i < candidates.length; i++) {
                     const hwnd = FindWindowA(candidates[i], null);
                     if (hwnd) {
-                        ShowWindow(hwnd, SW_RESTORE);
+                        // Only un-minimize. Do NOT call SW_RESTORE on already-normal/maximized
+                        // windows — that demotes maximized to its previous size.
+                        const wasMin = IsIconic(hwnd) ? true : false;
+                        if (wasMin) ShowWindow(hwnd, SW_RESTORE);
                         BringWindowToTop(hwnd);
                         SetForegroundWindow(hwnd);
-                        return { ok: true, class: candidates[i] };
+                        return { ok: true, class: candidates[i], was_minimized: wasMin };
                     }
                 }
                 return { ok: false, tried: candidates };
@@ -648,9 +652,13 @@
     }
 
     async function handleReloadSelf() {
-        log('reload-self requested; scheduling window.location.reload() in 200ms');
-        setTimeout(function(){ try { window.location.reload(); } catch(_){ } }, 200);
-        return { ok: true, reloading_in_ms: 200 };
+        log('reload-self requested; closing server then reloading');
+        try {
+            if (httpServer && httpServer.closeAllConnections) httpServer.closeAllConnections();
+            if (httpServer) httpServer.close();
+        } catch (e) { log('reload close error: ' + e.message); }
+        setTimeout(function () { try { window.location.reload(); } catch (_) {} }, 400);
+        return { ok: true, reloading_in_ms: 400 };
     }
 
     async function dispatch(req, res) {
@@ -678,14 +686,16 @@
     }
 
     // --- boot ----------------------------------------------------------------
+    let httpServer = null;
+
     function startServer() {
-        const server = http.createServer(function (req, res) { dispatch(req, res); });
-        server.on('error', function (err) {
+        httpServer = http.createServer(function (req, res) { dispatch(req, res); });
+        httpServer.on('error', function (err) {
             setStatus('listen_error', 'status-err');
             log('listen error: ' + err.message);
         });
-        server.listen(PORT, '127.0.0.1', function () {
-            const addr = server.address();
+        httpServer.listen(PORT, '127.0.0.1', function () {
+            const addr = httpServer.address();
             endpointEl.textContent = '127.0.0.1:' + PORT;
             setStatus('listening', 'status-ok');
             log('HTTP listening on ' + JSON.stringify(addr));
@@ -695,6 +705,20 @@
         setInterval(function(){}, 60000);
     }
 
+    // Expose a shutdown hook on the window so subsequent reloads can close
+    // the previous server before re-listening. Not stored on the JS heap
+    // (which is reset on reload) — on `window` which CEF keeps alive.
+    if (window.__ae2claude_prior_server) {
+        try {
+            log('detected prior httpServer from reload; closing before bind');
+            const prior = window.__ae2claude_prior_server;
+            try { if (prior.closeAllConnections) prior.closeAllConnections(); } catch (_) {}
+            prior.close();
+        } catch (e) { log('prior close error: ' + e.message); }
+        window.__ae2claude_prior_server = null;
+    }
+
     startServer();
+    window.__ae2claude_prior_server = httpServer;
     log('panel booted');
 })();
