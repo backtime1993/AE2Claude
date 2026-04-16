@@ -83,6 +83,7 @@
     // --- Mouse click via koffi + SendInput -----------------------------------
     // Loaded lazily so HTTP can still answer /health even if koffi fails.
     let sendInputClick = null;
+    let sendKeySequence = null;
     let focusAEWindow = null;
     let mouseLoadError = null;
 
@@ -110,6 +111,20 @@
                 dwExtraInfo:'uintptr_t',
                 _tail:      'uint32'
             });
+            // Same 40-byte envelope, but MOUSEINPUT slots repurposed for KEYBDINPUT
+            // (WORD wVk, WORD wScan, DWORD dwFlags, DWORD time, ULONG_PTR dwExtraInfo).
+            const INPUT_KBD = koffi.struct('INPUT_KBD', {
+                type:       'uint32',
+                _pad:       'uint32',
+                wVk:        'uint16',
+                wScan:      'uint16',
+                dwFlags:    'uint32',
+                time:       'uint32',
+                dwExtraInfo:'uintptr_t',
+                _tail1:     'uint32',
+                _tail2:     'uint32',
+                _tail3:     'uint32'
+            });
             const SendInput = user32.func('uint32 SendInput(uint32, _In_ INPUT*, int32)');
             const GetSystemMetrics = user32.func('int32 GetSystemMetrics(int32)');
             const SetCursorPos = user32.func('int32 SetCursorPos(int32, int32)');
@@ -126,6 +141,48 @@
             const MOUSEEVENTF_LEFTUP = 0x0004;
             const MOUSEEVENTF_ABSOLUTE = 0x8000;
             const MOUSEEVENTF_VIRTUALDESK = 0x4000;
+
+            // --- Keyboard SendInput (VK codes) ---
+            const INPUT_KEYBOARD = 1;
+            const KEYEVENTF_KEYUP = 0x0002;
+
+            sendKeySequence = function (keys, opts) {
+                // keys: array of { vk, up?:false }
+                opts = opts || {};
+                const betweenMs = opts.betweenMs != null ? opts.betweenMs : 15;
+
+                function mkKey(vk, up) {
+                    return {
+                        type: INPUT_KEYBOARD,
+                        _pad: 0,
+                        wVk: vk,
+                        wScan: 0,
+                        dwFlags: up ? KEYEVENTF_KEYUP : 0,
+                        time: 0,
+                        dwExtraInfo: 0,
+                        _tail1: 0, _tail2: 0, _tail3: 0
+                    };
+                }
+
+                function sendOne(vk, up) {
+                    const buf = [mkKey(vk, up)];
+                    const n = SendInput(1, buf, koffi.sizeof(INPUT_KBD));
+                    if (n !== 1) throw new Error('SendInput KEYBD returned ' + n);
+                }
+
+                return new Promise(function (resolve, reject) {
+                    let i = 0;
+                    function step() {
+                        if (i >= keys.length) return resolve({ ok: true, keys: keys.length });
+                        try {
+                            const k = keys[i++];
+                            sendOne(k.vk, !!k.up);
+                            setTimeout(step, betweenMs);
+                        } catch (e) { reject(e); }
+                    }
+                    step();
+                });
+            };
 
             // --- AE window focus ---
             // AE classname "AE_CApplication_26.3" (varies by version). Find by class prefix.
@@ -250,6 +307,8 @@
             port: PORT,
             ae: v,
             mouse_ready: !!sendInputClick,
+            keyboard_ready: !!sendKeySequence,
+            focus_ready: !!focusAEWindow,
             mouse_error: mouseLoadError,
             session_active: !!session
         };
@@ -299,6 +358,66 @@
         if (body && body.hold_ms != null) opts.holdMs = Number(body.hold_ms);
         const r = await sendInputClick(x, y, opts);
         return r;
+    }
+
+    // Windows Virtual Key subset we need.
+    const VK = {
+        CTRL: 0x11, SHIFT: 0x10, ALT: 0x12,
+        A:0x41,B:0x42,C:0x43,D:0x44,E:0x45,F:0x46,G:0x47,H:0x48,I:0x49,J:0x4A,K:0x4B,L:0x4C,
+        M:0x4D,N:0x4E,O:0x4F,P:0x50,Q:0x51,R:0x52,S:0x53,T:0x54,U:0x55,V:0x56,W:0x57,X:0x58,
+        Y:0x59,Z:0x5A,
+        ESC:0x1B, ENTER:0x0D, SPACE:0x20, TAB:0x09
+    };
+
+    function parseCombo(text) {
+        // "Ctrl+P" -> [{vk:CTRL},{vk:P},{vk:P,up},{vk:CTRL,up}]
+        const parts = String(text).split('+').map(s => s.trim().toUpperCase());
+        const vks = parts.map(p => {
+            const v = VK[p];
+            if (v == null) throw new Error('unknown_key:' + p);
+            return v;
+        });
+        const downs = vks.map(v => ({ vk: v }));
+        const ups = vks.slice().reverse().map(v => ({ vk: v, up: true }));
+        return downs.concat(ups);
+    }
+
+    async function handleSetTool(body) {
+        initMouse();
+        if (!sendKeySequence) throw new Error('keyboard_unavailable:' + mouseLoadError);
+        if (!focusAEWindow) throw new Error('focus_unavailable');
+
+        const combo = body && body.hotkey ? String(body.hotkey) : 'Ctrl+P';
+        const expect = body && body.expect_tool ? String(body.expect_tool) : null;
+        const preFocus = body && body.pre_focus !== false;
+
+        if (preFocus) focusAEWindow();
+        await new Promise(r => setTimeout(r, 80));
+        // If viewer is not active, ExtendScript ensures it.
+        await evalJSXJson('try{app.activeViewer.setActive();}catch(_){} return {tool_before:app.toolName};');
+        await new Promise(r => setTimeout(r, 30));
+
+        let seq;
+        try { seq = parseCombo(combo); }
+        catch (e) { throw new Error('bad_hotkey:' + e.message); }
+        await sendKeySequence(seq, { betweenMs: 20 });
+
+        // Wait a beat for AE to actually commit the tool switch.
+        await new Promise(r => setTimeout(r, 120));
+        const after = await evalJSXJson('return { tool: app.toolName };');
+        const ok = expect ? (after && after.tool === expect) : true;
+        return { ok: ok, tool: after && after.tool, expected: expect, combo: combo };
+    }
+
+    async function handlePressKey(body) {
+        initMouse();
+        if (!sendKeySequence) throw new Error('keyboard_unavailable:' + mouseLoadError);
+        if (!body || !body.hotkey) throw new Error('missing_hotkey');
+        const preFocus = body.pre_focus !== false;
+        if (preFocus && focusAEWindow) { focusAEWindow(); await new Promise(r => setTimeout(r, 60)); }
+        const seq = parseCombo(String(body.hotkey));
+        await sendKeySequence(seq, { betweenMs: body.between_ms != null ? Number(body.between_ms) : 20 });
+        return { ok: true, sent: body.hotkey };
     }
 
     async function handleFocusAE() {
@@ -513,6 +632,8 @@
         'POST /eval':         function (req, body) { return handleEval(body); },
         'GET /viewer-state':  function () { return handleViewerState(); },
         'POST /click-screen': function (req, body) { return handleClickScreen(body); },
+        'POST /set-tool':     function (req, body) { return handleSetTool(body); },
+        'POST /press-key':    function (req, body) { return handlePressKey(body); },
         'POST /focus-ae':     function () { return handleFocusAE(); },
         'POST /ensure-viewer':function (req, body) { return handleEnsureViewer(body); },
         'POST /place-pin':    function (req, body) { return handlePlacePin(body); },
