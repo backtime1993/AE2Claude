@@ -531,9 +531,33 @@ class PinPlacer:
         # select it instead of creating a new one).
         self._offset_seed_if_existing_pin()
         probe_point = getattr(self, "preferred_seed_point", None)
-        ens = self.ensure_pospin_tool(probe_point=probe_point)
-        seed_result = ens["seed_result"]
-        sx, sy = seed_result["tries"][-1]["screen"]
+        if probe_point is None:
+            ae = self.ae_window_rect()
+            if ae.get("error"):
+                raise CEPError(f"ae_window_rect failed: {ae}")
+            probe_point = (int(ae["center_x"]), int(ae["center_y"]))
+        sx, sy = int(probe_point[0]), int(probe_point[1])
+
+        # Just click once. DO NOT touch the Puppet sub-tool — the user keeps
+        # AE on 位置控点 (Position Pin) by default; any Ctrl+P we send would
+        # only rotate it into a sibling they didn't ask for.
+        self._post("/focus-ae")
+        time.sleep(0.15)
+        r = self._click_place(sx, sy, retries=0)
+        if not r.get("placed"):
+            raise CEPError(
+                f"seed click at ({sx},{sy}) did not create any pin. "
+                "Check that the AE viewer shows the target layer's alpha at "
+                "that point and that the active tool is Puppet Position Pin."
+            )
+        group = r.get("pin_group")
+        if group != "PosPins":
+            raise CEPError(
+                f"seed pin landed in {group}, not PosPins. Please switch AE's "
+                "active Puppet sub-tool to 位置控点 (Position Pin) and retry. "
+                "The script will no longer auto-rotate sub-tools."
+            )
+
         seed_info = self._last_pin_info()
         cx, cy = seed_info["pos"]
         self.tx = sx - cx * self.zoom
@@ -544,7 +568,6 @@ class PinPlacer:
             "tx": self.tx, "ty": self.ty, "zoom": self.zoom,
             "seed_comp": [cx, cy], "seed_screen": [sx, sy],
             "seed_vtx": seed_info["vtx_index"],
-            "rotations": ens["rotations"],
             "viewer_rect": self.viewer_rect,
         }
 
