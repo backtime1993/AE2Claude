@@ -85,6 +85,8 @@
     let sendInputClick = null;
     let sendKeySequence = null;
     let focusAEWindow = null;
+    let enumerateAEWindows = null;
+    let getAEWindowRect = null;
     let mouseLoadError = null;
 
     function initMouse() {
@@ -113,9 +115,62 @@
             const ShowWindow = user32.func('int32 ShowWindow(void*, int32)');
             const BringWindowToTop = user32.func('int32 BringWindowToTop(void*)');
             const IsIconic = user32.func('int32 IsIconic(void*)');
+            const GetClassNameA = user32.func('int32 GetClassNameA(void*, _Out_ char*, int32)');
+            const GetWindowTextA = user32.func('int32 GetWindowTextA(void*, _Out_ char*, int32)');
+            const RECT = koffi.struct('RECT', { left: 'int32', top: 'int32', right: 'int32', bottom: 'int32' });
+            const GetWindowRect = user32.func('int32 GetWindowRect(void*, _Out_ RECT*)');
+            const IsWindowVisible = user32.func('int32 IsWindowVisible(void*)');
+            const EnumChildWindowsProc = koffi.proto('int32 EnumChildWindowsProc(void*, int64)');
+            const EnumChildWindows = user32.func('int32 EnumChildWindows(void*, EnumChildWindowsProc*, int64)');
             const SW_RESTORE = 9;
 
+            // --- Enumerate every descendant HWND of AE main window with class/text/rect/visibility.
+            enumerateAEWindows = function () {
+                // Find AE main first.
+                let aeHwnd = null;
+                const candidates = ['AE_CApplication_26.3', 'AE_CApplication_26.2', 'AE_CApplication_26.1', 'AE_CApplication_26.0'];
+                for (let i = 0; i < candidates.length; i++) {
+                    const h = FindWindowA(candidates[i], null);
+                    if (h) { aeHwnd = h; break; }
+                }
+                if (!aeHwnd) return { error: 'AE window not found' };
+
+                const rows = [];
+                const classBuf = Buffer.alloc(256);
+                const textBuf = Buffer.alloc(512);
+                const rectObj = { left: 0, top: 0, right: 0, bottom: 0 };
+
+                // Callback must be registered with koffi.register(fn, proto)
+                const cb = koffi.register(function (hwnd, lparam) {
+                    try {
+                        classBuf.fill(0);
+                        textBuf.fill(0);
+                        const clsLen = GetClassNameA(hwnd, classBuf, 255);
+                        const txtLen = GetWindowTextA(hwnd, textBuf, 511);
+                        const visible = IsWindowVisible(hwnd) !== 0;
+                        const gotRect = GetWindowRect(hwnd, rectObj);
+                        rows.push({
+                            hwnd: String(hwnd),
+                            cls: classBuf.toString('utf8', 0, clsLen),
+                            text: textBuf.toString('utf8', 0, txtLen),
+                            visible: visible,
+                            rect: gotRect ? { left: rectObj.left, top: rectObj.top, right: rectObj.right, bottom: rectObj.bottom, w: rectObj.right - rectObj.left, h: rectObj.bottom - rectObj.top } : null
+                        });
+                    } catch (e) { /* swallow — keep enumeration going */ }
+                    return 1; // continue
+                }, koffi.pointer(EnumChildWindowsProc));
+
+                try {
+                    EnumChildWindows(aeHwnd, cb, 0);
+                } finally {
+                    koffi.unregister(cb);
+                }
+                return { ae_hwnd: String(aeHwnd), count: rows.length, rows: rows };
+            };
+
             const SM_CXSCREEN = 0, SM_CYSCREEN = 1;
+            const SM_XVIRTUALSCREEN = 76, SM_YVIRTUALSCREEN = 77;
+            const SM_CXVIRTUALSCREEN = 78, SM_CYVIRTUALSCREEN = 79;
             const INPUT_MOUSE = 0;
             const MOUSEEVENTF_MOVE = 0x0001;
             const MOUSEEVENTF_LEFTDOWN = 0x0002;
@@ -167,21 +222,36 @@
 
             // --- AE window focus ---
             // AE classname "AE_CApplication_26.3" (varies by version). Find by class prefix.
-            focusAEWindow = function () {
-                const candidates = ['AE_CApplication_26.3', 'AE_CApplication_26.2', 'AE_CApplication_26.1', 'AE_CApplication_26.0', 'AE_CApplication_25.0', 'AE_CApplication_24.0'];
-                for (let i = 0; i < candidates.length; i++) {
-                    const hwnd = FindWindowA(candidates[i], null);
-                    if (hwnd) {
-                        // Only un-minimize. Do NOT call SW_RESTORE on already-normal/maximized
-                        // windows — that demotes maximized to its previous size.
-                        const wasMin = IsIconic(hwnd) ? true : false;
-                        if (wasMin) ShowWindow(hwnd, SW_RESTORE);
-                        BringWindowToTop(hwnd);
-                        SetForegroundWindow(hwnd);
-                        return { ok: true, class: candidates[i], was_minimized: wasMin };
-                    }
+            const AE_CLASSES = ['AE_CApplication_26.3', 'AE_CApplication_26.2', 'AE_CApplication_26.1', 'AE_CApplication_26.0', 'AE_CApplication_25.0', 'AE_CApplication_24.0'];
+            function findAEHwnd() {
+                for (let i = 0; i < AE_CLASSES.length; i++) {
+                    const h = FindWindowA(AE_CLASSES[i], null);
+                    if (h) return { hwnd: h, cls: AE_CLASSES[i] };
                 }
-                return { ok: false, tried: candidates };
+                return null;
+            }
+            focusAEWindow = function () {
+                const r = findAEHwnd();
+                if (!r) return { ok: false, tried: AE_CLASSES };
+                const wasMin = IsIconic(r.hwnd) ? true : false;
+                if (wasMin) ShowWindow(r.hwnd, SW_RESTORE);
+                BringWindowToTop(r.hwnd);
+                SetForegroundWindow(r.hwnd);
+                return { ok: true, class: r.cls, was_minimized: wasMin };
+            };
+            getAEWindowRect = function () {
+                const r = findAEHwnd();
+                if (!r) return { error: 'ae_window_not_found', tried: AE_CLASSES };
+                const rc = { left: 0, top: 0, right: 0, bottom: 0 };
+                const got = GetWindowRect(r.hwnd, rc);
+                if (!got) return { error: 'GetWindowRect failed' };
+                return {
+                    class: r.cls,
+                    left: rc.left, top: rc.top, right: rc.right, bottom: rc.bottom,
+                    width: rc.right - rc.left, height: rc.bottom - rc.top,
+                    center_x: Math.round((rc.left + rc.right) / 2),
+                    center_y: Math.round((rc.top + rc.bottom) / 2)
+                };
             };
 
             sendInputClick = function (screenX, screenY, opts) {
@@ -192,11 +262,15 @@
                 // Cursor to approximate target first (helps multi-monitor absolute calc)
                 SetCursorPos(screenX, screenY);
 
-                // ABSOLUTE coords are 0..65535 over the primary screen (or virtual desktop).
-                const sw = GetSystemMetrics(SM_CXSCREEN);
-                const sh = GetSystemMetrics(SM_CYSCREEN);
-                const ax = Math.round((screenX * 65535) / Math.max(1, sw - 1));
-                const ay = Math.round((screenY * 65535) / Math.max(1, sh - 1));
+                // ABSOLUTE+VIRTUALDESK: coords 0..65535 over the entire virtual desktop
+                // (all monitors combined). Single-monitor SM_CXSCREEN would mis-map
+                // clicks to the primary screen when AE is on a secondary monitor.
+                const vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                const vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                const vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                const vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                const ax = Math.round(((screenX - vx) * 65535) / Math.max(1, vw - 1));
+                const ay = Math.round(((screenY - vy) * 65535) / Math.max(1, vh - 1));
 
                 function buildMouse(flags) {
                     const b = Buffer.alloc(INPUT_SIZE);
@@ -205,7 +279,7 @@
                     b.writeInt32LE(ax, 8);            // dx
                     b.writeInt32LE(ay, 12);           // dy
                     b.writeUInt32LE(0, 16);           // mouseData
-                    b.writeUInt32LE(flags | MOUSEEVENTF_ABSOLUTE, 20);  // dwFlags
+                    b.writeUInt32LE(flags | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, 20);  // dwFlags
                     b.writeUInt32LE(0, 24);           // time
                     // 28..31 pad, 32..39 dwExtraInfo (leave 0)
                     return b;
@@ -411,6 +485,19 @@
         return focusAEWindow();
     }
 
+    async function handleAERect() {
+        initMouse();
+        if (!getAEWindowRect) throw new Error('ae_rect_unavailable:' + mouseLoadError);
+        const r = getAEWindowRect();
+        if (r && !r.error) {
+            r.virtual_desktop = {
+                x: 0,
+                y: 0  // placeholder; actual virtual origin is added by /viewer-state if needed
+            };
+        }
+        return r;
+    }
+
     async function handleEnsureViewer(body) {
         const compName = body && typeof body.comp_name === 'string' ? body.comp_name.replace(/\"/g, '\\"') : null;
         const compId = body && body.comp_id != null ? Number(body.comp_id) : null;
@@ -529,6 +616,26 @@
             attempts.push({ attempt: attempt, screen: [sx, sy], after_count: afterCount, click: clickRes });
             if (afterCount > beforeCount) {
                 const newPin = after && after.pins ? after.pins[after.pins.length - 1] : null;
+                // Optionally force the newest pin to Position type (PosPin Type = 1).
+                // AE Ctrl+P cycles through Position/Starch/Bend/Advanced/Overlap and
+                // the first two (Starch is actually in StarchPins) have the same 6
+                // sub-properties here, just different solver behavior. Default to
+                // coercing to Position (Type 1) unless caller sets force_type=false.
+                const forceType = body.force_type === false ? false : (body.force_type != null ? Number(body.force_type) : 1);
+                let typeResult = null;
+                if (forceType) {
+                    const coerceCode = (
+                        'var t=null;for(var i=1;i<=app.project.numItems;i++){var it=app.project.item(i); if(it.id==' + compId + '){t=it;break;}}'
+                        + 'if(!t) return {err:"no_comp"};'
+                        + 'var layer=t.layer(' + layerIndex + ');'
+                        + 'var pins=layer.property("ADBE Effect Parade").property("ADBE FreePin3").property("ADBE FreePin3 ARAP Group").property("ADBE FreePin3 Mesh Group").property(1).property("ADBE FreePin3 PosPins");'
+                        + 'var pp=pins.property(1);'
+                        + 'var tp=pp.property("ADBE FreePin3 PosPin Type");'
+                        + 'var before=tp.value; var err=null; try{tp.setValue(' + forceType + ');}catch(e){err=String(e);}'
+                        + 'return {before:before,after:tp.value,error:err};'
+                    );
+                    try { typeResult = await evalJSXJson(coerceCode); } catch (e) { typeResult = { error: String(e) }; }
+                }
                 return {
                     placed: true,
                     attempts: attempts.length,
@@ -536,6 +643,7 @@
                     before_count: beforeCount,
                     after_count: afterCount,
                     new_pin: newPin,
+                    type_coerce: typeResult,
                     tries: attempts
                 };
             }
@@ -620,6 +728,7 @@
         'POST /set-tool':     function (req, body) { return handleSetTool(body); },
         'POST /press-key':    function (req, body) { return handlePressKey(body); },
         'POST /focus-ae':     function () { return handleFocusAE(); },
+        'GET /ae-rect':       function () { return handleAERect(); },
         'POST /ensure-viewer':function (req, body) { return handleEnsureViewer(body); },
         'POST /place-pin':    function (req, body) { return handlePlacePin(body); },
         'POST /begin-session':function (req, body) { return handleBeginSession(body); },
