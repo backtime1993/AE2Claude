@@ -194,25 +194,18 @@ class PinPlacer:
         return self.jsx(code)
 
     def fit_to_viewer(self):
-        """Invoke AE's 'Fit to Comp Panel' (Shift + / / Shift + Slash) so that
-        the entire comp is inside the visible viewer area. Forces a zoom
-        re-read afterwards because fit changes zoom."""
-        # AE maps '/' to VK_OEM_2 = 0xBF. parseCombo in CEP recognizes only
-        # named keys, so we use /press-key with a raw sequence by piggybacking
-        # on the 'SLASH' alias we add server-side next. For now use a JSX
-        # hack: app.activeViewer.setActive() + executeCommand via menu.
+        """Send Shift+/ (AE's 'Fit' shortcut) so the whole comp fits into the
+        viewer. Re-reads zoom afterwards since fit changes it.
+        AE must have viewer keyboard focus first — callers should
+        focus_ae and click into the viewer once before calling this.
+        """
+        self._post("/focus-ae")
+        time.sleep(0.1)
         r = self._post("/press-key", {"hotkey": "Shift+SLASH"})
-        if not r.get("ok"):
-            # Fallback: /eval a ZoomViewport command
-            js = (
-                "try{app.activeViewer.setActive();}catch(_){}"
-                "try{app.executeCommand(app.findMenuCommandId('Fit'));}catch(_){}"
-                "return {fallback:true};"
-            )
-            self.jsx(js)
-        time.sleep(0.3)
+        time.sleep(0.35)
         self.zoom = None
-        return self.read_zoom()
+        new_zoom = self.read_zoom()
+        return {"ok": bool(r.get("ok")), "zoom": new_zoom}
 
     def get_viewer_state(self):
         return self._get("/viewer-state")
