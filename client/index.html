@@ -19,6 +19,13 @@
     <div class="row">HTTP: <code id="endpoint">—</code> <span id="status" class="status-pending">starting…</span></div>
     <div class="row">Requests: <span id="reqcount">0</span> · Errors: <span id="errcount">0</span></div>
     <div id="log"></div>
+    <script>
+        window.addEventListener('error', function(e){
+            var s=document.getElementById('status'); if(s){s.textContent='js_error'; s.className='status-err';}
+            var lg=document.getElementById('log'); if(lg){lg.textContent='WIN_ERR '+(e.message||e.error)+'\n'+lg.textContent;}
+        });
+    </script>
+    <script src="CSInterface.js"></script>
     <script src="main.js"></script>
 </body>
 </html>

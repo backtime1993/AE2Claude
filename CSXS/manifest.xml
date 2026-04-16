@@ -31,14 +31,16 @@
                     </CEFCommandLine>
                 </Resources>
                 <Lifecycle>
-                    <AutoVisible>true</AutoVisible>
+                    <AutoVisible>false</AutoVisible>
+                    <StartOn>
+                        <Event>com.adobe.csxs.events.ApplicationActivate</Event>
+                    </StartOn>
                 </Lifecycle>
                 <UI>
-                    <Type>Panel</Type>
-                    <Menu>AE2Claude PinClicker</Menu>
+                    <Type>Custom</Type>
+                    <Menu Placement="custom"/>
                     <Geometry>
-                        <Size><Height>280</Height><Width>420</Width></Size>
-                        <MinSize><Height>200</Height><Width>300</Width></MinSize>
+                        <Size><Height>0</Height><Width>0</Width></Size>
                     </Geometry>
                 </UI>
             </DispatchInfo>

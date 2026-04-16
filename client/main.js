@@ -27,8 +27,15 @@
     let reqCount = 0;
     let errCount = 0;
 
+    // Log ring-buffer kept in memory so /logs can expose it regardless of panel visibility.
+    const logBuffer = [];
+    const LOG_BUFFER_MAX = 400;
+    let logFilePath = null;
+
     function log(msg) {
         const line = new Date().toISOString().substr(11, 12) + ' ' + msg;
+        logBuffer.push(line);
+        if (logBuffer.length > LOG_BUFFER_MAX) logBuffer.shift();
         if (logEl) {
             logEl.textContent = line + '\n' + logEl.textContent;
             if (logEl.textContent.length > 20000) {
@@ -36,6 +43,9 @@
             }
         }
         try { console.log(line); } catch (_) {}
+        if (logFilePath && fs) {
+            try { fs.appendFile(logFilePath, line + '\n', function(){}); } catch (_) {}
+        }
     }
 
     function setStatus(text, cls) {
@@ -58,6 +68,16 @@
         setStatus('cep_node missing', 'status-err');
         log('FATAL: cep_node.require failed: ' + err.message);
         return;
+    }
+
+    try {
+        const extRoot = cs.getSystemPath(SystemPath.EXTENSION);
+        const logDir = path.join(extRoot, 'logs');
+        try { fs.mkdirSync(logDir, { recursive: true }); } catch (_) {}
+        logFilePath = path.join(logDir, 'cep.log');
+        fs.appendFileSync(logFilePath, '\n=== boot ' + new Date().toISOString() + ' pid=' + (process && process.pid) + ' ===\n');
+    } catch (err) {
+        try { console.warn('log file init failed: ' + err.message); } catch (_) {}
     }
 
     // --- Mouse click via koffi + SendInput -----------------------------------
@@ -320,8 +340,16 @@
         return { ok: true, restored: true, detail: r };
     }
 
+    async function handleLogs(req) {
+        const parsed = url.parse(req.url, true);
+        const tail = parsed.query && parsed.query.tail ? Math.max(1, Math.min(LOG_BUFFER_MAX, parseInt(parsed.query.tail, 10) || 100)) : 100;
+        const slice = logBuffer.slice(-tail);
+        return { lines: slice, log_file: logFilePath, buffer_size: logBuffer.length };
+    }
+
     const ROUTES = {
         'GET /health':       function () { return handleHealth(); },
+        'GET /logs':         function (req) { return handleLogs(req); },
         'POST /eval':        function (req, body) { return handleEval(body); },
         'GET /viewer-state': function () { return handleViewerState(); },
         'POST /click-screen':function (req, body) { return handleClickScreen(body); },
@@ -361,11 +389,14 @@
             log('listen error: ' + err.message);
         });
         server.listen(PORT, '127.0.0.1', function () {
+            const addr = server.address();
             endpointEl.textContent = '127.0.0.1:' + PORT;
             setStatus('listening', 'status-ok');
-            log('HTTP listening on 127.0.0.1:' + PORT);
+            log('HTTP listening on ' + JSON.stringify(addr));
             initMouse();
         });
+        // Keep the Node event loop alive even if the panel is minimized/hidden.
+        setInterval(function(){}, 60000);
     }
 
     startServer();
