@@ -94,38 +94,18 @@
             const koffiPath = cep_node.require('path').join(extRoot, 'node_modules', 'koffi');
             const koffi = cep_node.require(koffiPath);
             const user32 = koffi.load('user32.dll');
+            const kernel32 = koffi.load('kernel32.dll');
+            const GetLastError = kernel32.func('uint32 GetLastError()');
 
             // INPUT union layout (Windows x64): size 40 bytes total.
             //   DWORD type             (4)
             //   <4 bytes pad>          (4)
             //   MOUSEINPUT mi          (32): LONG dx, LONG dy, DWORD mouseData, DWORD dwFlags,
             //                                DWORD time, ULONG_PTR dwExtraInfo
-            const INPUT = koffi.struct('INPUT', {
-                type:       'uint32',
-                _pad:       'uint32',
-                dx:         'int32',
-                dy:         'int32',
-                mouseData:  'uint32',
-                dwFlags:    'uint32',
-                time:       'uint32',
-                dwExtraInfo:'uintptr_t',
-                _tail:      'uint32'
-            });
-            // Same 40-byte envelope, but MOUSEINPUT slots repurposed for KEYBDINPUT
-            // (WORD wVk, WORD wScan, DWORD dwFlags, DWORD time, ULONG_PTR dwExtraInfo).
-            const INPUT_KBD = koffi.struct('INPUT_KBD', {
-                type:       'uint32',
-                _pad:       'uint32',
-                wVk:        'uint16',
-                wScan:      'uint16',
-                dwFlags:    'uint32',
-                time:       'uint32',
-                dwExtraInfo:'uintptr_t',
-                _tail1:     'uint32',
-                _tail2:     'uint32',
-                _tail3:     'uint32'
-            });
-            const SendInput = user32.func('uint32 SendInput(uint32, _In_ INPUT*, int32)');
+            // Skip koffi structs — Windows INPUT layout needs explicit padding that
+            // koffi struct declarations are awkward about. Use raw 40-byte Buffers.
+            const INPUT_SIZE = 40;
+            const SendInput = user32.func('uint32 SendInput(uint32, _In_ void*, int32)');
             const GetSystemMetrics = user32.func('int32 GetSystemMetrics(int32)');
             const SetCursorPos = user32.func('int32 SetCursorPos(int32, int32)');
             const FindWindowA = user32.func('void* FindWindowA(const char*, const char*)');
@@ -151,23 +131,23 @@
                 opts = opts || {};
                 const betweenMs = opts.betweenMs != null ? opts.betweenMs : 15;
 
-                function mkKey(vk, up) {
-                    return {
-                        type: INPUT_KEYBOARD,
-                        _pad: 0,
-                        wVk: vk,
-                        wScan: 0,
-                        dwFlags: up ? KEYEVENTF_KEYUP : 0,
-                        time: 0,
-                        dwExtraInfo: 0,
-                        _tail1: 0, _tail2: 0, _tail3: 0
-                    };
+                function buildKey(vk, up) {
+                    const b = Buffer.alloc(INPUT_SIZE);
+                    b.writeUInt32LE(INPUT_KEYBOARD, 0);  // type
+                    // 4..7 pad
+                    b.writeUInt16LE(vk, 8);              // wVk
+                    b.writeUInt16LE(0, 10);              // wScan
+                    b.writeUInt32LE(up ? KEYEVENTF_KEYUP : 0, 12);  // dwFlags
+                    b.writeUInt32LE(0, 16);              // time
+                    // 20..27: dwExtraInfo (8 bytes) — leave 0
+                    // 28..39: trailing union padding
+                    return b;
                 }
 
                 function sendOne(vk, up) {
-                    const buf = [mkKey(vk, up)];
-                    const n = SendInput(1, buf, koffi.sizeof(INPUT_KBD));
-                    if (n !== 1) throw new Error('SendInput KEYBD returned ' + n);
+                    const buf = buildKey(vk, up);
+                    const n = SendInput(1, buf, INPUT_SIZE);
+                    if (n !== 1) throw new Error('SendInput KEYBD returned ' + n + ' lastErr=' + GetLastError());
                 }
 
                 return new Promise(function (resolve, reject) {
@@ -214,22 +194,23 @@
                 const ax = Math.round((screenX * 65535) / Math.max(1, sw - 1));
                 const ay = Math.round((screenY * 65535) / Math.max(1, sh - 1));
 
-                const mkInput = (flags) => ({
-                    type: INPUT_MOUSE,
-                    _pad: 0,
-                    dx: ax,
-                    dy: ay,
-                    mouseData: 0,
-                    dwFlags: flags | MOUSEEVENTF_ABSOLUTE,
-                    time: 0,
-                    dwExtraInfo: 0,
-                    _tail: 0
-                });
+                function buildMouse(flags) {
+                    const b = Buffer.alloc(INPUT_SIZE);
+                    b.writeUInt32LE(INPUT_MOUSE, 0);  // type
+                    // 4..7 pad
+                    b.writeInt32LE(ax, 8);            // dx
+                    b.writeInt32LE(ay, 12);           // dy
+                    b.writeUInt32LE(0, 16);           // mouseData
+                    b.writeUInt32LE(flags | MOUSEEVENTF_ABSOLUTE, 20);  // dwFlags
+                    b.writeUInt32LE(0, 24);           // time
+                    // 28..31 pad, 32..39 dwExtraInfo (leave 0)
+                    return b;
+                }
 
                 function sendOne(flags) {
-                    const buf = [mkInput(flags)];
-                    const n = SendInput(1, buf, koffi.sizeof(INPUT));
-                    if (n !== 1) throw new Error('SendInput returned ' + n);
+                    const buf = buildMouse(flags);
+                    const n = SendInput(1, buf, INPUT_SIZE);
+                    if (n !== 1) throw new Error('SendInput MOUSE returned ' + n + ' lastErr=' + GetLastError());
                 }
 
                 return new Promise(function (resolve, reject) {
@@ -638,8 +619,39 @@
         'POST /ensure-viewer':function (req, body) { return handleEnsureViewer(body); },
         'POST /place-pin':    function (req, body) { return handlePlacePin(body); },
         'POST /begin-session':function (req, body) { return handleBeginSession(body); },
-        'POST /end-session':  function () { return handleEndSession(); }
+        'POST /end-session':  function () { return handleEndSession(); },
+        'GET /diag':          function () { return handleDiag(); },
+        'POST /reload-self':  function () { return handleReloadSelf(); }
     };
+
+    async function handleDiag() {
+        let sizes = null;
+        if (sendInputClick) {
+            try {
+                const extRoot = cs.getSystemPath(SystemPath.EXTENSION);
+                const koffiPath = cep_node.require('path').join(extRoot, 'node_modules', 'koffi');
+                const koffi = cep_node.require(koffiPath);
+                sizes = {};
+                try { sizes.INPUT = koffi.sizeof(koffi.struct('__probe_INPUT__', {type:'uint32',_pad:'uint32',dx:'int32',dy:'int32',mouseData:'uint32',dwFlags:'uint32',time:'uint32',dwExtraInfo:'uintptr_t',_tail:'uint32'})); }
+                catch (e) { sizes.INPUT_err = String(e); }
+            } catch (e) { sizes = { load_err: String(e) }; }
+        }
+        return {
+            pid: process.pid,
+            arch: process.arch,
+            node: process.version,
+            mouse_ready: !!sendInputClick,
+            keyboard_ready: !!sendKeySequence,
+            koffi_sizes: sizes,
+            log_buffer_size: logBuffer.length
+        };
+    }
+
+    async function handleReloadSelf() {
+        log('reload-self requested; scheduling window.location.reload() in 200ms');
+        setTimeout(function(){ try { window.location.reload(); } catch(_){ } }, 200);
+        return { ok: true, reloading_in_ms: 200 };
+    }
 
     async function dispatch(req, res) {
         const parsed = url.parse(req.url, true);
