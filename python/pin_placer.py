@@ -41,6 +41,9 @@ class PinPlacer:
         self.tx = None
         self.ty = None
         self.seed_pin_pos = None
+        self.viewer_rect = None
+        self.preferred_seed_point = None
+        self.preferred_seed_bbox = None
 
     # ---- HTTP helpers ---------------------------------------------------
     def _post(self, path, payload=None):
@@ -219,11 +222,123 @@ class PinPlacer:
         return self.read_zoom(), steps
 
     def pan_viewer(self, dx: int, dy: int, from_point=None):
-        """Hand-Tool drag viewer by (dx, dy) screen pixels."""
+        """Hand-Tool drag viewer by (dx, dy) screen pixels (permanently switches
+        to Hand Tool)."""
         payload = {"dx": int(dx), "dy": int(dy)}
         if from_point is not None:
             payload["from_x"], payload["from_y"] = int(from_point[0]), int(from_point[1])
         return self._post("/viewer-pan", payload)
+
+    def pan_viewer_middle(self, dx: int, dy: int, from_point=None):
+        """Middle-button drag pan. AE always treats middle-drag as Pan,
+        regardless of active tool — so the Puppet sub-tool is preserved."""
+        payload = {"dx": int(dx), "dy": int(dy)}
+        if from_point is not None:
+            payload["from_x"], payload["from_y"] = int(from_point[0]), int(from_point[1])
+        return self._post("/viewer-pan-middle", payload)
+
+    def set_viewer_zoom(self, target_zoom: float):
+        """Directly set AE Composition viewer zoom via ExtendScript.
+        ViewOptions.zoom is writable (confirmed in 26.x)."""
+        tz = float(target_zoom)
+        r = self.jsx(
+            f"var v=app.activeViewer.views[0]; var b=v.options.zoom; "
+            f"v.options.zoom={tz}; return {{before:b, after:v.options.zoom}};"
+        )
+        time.sleep(0.25)
+        self.zoom = None
+        self.read_zoom()
+        return r
+
+    def center_layer_via_diff(self, layer_info, desired_zoom=None, coverage=0.4):
+        """Purely geometric center-layer routine, no seed pin needed.
+
+        1. Pick a zoom that makes the layer visibly small but not too small —
+           default: `coverage * min(viewer dims) / max(layer dims)`.
+        2. Write that zoom via ExtendScript.
+        3. Diff screenshot to locate where the layer currently sits on screen.
+        4. pan_delta = viewer_center - layer_screen_center (middle-drag).
+        5. Diff again as sanity check.
+        """
+        if self.viewer_rect is None:
+            # Best-effort: locate viewer via AE window centre.
+            ae = self.ae_window_rect()
+            self.viewer_rect = self.find_viewer_rect((ae["center_x"], ae["center_y"]))
+            if self.viewer_rect is None:
+                raise CEPError("cannot locate Composition viewer panel")
+        vr = self.viewer_rect
+        vx = (vr["left"] + vr["right"]) / 2.0
+        vy = (vr["top"] + vr["bottom"]) / 2.0
+
+        # If desired_zoom is None, don't touch zoom — trust current state.
+        # Otherwise compute from coverage.
+        if desired_zoom == "auto":
+            short_viewer = min(vr["w"], vr["h"])
+            long_layer = max(layer_info["w"], layer_info["h"])
+            desired_zoom = (coverage * short_viewer) / long_layer
+        if desired_zoom is not None:
+            zr = self.set_viewer_zoom(desired_zoom)
+            time.sleep(0.4)
+        else:
+            zr = {"skipped": True, "zoom": self.read_zoom()}
+
+        d = self.find_layer_on_screen_via_diff(alpha_thresh=25)
+        lx, ly = d["center"]
+        dx = int(round(vx - lx))
+        dy = int(round(vy - ly))
+        pan_res = self.pan_viewer_middle(dx, dy)
+        time.sleep(0.5)
+
+        d2 = self.find_layer_on_screen_via_diff(alpha_thresh=25)
+        return {
+            "zoom_set": zr,
+            "pre_pan_layer_screen": [lx, ly],
+            "pan_delta": [dx, dy],
+            "post_pan_layer_screen": d2["center"],
+            "viewer_center": [int(vx), int(vy)],
+            "residual": [d2["center"][0] - int(vx), d2["center"][1] - int(vy)],
+        }
+        """Space-held pan. Active tool is preserved — user stays on 位置控点."""
+        payload = {"dx": int(dx), "dy": int(dy)}
+        if from_point is not None:
+            payload["from_x"], payload["from_y"] = int(from_point[0]), int(from_point[1])
+        return self._post("/viewer-pan-space", payload)
+
+    def center_target_layer(self, layer_info):
+        """Pan the viewer so the target layer's CENTER sits at the viewer
+        center, using Space+drag (preserves puppet sub-tool).
+
+        Requires calibrate() to have been run (so tx, ty, zoom, viewer_rect
+        are known). Caller then re-calibrates afterwards because the affine
+        translation (tx, ty) shifts after a pan.
+
+        layer_info: {'pos': [cx, cy, z?], 'w': W, 'h': H}
+          - pos is the layer's comp-coord center
+          - layer source coord (w/2, h/2) maps to comp pos
+        """
+        if self.tx is None or self.zoom is None or self.viewer_rect is None:
+            raise CEPError("center_target_layer needs an initial calibrate()")
+
+        # The affine returned by calibrate is screen = tx + layer_source * zoom.
+        # Layer source center is (w/2, h/2).
+        layer_src_cx = layer_info["w"] / 2.0
+        layer_src_cy = layer_info["h"] / 2.0
+        cur_screen_x = self.tx + layer_src_cx * self.zoom
+        cur_screen_y = self.ty + layer_src_cy * self.zoom
+
+        vr = self.viewer_rect
+        viewer_cx = (vr["left"] + vr["right"]) / 2.0
+        viewer_cy = (vr["top"] + vr["bottom"]) / 2.0
+        dx = int(round(viewer_cx - cur_screen_x))
+        dy = int(round(viewer_cy - cur_screen_y))
+
+        res = self.pan_viewer_space(dx, dy)
+        return {
+            "layer_screen_before": [int(cur_screen_x), int(cur_screen_y)],
+            "viewer_center": [int(viewer_cx), int(viewer_cy)],
+            "pan_delta": [dx, dy],
+            "pan_result": res,
+        }
 
     def center_layer_in_viewer(self, layer_info, goal_coverage: float = 0.55):
         """Zoom + pan until the given layer is centred in the Composition viewer

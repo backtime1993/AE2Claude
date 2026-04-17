@@ -262,6 +262,9 @@
                 };
             };
 
+            const MOUSEEVENTF_MIDDLEDOWN = 0x0020;
+            const MOUSEEVENTF_MIDDLEUP = 0x0040;
+
             // --- SendInput drag (multi-segment LEFTDOWN...MOVE...LEFTUP) ---
             sendInputDrag = function (fromX, fromY, toX, toY, opts) {
                 opts = opts || {};
@@ -269,6 +272,9 @@
                 const segMs = opts.segMs != null ? opts.segMs : 12;
                 const segments = opts.segments != null ? Math.max(4, opts.segments) : 16;
                 const postMs = opts.postMs != null ? opts.postMs : 60;
+                const button = (opts.button === 'middle') ? 'middle' : 'left';
+                const downFlag = button === 'middle' ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_LEFTDOWN;
+                const upFlag = button === 'middle' ? MOUSEEVENTF_MIDDLEUP : MOUSEEVENTF_LEFTUP;
 
                 function toAbs(px, py) {
                     const vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
@@ -302,7 +308,7 @@
                         SetCursorPos(fromX, fromY);
                         const [ax0, ay0] = toAbs(fromX, fromY);
                         fire(ax0, ay0, MOUSEEVENTF_MOVE);
-                        fire(ax0, ay0, MOUSEEVENTF_LEFTDOWN);
+                        fire(ax0, ay0, downFlag);
 
                         let step = 0;
                         function stepFn() {
@@ -319,7 +325,7 @@
                             } else {
                                 setTimeout(function () {
                                     try {
-                                        fire(ax, ay, MOUSEEVENTF_LEFTUP);
+                                        fire(ax, ay, upFlag);
                                         setTimeout(function () {
                                             resolve({ ok: true, from: [fromX, fromY], to: [toX, toY], segments: segments });
                                         }, postMs);
@@ -587,6 +593,68 @@
                 postMs: body.post_ms != null ? Number(body.post_ms) : undefined,
             }
         );
+    }
+
+    // Middle-button drag pan. AE always treats middle-drag as Pan regardless
+    // of the active tool, so the user's Puppet sub-tool stays on 位置控点.
+    async function handleViewerPanMiddle(body) {
+        initMouse();
+        if (!sendInputDrag || !focusAEWindow)
+            throw new Error('pan_middle_unavailable:' + mouseLoadError);
+        const dx = Number(body && body.dx);
+        const dy = Number(body && body.dy);
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) throw new Error('bad_dx_dy');
+        const ae = getAEWindowRect();
+        const fromX = body.from_x != null ? Number(body.from_x) : ae.center_x;
+        const fromY = body.from_y != null ? Number(body.from_y) : ae.center_y;
+        focusAEWindow();
+        await new Promise(r => setTimeout(r, 80));
+        const r = await sendInputDrag(fromX, fromY, fromX + dx, fromY + dy, {
+            button: 'middle', preHoldMs: 60, segMs: 10, segments: 18, postMs: 60,
+        });
+        return { ok: true, mode: 'middle-drag', drag: r };
+    }
+
+    // SPACE-held pan. AE's Space-hold = temporary Hand Tool — release Space
+    // and AE reverts to whatever tool was active before. This lets us pan
+    // the Composition viewer without switching the Puppet sub-tool away from
+    // 位置控点.
+    async function handleViewerPanSpace(body) {
+        initMouse();
+        if (!sendInputDrag || !sendKeySequence || !focusAEWindow)
+            throw new Error('pan_space_unavailable:' + mouseLoadError);
+        const dx = Number(body && body.dx);
+        const dy = Number(body && body.dy);
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) throw new Error('bad_dx_dy');
+
+        const ae = getAEWindowRect();
+        const fromX = body.from_x != null ? Number(body.from_x) : ae.center_x;
+        const fromY = body.from_y != null ? Number(body.from_y) : ae.center_y;
+        const toX = fromX + dx;
+        const toY = fromY + dy;
+
+        focusAEWindow();
+        await new Promise(r => setTimeout(r, 80));
+        // Warm-up click so the viewer has keyboard focus; Space has to reach AE.
+        await sendInputClick(fromX, fromY, { preMoveMs: 20, holdMs: 20 });
+        await new Promise(r => setTimeout(r, 150));
+
+        // SPACE DOWN (VK_SPACE = 0x20)
+        await sendKeySequence([{ vk: 0x20 }], { betweenMs: 0 });
+        await new Promise(r => setTimeout(r, 120));
+
+        let dragRes;
+        try {
+            dragRes = await sendInputDrag(fromX, fromY, toX, toY, {
+                preHoldMs: 80, segMs: 10, segments: 20, postMs: 80,
+            });
+        } finally {
+            // SPACE UP — always, so we never leave AE stuck in pan mode.
+            await sendKeySequence([{ vk: 0x20, up: true }], { betweenMs: 0 });
+            await new Promise(r => setTimeout(r, 60));
+        }
+
+        return { ok: true, mode: 'space+drag', drag: dragRes, from: [fromX, fromY], to: [toX, toY] };
     }
 
     // High-level: switch to Hand Tool, drag viewer by (dx, dy) screen pixels,
@@ -903,6 +971,8 @@
         'POST /click-screen': function (req, body) { return handleClickScreen(body); },
         'POST /drag':         function (req, body) { return handleDrag(body); },
         'POST /viewer-pan':   function (req, body) { return handleViewerPan(body); },
+        'POST /viewer-pan-space': function (req, body) { return handleViewerPanSpace(body); },
+        'POST /viewer-pan-middle': function (req, body) { return handleViewerPanMiddle(body); },
         'POST /set-tool':     function (req, body) { return handleSetTool(body); },
         'POST /press-key':    function (req, body) { return handlePressKey(body); },
         'POST /focus-ae':     function () { return handleFocusAE(); },
