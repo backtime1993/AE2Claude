@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ae2claude"
+version = "4.0.0"
+description = "Native After Effects bridge with a safe MCP interface for AI agents"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+dependencies = [
+    "mcp>=1.27,<2",
+    "pillow>=11,<13",
+]
+
+[project.scripts]
+ae2claude-mcp = "ae2claude_mcp.server:main"
+
+[tool.setuptools]
+py-modules = ["ae_bridge", "pin_cmd"]
+
+[tool.setuptools.packages.find]
+include = ["ae2claude_mcp*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

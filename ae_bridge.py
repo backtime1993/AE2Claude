@@ -24,8 +24,6 @@ import sys
 import time
 import threading
 import subprocess
-import os
-import re
 import urllib.request
 import urllib.error
 from typing import Optional, List, Dict, Any, Tuple, Union
@@ -1020,7 +1018,7 @@ class AEBridge:
             else:
                 jsx += f'ef.property("{mn}").setValue({val});'
         jsx += '"ok";}'
-        jsx += f'}}catch(e){{"FX_ERR:"+e.toString()}}'
+        jsx += '}catch(e){"FX_ERR:"+e.toString()}'
         return self.run_jsx(jsx)
 
     def set_effect_keyframes(self, name: str, effect_index: int,
@@ -1050,7 +1048,7 @@ class AEBridge:
                 else:
                     jsx += f'ef.property("{mn}").setValueAtTime({t},{val});'
         jsx += '"ok";}'
-        jsx += f'}}catch(e){{"FX_ERR:"+e.toString()}}'
+        jsx += '}catch(e){"FX_ERR:"+e.toString()}'
         return self.run_jsx(jsx)
 
     def enumerate_effects(self, name: str) -> List[dict]:
@@ -1478,7 +1476,7 @@ class AEBridge:
         group_sel = (
             f'var grp=contents.property({group_index});'
             if group_index else
-            f'var grp=contents.addProperty("ADBE Vector Group");grp.name="Rectangle";'
+            'var grp=contents.addProperty("ADBE Vector Group");grp.name="Rectangle";'
         )
         jsx = (
             f'var c=app.project.activeItem;'
@@ -1502,7 +1500,7 @@ class AEBridge:
         group_sel = (
             f'var grp=contents.property({group_index});'
             if group_index else
-            f'var grp=contents.addProperty("ADBE Vector Group");grp.name="Ellipse";'
+            'var grp=contents.addProperty("ADBE Vector Group");grp.name="Ellipse";'
         )
         jsx = (
             f'var c=app.project.activeItem;'
@@ -1528,7 +1526,7 @@ class AEBridge:
         group_sel = (
             f'var grp=contents.property({group_index});'
             if group_index else
-            f'var grp=contents.addProperty("ADBE Vector Group");grp.name="Path";'
+            'var grp=contents.addProperty("ADBE Vector Group");grp.name="Path";'
         )
         jsx = (
             f'var c=app.project.activeItem;'
@@ -1584,14 +1582,14 @@ class AEBridge:
                     move_attrs: bool = True) -> str:
         """将指定图层预合成。"""
         select_jsx = (
-            f'var c=app.project.activeItem;'
-            f'for(var i=1;i<=c.numLayers;i++)c.layer(i).selected=false;'
+            'var c=app.project.activeItem;'
+            'for(var i=1;i<=c.numLayers;i++)c.layer(i).selected=false;'
         )
         for ln in layer_names:
             select_jsx += f'try{{c.layer("{_esc(ln)}").selected=true;}}catch(e){{}}'
         select_jsx += (
-            f'var idxs=[];for(var i=1;i<=c.numLayers;i++){{'
-            f'if(c.layer(i).selected)idxs.push(i);}}'
+            'var idxs=[];for(var i=1;i<=c.numLayers;i++){'
+            'if(c.layer(i).selected)idxs.push(i);}'
         )
         move_flag = 1 if move_attrs else 2
         select_jsx += (
@@ -2433,6 +2431,940 @@ class AEBridge:
         r = self._run_py(code)
         return json.loads(r)
 
+    def list_puppet_pins(self, layer: Union[str, int],
+                         effect_index: int = None,
+                         mesh_index: int = 1) -> Dict[str, Any]:
+        """列出图层上的 Puppet Deform pins，返回 source/comp 两套坐标。"""
+        name_to_index, index_to_name = self._get_layer_lookup_maps()
+        layer_index, layer_name = self._resolve_layer_ref(
+            layer,
+            name_to_index=name_to_index,
+            index_to_name=index_to_name,
+        )
+        if layer_index is None:
+            return {"error": f"layer_not_found:{layer_name}"}
+
+        jsx = (
+            '(function(){'
+            'function findPuppet(layer, requestedIndex){'
+            '  var fxGroup=layer.property("ADBE Effect Parade");'
+            '  var fx=null;'
+            '  var fxIndex=0;'
+            f'  var requested={(int(effect_index) if effect_index else 0)};'
+            '  if(requested>0){'
+            '    fx=fxGroup.property(requested);'
+            '    if(!fx||fx.matchName!=="ADBE FreePin3"){'
+            '      return {error:"puppet_effect_not_found"};'
+            '    }'
+            '    fxIndex=requested;'
+            '  }else{'
+            '    for(var i=1;i<=fxGroup.numProperties;i++){'
+            '      var cand=fxGroup.property(i);'
+            '      if(cand&&cand.matchName==="ADBE FreePin3"){fx=cand;fxIndex=i;break;}'
+            '    }'
+            '    if(!fx){return {error:"puppet_effect_not_found"};}'
+            '  }'
+            '  return {fx:fx, fxIndex:fxIndex};'
+            '}'
+            'var comp=app.project.activeItem;'
+            'if(!comp||!(comp instanceof CompItem))return JSON.stringify({error:"no_comp"});'
+            f'var layer=comp.layer({int(layer_index)});'
+            'if(!layer)return JSON.stringify({error:"no_layer"});'
+            'var info=findPuppet(layer);'
+            'if(info.error)return JSON.stringify(info);'
+            'var arap=info.fx.property("ADBE FreePin3 ARAP Group");'
+            'if(!arap)return JSON.stringify({error:"puppet_arap_not_found"});'
+            'var meshGroup=arap.property("ADBE FreePin3 Mesh Group");'
+            'if(!meshGroup)return JSON.stringify({error:"puppet_mesh_group_not_found"});'
+            'var mesh=null;'
+            f'if(meshGroup.numProperties>={max(1, int(mesh_index))}){{mesh=meshGroup.property({max(1, int(mesh_index))});}}'
+            'if(!mesh)return JSON.stringify({error:"puppet_mesh_not_found"});'
+            'var posPins=mesh.property("ADBE FreePin3 PosPins");'
+            'if(!posPins)return JSON.stringify({error:"puppet_pospins_not_found"});'
+            'var out=[];'
+            'for(var i=1;i<=posPins.numProperties;i++){'
+            '  var pin=posPins.property(i);'
+            '  var posProp=pin.property("ADBE FreePin3 PosPin Position");'
+            '  if(!posProp)continue;'
+            '  var sourcePos=posProp.value;'
+            '  var compPos=layer.sourcePointToComp(sourcePos);'
+            '  out.push({'
+            '    index:i,'
+            '    name:pin.name,'
+            '    source_position:[sourcePos[0],sourcePos[1]],'
+            '    comp_position:[compPos[0],compPos[1]],'
+            '    rotation:pin.property("ADBE FreePin3 PosPin Rotation").value,'
+            '    scale:pin.property("ADBE FreePin3 PosPin Scale").value'
+            '  });'
+            '}'
+            'return JSON.stringify({'
+            '  layer_index:layer.index,'
+            '  layer_name:layer.name,'
+            '  effect_index:info.fxIndex,'
+            f'  mesh_index:{max(1, int(mesh_index))},'
+            '  pin_count:out.length,'
+            '  pins:out'
+            '});'
+            '})()'
+        )
+        return json.loads(self.run_jsx(jsx, timeout=30000))
+
+    def remove_puppet_pins(self, layer: Union[str, int],
+                           pin_indices: List[int],
+                           effect_index: int = None,
+                           mesh_index: int = 1) -> Dict[str, Any]:
+        """删除指定的 Puppet Deform pins。"""
+        if not isinstance(pin_indices, (list, tuple)) or not pin_indices:
+            raise ValueError("pin_indices must be [index, ...]")
+
+        normalized_indices = sorted(
+            {max(1, int(idx)) for idx in pin_indices},
+            reverse=True,
+        )
+
+        name_to_index, index_to_name = self._get_layer_lookup_maps()
+        layer_index, layer_name = self._resolve_layer_ref(
+            layer,
+            name_to_index=name_to_index,
+            index_to_name=index_to_name,
+        )
+        if layer_index is None:
+            return {"error": f"layer_not_found:{layer_name}"}
+
+        jsx = (
+            '(function(){'
+            'function findPuppet(layer, requestedIndex){'
+            '  var fxGroup=layer.property("ADBE Effect Parade");'
+            '  var fx=null;'
+            '  var fxIndex=0;'
+            f'  var requested={(int(effect_index) if effect_index else 0)};'
+            '  if(requested>0){'
+            '    fx=fxGroup.property(requested);'
+            '    if(!fx||fx.matchName!=="ADBE FreePin3"){return {error:"puppet_effect_not_found"};}'
+            '    fxIndex=requested;'
+            '  }else{'
+            '    for(var i=1;i<=fxGroup.numProperties;i++){'
+            '      var cand=fxGroup.property(i);'
+            '      if(cand&&cand.matchName==="ADBE FreePin3"){fx=cand;fxIndex=i;break;}'
+            '    }'
+            '    if(!fx){return {error:"puppet_effect_not_found"};}'
+            '  }'
+            '  return {fx:fx,fxIndex:fxIndex};'
+            '}'
+            'var comp=app.project.activeItem;'
+            'if(!comp||!(comp instanceof CompItem))return JSON.stringify({error:"no_comp"});'
+            f'var layer=comp.layer({int(layer_index)});'
+            'if(!layer)return JSON.stringify({error:"no_layer"});'
+            'var info=findPuppet(layer);'
+            'if(info.error)return JSON.stringify(info);'
+            'var arap=info.fx.property("ADBE FreePin3 ARAP Group");'
+            'if(!arap)return JSON.stringify({error:"puppet_arap_not_found"});'
+            'var meshGroup=arap.property("ADBE FreePin3 Mesh Group");'
+            'if(!meshGroup)return JSON.stringify({error:"puppet_mesh_group_not_found"});'
+            f'var mesh=meshGroup.numProperties>={max(1, int(mesh_index))}?meshGroup.property({max(1, int(mesh_index))}):null;'
+            'if(!mesh)return JSON.stringify({error:"puppet_mesh_not_found"});'
+            'var posPins=mesh.property("ADBE FreePin3 PosPins");'
+            'if(!posPins)return JSON.stringify({error:"puppet_pospins_not_found"});'
+            f'var requested={json.dumps(normalized_indices)};'
+            'var removed=[];'
+            'var skipped=[];'
+            'var before=posPins.numProperties;'
+            'app.beginUndoGroup("Remove Puppet Pins");'
+            'try{'
+            '  for(var i=0;i<requested.length;i++){'
+            '    var idx=requested[i];'
+            '    if(idx<1||idx>posPins.numProperties){skipped.push(idx);continue;}'
+            '    var pin=posPins.property(idx);'
+            '    if(!pin){skipped.push(idx);continue;}'
+            '    try{pin.remove();removed.push(idx);}catch(e){skipped.push(idx);}'
+            '  }'
+            '  return JSON.stringify({'
+            '    layer_index:layer.index,'
+            '    layer_name:layer.name,'
+            '    effect_index:info.fxIndex,'
+            f'    mesh_index:{max(1, int(mesh_index))},'
+            '    pin_count_before:before,'
+            '    pin_count_after:posPins.numProperties,'
+            '    removed:removed,'
+            '    skipped:skipped'
+            '  });'
+            '}finally{'
+            '  app.endUndoGroup();'
+            '}'
+            '})()'
+        )
+        return json.loads(self.run_jsx(jsx, timeout=30000))
+
+    def set_puppet_pin_positions(self, layer: Union[str, int],
+                                 points: List[List[float]],
+                                 effect_index: int = None,
+                                 mesh_index: int = 1,
+                                 points_are_comp: bool = True,
+                                 remove_extra: bool = False) -> Dict[str, Any]:
+        """
+        批量重定位现有 Puppet pins。
+
+        适合“模板层里已经有 N 个真实 pins”的场景：
+        - 复制模板层 / replaceSource
+        - 后台把现有真实 pins 按检测结果重定位到新图层上
+        """
+        if not isinstance(points, (list, tuple)) or not points:
+            raise ValueError("points must be [[x, y], ...]")
+
+        normalized_points: List[List[float]] = []
+        for pt in points:
+            if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                raise ValueError("points must be [[x, y], ...]")
+            normalized_points.append([float(pt[0]), float(pt[1])])
+
+        name_to_index, index_to_name = self._get_layer_lookup_maps()
+        layer_index, layer_name = self._resolve_layer_ref(
+            layer,
+            name_to_index=name_to_index,
+            index_to_name=index_to_name,
+        )
+        if layer_index is None:
+            return {"error": f"layer_not_found:{layer_name}"}
+
+        source_points = normalized_points
+        if points_are_comp:
+            source_points = self._convert_comp_points_to_source_points(
+                layer_index,
+                normalized_points,
+            )
+
+        jsx = (
+            '(function(){'
+            'function findPuppet(layer, requestedIndex){'
+            '  var fxGroup=layer.property("ADBE Effect Parade");'
+            '  var fx=null;'
+            '  var fxIndex=0;'
+            f'  var requested={(int(effect_index) if effect_index else 0)};'
+            '  if(requested>0){'
+            '    fx=fxGroup.property(requested);'
+            '    if(!fx||fx.matchName!=="ADBE FreePin3"){return {error:"puppet_effect_not_found"};}'
+            '    fxIndex=requested;'
+            '  }else{'
+            '    for(var i=1;i<=fxGroup.numProperties;i++){'
+            '      var cand=fxGroup.property(i);'
+            '      if(cand&&cand.matchName==="ADBE FreePin3"){fx=cand;fxIndex=i;break;}'
+            '    }'
+            '    if(!fx){return {error:"puppet_effect_not_found"};}'
+            '  }'
+            '  return {fx:fx,fxIndex:fxIndex};'
+            '}'
+            'function setPropValue(prop, value, time){'
+            '  if(!prop)return false;'
+            '  try{'
+            '    if(prop.numKeys && prop.numKeys > 0){prop.setValueAtTime(time, value);}else{prop.setValue(value);}'
+            '    return true;'
+            '  }catch(e){'
+            '    try{prop.setValueAtTime(time, value);return true;}catch(_e){return false;}'
+            '  }'
+            '}'
+            'var comp=app.project.activeItem;'
+            'if(!comp||!(comp instanceof CompItem))return JSON.stringify({error:"no_comp"});'
+            f'var layer=comp.layer({int(layer_index)});'
+            'if(!layer)return JSON.stringify({error:"no_layer"});'
+            'var info=findPuppet(layer);'
+            'if(info.error)return JSON.stringify(info);'
+            'var arap=info.fx.property("ADBE FreePin3 ARAP Group");'
+            'if(!arap)return JSON.stringify({error:"puppet_arap_not_found"});'
+            'var meshGroup=arap.property("ADBE FreePin3 Mesh Group");'
+            'if(!meshGroup)return JSON.stringify({error:"puppet_mesh_group_not_found"});'
+            f'var mesh=meshGroup.numProperties>={max(1, int(mesh_index))}?meshGroup.property({max(1, int(mesh_index))}):null;'
+            'if(!mesh)return JSON.stringify({error:"puppet_mesh_not_found"});'
+            'var posPins=mesh.property("ADBE FreePin3 PosPins");'
+            'if(!posPins)return JSON.stringify({error:"puppet_pospins_not_found"});'
+            f'var pts={json.dumps(source_points)};'
+            'var limit=Math.min(posPins.numProperties, pts.length);'
+            'var updated=[];'
+            'for(var i=1;i<=limit;i++){'
+            '  var pin=posPins.property(i);'
+            '  var pos=pin?pin.property("ADBE FreePin3 PosPin Position"):null;'
+            '  if(!pos)return JSON.stringify({error:"pospin_position_not_found",index:i});'
+            '  if(!setPropValue(pos, pts[i-1], comp.time))return JSON.stringify({error:"pospin_set_failed",index:i});'
+            '  var compPos=layer.sourcePointToComp(pts[i-1]);'
+            '  updated.push({'
+            '    index:i,'
+            '    source_position:[pts[i-1][0],pts[i-1][1]],'
+            '    comp_position:[compPos[0],compPos[1]]'
+            '  });'
+            '}'
+            'return JSON.stringify({'
+            '  layer_index:layer.index,'
+            '  layer_name:layer.name,'
+            '  effect_index:info.fxIndex,'
+            f'  mesh_index:{max(1, int(mesh_index))},'
+            '  existing_pin_count:posPins.numProperties,'
+            '  updated_count:updated.length,'
+            '  requested_point_count:pts.length,'
+            '  updated:updated'
+            '});'
+            '})()'
+        )
+        result = json.loads(self.run_jsx(jsx, timeout=60000))
+        if result.get("error"):
+            return result
+
+        if remove_extra and result.get("existing_pin_count", 0) > len(source_points):
+            extras = list(range(len(source_points) + 1, int(result["existing_pin_count"]) + 1))
+            result["removed_extra"] = self.remove_puppet_pins(
+                layer=layer_index,
+                pin_indices=extras,
+                effect_index=result.get("effect_index"),
+                mesh_index=result.get("mesh_index", max(1, int(mesh_index))),
+            )
+
+        result["requested_points"] = normalized_points
+        result["source_points"] = source_points
+        return result
+
+    def add_puppet_pins(self, layer: Union[str, int],
+                        points: List[List[float]],
+                        effect_index: int = None,
+                        mesh_index: int = 1,
+                        clear_existing: bool = False,
+                        points_are_comp: bool = True) -> Dict[str, Any]:
+        """
+        在图层上批量添加 Puppet Deform pins。
+
+        注意：当前 ExtendScript / JSX 路线只能创建 `PosPin Atom` 外壳并设置位置，
+        但无法写入隐藏的 `ADBE FreePin3 PosPin Vtx Index` 绑定字段。
+        AE 会把这类 pin 视为未绑定（`Vtx Index == -1`），因此不会得到可靠的可见 mesh/pin。
+        这里默认直接返回错误并附上坐标，避免误写入假成功结果。
+        """
+        if not isinstance(points, (list, tuple)) or not points:
+            raise ValueError("points must be [[x, y], ...]")
+
+        normalized_points: List[List[float]] = []
+        for pt in points:
+            if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                raise ValueError("points must be [[x, y], ...]")
+            normalized_points.append([float(pt[0]), float(pt[1])])
+
+        name_to_index, index_to_name = self._get_layer_lookup_maps()
+        layer_index, layer_name = self._resolve_layer_ref(
+            layer,
+            name_to_index=name_to_index,
+            index_to_name=index_to_name,
+        )
+        if layer_index is None:
+            return {"error": f"layer_not_found:{layer_name}"}
+
+        source_points = normalized_points
+        if points_are_comp:
+            source_points = self._convert_comp_points_to_source_points(
+                layer_index,
+                normalized_points,
+            )
+
+        resolved_name = index_to_name.get(layer_index) or layer_name or str(layer)
+        return {
+            "error": "puppet_pin_backend_unavailable:jsx_cannot_bind_vertices",
+            "reason": (
+                "Script-created PosPin Atom keeps `ADBE FreePin3 PosPin Vtx Index == -1`, "
+                "and JSX cannot set that hidden binding property."
+            ),
+            "layer_index": layer_index,
+            "layer_name": resolved_name,
+            "requested_points": normalized_points,
+            "source_points": source_points,
+            "effect_index": effect_index,
+            "mesh_index": max(1, int(mesh_index)),
+            "clear_existing_requested": bool(clear_existing),
+        }
+
+    def instantiate_puppet_template_layer(self, target_layer: Union[str, int],
+                                          template_layer: str,
+                                          template_comp: str = None,
+                                          new_name: str = None,
+                                          disable_target: bool = False,
+                                          move_after_target: bool = True) -> Dict[str, Any]:
+        """
+        复制一个“已经带真实 Puppet mesh”的模板层到当前合成，并替换成目标图层的 source。
+
+        这条路线的核心用途是：
+        - 模板层里预先有至少 1 个真实点击创建的 pin
+        - 复制到当前合成后 `replaceSource(...)`
+        - 后续新增的脚本 pin 会挂在 real mesh 上，而不是落到 shell mesh
+        """
+        if not template_layer:
+            raise ValueError("template_layer is required")
+
+        name_to_index, index_to_name = self._get_layer_lookup_maps()
+        target_index, target_name = self._resolve_layer_ref(
+            target_layer,
+            name_to_index=name_to_index,
+            index_to_name=index_to_name,
+        )
+        if target_index is None:
+            return {"error": f"layer_not_found:{target_name}"}
+
+        resolved_target_name = index_to_name.get(target_index) or target_name or str(target_layer)
+        duplicate_name = str(new_name or f"{resolved_target_name}__puppet")
+        template_layer_name = str(template_layer)
+        template_comp_name = str(template_comp) if template_comp else ""
+
+        jsx = (
+            '(function(){'
+            'var comp=app.project.activeItem;'
+            'if(!comp||!(comp instanceof CompItem))return JSON.stringify({error:"no_comp"});'
+            f'var target=comp.layer({int(target_index)});'
+            'if(!target)return JSON.stringify({error:"no_layer"});'
+            'var targetSource=null;'
+            'try{targetSource=target.source;}catch(e){}'
+            'if(!targetSource)return JSON.stringify({error:"target_source_not_found"});'
+            f'var templateCompName="{_esc(template_comp_name)}";'
+            f'var templateLayerName="{_esc(template_layer_name)}";'
+            f'var duplicateName="{_esc(duplicate_name)}";'
+            'var templateComp=null;'
+            'if(templateCompName){'
+            '  for(var i=1;i<=app.project.numItems;i++){'
+            '    var cand=app.project.item(i);'
+            '    if(cand instanceof CompItem && cand.name===templateCompName){templateComp=cand;break;}'
+            '  }'
+            '}else{'
+            '  templateComp=comp;'
+            '}'
+            'if(!templateComp)return JSON.stringify({error:"template_comp_not_found",template_comp_name:templateCompName});'
+            'var templateLayer=null;'
+            'try{templateLayer=templateComp.layer(templateLayerName);}catch(e){}'
+            'if(!templateLayer)return JSON.stringify({error:"template_layer_not_found",template_layer_name:templateLayerName,template_comp_name:templateComp.name});'
+            'app.beginUndoGroup("Instantiate Puppet Template Layer");'
+            'try{'
+            '  function setPropValue(prop, value, time){'
+            '    if(!prop)return;'
+            '    try{'
+            '      if(prop.numKeys && prop.numKeys > 0){prop.setValueAtTime(time, value);}else{prop.setValue(value);}'
+            '    }catch(e){'
+            '      try{prop.setValueAtTime(time, value);}catch(_e){}'
+            '    }'
+            '  }'
+            '  templateLayer.copyToComp(comp);'
+            '  var dup=comp.layer(1);'
+            '  if(!dup)return JSON.stringify({error:"copy_to_comp_failed"});'
+            f'  if({str(bool(move_after_target)).lower()}){{'
+            '    try{dup.moveAfter(target);}catch(e){}'
+            '  }'
+            '  dup.name=duplicateName;'
+            '  try{dup.replaceSource(targetSource,false);}catch(e){'
+            '    try{dup.remove();}catch(_e){}'
+            '    return JSON.stringify({error:"replace_source_failed",detail:e.toString()});'
+            '  }'
+            '  try{dup.parent=target.parent;}catch(e){}'
+            '  try{dup.inPoint=target.inPoint;}catch(e){}'
+            '  try{dup.outPoint=target.outPoint;}catch(e){}'
+            '  try{dup.startTime=target.startTime;}catch(e){}'
+            '  try{dup.stretch=target.stretch;}catch(e){}'
+            '  setPropValue(dup.anchorPoint, target.anchorPoint.value, comp.time);'
+            '  setPropValue(dup.position, target.position.value, comp.time);'
+            '  setPropValue(dup.scale, target.scale.value, comp.time);'
+            '  setPropValue(dup.rotation, target.rotation.value, comp.time);'
+            '  setPropValue(dup.opacity, target.opacity.value, comp.time);'
+            '  try{dup.enabled=true;}catch(e){}'
+            '  try{dup.solo=false;}catch(e){}'
+            f'  if({str(bool(disable_target)).lower()}){{'
+            '    try{if(target.enabled){target.solo=false;}}catch(e){}'
+            '    try{target.enabled=false;}catch(e){}'
+            '  }'
+            '  for(var li=1;li<=comp.numLayers;li++){'
+            '    try{comp.layer(li).selected=(comp.layer(li)===dup);}catch(e){}'
+            '  }'
+            '  var fxGroup=dup.property("ADBE Effect Parade");'
+            '  var fx=null;'
+            '  var fxIndex=0;'
+            '  for(var fi=1;fi<=fxGroup.numProperties;fi++){'
+            '    var candFx=fxGroup.property(fi);'
+            '    if(candFx&&candFx.matchName==="ADBE FreePin3"){fx=candFx;fxIndex=fi;break;}'
+            '  }'
+            '  if(!fx){'
+            '    try{dup.remove();}catch(_e){}'
+            '    return JSON.stringify({error:"template_puppet_not_found"});'
+            '  }'
+            '  var arap=fx.property("ADBE FreePin3 ARAP Group");'
+            '  var meshGroup=arap?arap.property("ADBE FreePin3 Mesh Group"):null;'
+            '  if(!meshGroup||meshGroup.numProperties<1){'
+            '    try{dup.remove();}catch(_e){}'
+            '    return JSON.stringify({error:"template_mesh_not_found"});'
+            '  }'
+            '  var mesh=null;'
+            '  var meshIndex=0;'
+            '  var pinCount=0;'
+            '  for(var mi=1;mi<=meshGroup.numProperties;mi++){'
+            '    var candMesh=meshGroup.property(mi);'
+            '    var candPins=candMesh?candMesh.property("ADBE FreePin3 PosPins"):null;'
+            '    if(candPins){mesh=candMesh;meshIndex=mi;pinCount=candPins.numProperties;break;}'
+            '  }'
+            '  if(!mesh){'
+            '    try{dup.remove();}catch(_e){}'
+            '    return JSON.stringify({error:"template_pospins_not_found"});'
+            '  }'
+            '  return JSON.stringify({'
+            '    target_index:target.index,'
+            '    target_name:target.name,'
+            '    layer_index:dup.index,'
+            '    layer_name:dup.name,'
+            '    source_name:targetSource.name,'
+            '    template_comp_name:templateComp.name,'
+            '    template_layer_name:templateLayer.name,'
+            '    effect_index:fxIndex,'
+            '    mesh_index:meshIndex,'
+            '    pin_count:pinCount'
+            '  });'
+            '}finally{'
+            '  app.endUndoGroup();'
+            '}'
+            '})()'
+        )
+        return json.loads(self.run_jsx(jsx, timeout=60000))
+
+    def add_puppet_pins_on_real_mesh(self, layer: Union[str, int],
+                                     points: List[List[float]],
+                                     effect_index: int = None,
+                                     mesh_index: int = 1,
+                                     points_are_comp: bool = True,
+                                     reuse_first_pin: bool = True) -> Dict[str, Any]:
+        """
+        在“已经存在真实 mesh”的 Puppet 层上后台补 pin。
+
+        约束：
+        - 目标层必须先带有至少 1 个真实 pin（例如来自模板层）
+        - 默认会把第 1 个已有 pin 移到 `points[0]`，然后再补剩余 pin
+        """
+        if not isinstance(points, (list, tuple)) or not points:
+            raise ValueError("points must be [[x, y], ...]")
+
+        normalized_points: List[List[float]] = []
+        for pt in points:
+            if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                raise ValueError("points must be [[x, y], ...]")
+            normalized_points.append([float(pt[0]), float(pt[1])])
+
+        name_to_index, index_to_name = self._get_layer_lookup_maps()
+        layer_index, layer_name = self._resolve_layer_ref(
+            layer,
+            name_to_index=name_to_index,
+            index_to_name=index_to_name,
+        )
+        if layer_index is None:
+            return {"error": f"layer_not_found:{layer_name}"}
+
+        source_points = normalized_points
+        if points_are_comp:
+            source_points = self._convert_comp_points_to_source_points(
+                layer_index,
+                normalized_points,
+            )
+
+        requested_effect_index = int(effect_index) if effect_index else 0
+        resolved_mesh_index = max(1, int(mesh_index))
+
+        validate_jsx = (
+            '(function(){'
+            'function findPuppet(layer, requestedIndex){'
+            '  var fxGroup=layer.property("ADBE Effect Parade");'
+            '  var fx=null;'
+            '  var fxIndex=0;'
+            '  if(requestedIndex>0){'
+            '    fx=fxGroup.property(requestedIndex);'
+            '    if(!fx||fx.matchName!=="ADBE FreePin3"){return {error:"puppet_effect_not_found"};}'
+            '    fxIndex=requestedIndex;'
+            '  }else{'
+            '    for(var i=1;i<=fxGroup.numProperties;i++){'
+            '      var cand=fxGroup.property(i);'
+            '      if(cand&&cand.matchName==="ADBE FreePin3"){fx=cand;fxIndex=i;break;}'
+            '    }'
+            '    if(!fx){return {error:"puppet_effect_not_found"};}'
+            '  }'
+            '  return {fx:fx,fxIndex:fxIndex};'
+            '}'
+            'var comp=app.project.activeItem;'
+            'if(!comp||!(comp instanceof CompItem))return JSON.stringify({error:"no_comp"});'
+            f'var layer=comp.layer({int(layer_index)});'
+            'if(!layer)return JSON.stringify({error:"no_layer"});'
+            f'var requestedEffectIndex={requested_effect_index};'
+            'var info=findPuppet(layer, requestedEffectIndex);'
+            'if(info.error)return JSON.stringify(info);'
+            'var arap=info.fx.property("ADBE FreePin3 ARAP Group");'
+            'if(!arap)return JSON.stringify({error:"puppet_arap_not_found"});'
+            'var meshGroup=arap.property("ADBE FreePin3 Mesh Group");'
+            'if(!meshGroup)return JSON.stringify({error:"puppet_mesh_group_not_found"});'
+            f'var mesh=meshGroup.numProperties>={resolved_mesh_index}?meshGroup.property({resolved_mesh_index}):null;'
+            'if(!mesh)return JSON.stringify({error:"puppet_mesh_not_found"});'
+            'var posPins=mesh.property("ADBE FreePin3 PosPins");'
+            'if(!posPins)return JSON.stringify({error:"puppet_pospins_not_found"});'
+            'if(posPins.numProperties<1)return JSON.stringify({error:"template_seed_pin_missing"});'
+            'return JSON.stringify({'
+            '  layer_index:layer.index,'
+            '  layer_name:layer.name,'
+            '  effect_index:info.fxIndex,'
+            f'  mesh_index:{resolved_mesh_index},'
+            '  pin_count:posPins.numProperties'
+            '});'
+            '})()'
+        )
+        result = json.loads(self.run_jsx(validate_jsx, timeout=30000))
+        if result.get("error"):
+            return result
+
+        moved: List[Dict[str, Any]] = []
+        added: List[Dict[str, Any]] = []
+        start_index = 0
+
+        if reuse_first_pin and source_points:
+            first_point = source_points[0]
+            first_jsx = (
+                '(function(){'
+                'function setPropValue(prop, value, time){'
+                '  if(!prop)return false;'
+                '  try{'
+                '    if(prop.numKeys && prop.numKeys > 0){prop.setValueAtTime(time, value);}else{prop.setValue(value);}'
+                '    return true;'
+                '  }catch(e){'
+                '    try{prop.setValueAtTime(time, value);return true;}catch(_e){return false;}'
+                '  }'
+                '}'
+                'var comp=app.project.activeItem;'
+                'if(!comp||!(comp instanceof CompItem))return JSON.stringify({error:"no_comp"});'
+                f'var layer=comp.layer({int(layer_index)});'
+                'if(!layer)return JSON.stringify({error:"no_layer"});'
+                f'var fx=layer.property("ADBE Effect Parade").property({int(result["effect_index"])});'
+                'if(!fx)return JSON.stringify({error:"puppet_effect_not_found"});'
+                'var meshGroup=fx.property("ADBE FreePin3 ARAP Group").property("ADBE FreePin3 Mesh Group");'
+                'if(!meshGroup)return JSON.stringify({error:"puppet_mesh_group_not_found"});'
+                f'var mesh=meshGroup.property({resolved_mesh_index});'
+                'if(!mesh)return JSON.stringify({error:"puppet_mesh_not_found"});'
+                'var posPins=mesh.property("ADBE FreePin3 PosPins");'
+                'if(!posPins||posPins.numProperties<1)return JSON.stringify({error:"template_seed_pin_missing"});'
+                'var firstPin=posPins.property(1);'
+                'var pos=firstPin?firstPin.property("ADBE FreePin3 PosPin Position"):null;'
+                'if(!pos)return JSON.stringify({error:"template_seed_position_not_found"});'
+                f'var pt={json.dumps(first_point)};'
+                'if(!setPropValue(pos, pt, comp.time))return JSON.stringify({error:"template_seed_set_failed"});'
+                'var compPos=layer.sourcePointToComp(pt);'
+                'return JSON.stringify({'
+                '  index:1,'
+                '  source_position:[pt[0],pt[1]],'
+                '  comp_position:[compPos[0],compPos[1]]'
+                '});'
+                '})()'
+            )
+            first_result = json.loads(self.run_jsx(first_jsx, timeout=30000))
+            if first_result.get("error"):
+                return first_result
+            moved.append(first_result)
+            start_index = 1
+
+        for pt in source_points[start_index:]:
+            add_jsx = (
+                '(function(){'
+                'function setPropValue(prop, value, time){'
+                '  if(!prop)return false;'
+                '  try{'
+                '    if(prop.numKeys && prop.numKeys > 0){prop.setValueAtTime(time, value);}else{prop.setValue(value);}'
+                '    return true;'
+                '  }catch(e){'
+                '    try{prop.setValueAtTime(time, value);return true;}catch(_e){return false;}'
+                '  }'
+                '}'
+                'var comp=app.project.activeItem;'
+                'if(!comp||!(comp instanceof CompItem))return JSON.stringify({error:"no_comp"});'
+                f'var layer=comp.layer({int(layer_index)});'
+                'if(!layer)return JSON.stringify({error:"no_layer"});'
+                f'var fx=layer.property("ADBE Effect Parade").property({int(result["effect_index"])});'
+                'if(!fx)return JSON.stringify({error:"puppet_effect_not_found"});'
+                'var meshGroup=fx.property("ADBE FreePin3 ARAP Group").property("ADBE FreePin3 Mesh Group");'
+                'if(!meshGroup)return JSON.stringify({error:"puppet_mesh_group_not_found"});'
+                f'var mesh=meshGroup.property({resolved_mesh_index});'
+                'if(!mesh)return JSON.stringify({error:"puppet_mesh_not_found"});'
+                'var posPins=mesh.property("ADBE FreePin3 PosPins");'
+                'if(!posPins)return JSON.stringify({error:"puppet_pospins_not_found"});'
+                'var pin=posPins.addProperty("ADBE FreePin3 PosPin Atom");'
+                'if(!pin)return JSON.stringify({error:"add_pospin_failed"});'
+                'var pos=pin.property("ADBE FreePin3 PosPin Position");'
+                'if(!pos)return JSON.stringify({error:"pospin_position_not_found"});'
+                f'var pt={json.dumps(pt)};'
+                'if(!setPropValue(pos, pt, comp.time))return JSON.stringify({error:"pospin_set_failed"});'
+                'var compPos=layer.sourcePointToComp(pt);'
+                'return JSON.stringify({'
+                '  index:posPins.numProperties,'
+                '  source_position:[pt[0],pt[1]],'
+                '  comp_position:[compPos[0],compPos[1]]'
+                '});'
+                '})()'
+            )
+            add_result = json.loads(self.run_jsx(add_jsx, timeout=30000))
+            if add_result.get("error"):
+                add_result["moved"] = moved
+                add_result["added"] = added
+                return add_result
+            added.append(add_result)
+
+        result["requested_point_count"] = len(source_points)
+        result["reused_first_pin"] = bool(reuse_first_pin)
+        result["moved"] = moved
+        result["added"] = added
+        result["pin_count"] = int(result.get("pin_count", 0)) + len(added)
+        result["requested_points"] = normalized_points
+        result["source_points"] = source_points
+        return result
+
+    def auto_place_puppet_pins_from_multi_pin_template(self, target_layer: Union[str, int],
+                                                       template_layer: str,
+                                                       template_comp: str = None,
+                                                       pin_count: int = None,
+                                                       time: float = -1,
+                                                       alpha_threshold: int = 8,
+                                                       edge_inset: float = 0,
+                                                       band_expand: float = 1.0,
+                                                       root_mode: str = "wide_to_narrow",
+                                                       new_name: str = None,
+                                                       disable_target: bool = True,
+                                                       move_after_target: bool = True,
+                                                       remove_extra: bool = True) -> Dict[str, Any]:
+        """
+        用“已经带足够真实 pins”的模板层走全后台自动打点。
+
+        这条路线不会再尝试脚本新增 pin，而是：
+        1. 复制真实模板层并 replaceSource 到目标 source
+        2. 用边缘检测 + 像素读取得到目标点
+        3. 直接重定位模板里已有的真实 pins
+
+        适合需要 3 个及以上可用 pin 的稳定方案。
+        """
+        alpha_threshold = max(1, min(255, int(alpha_threshold)))
+        band_expand = max(0.25, float(band_expand))
+        edge_inset = max(0.0, float(edge_inset))
+        root_mode = str(root_mode or "wide_to_narrow").strip().lower()
+        if root_mode not in {"wide_to_narrow", "narrow_to_wide", "forward", "reverse"}:
+            raise ValueError("root_mode must be wide_to_narrow/narrow_to_wide/forward/reverse")
+
+        name_to_index, index_to_name = self._get_layer_lookup_maps()
+        target_index, target_name = self._resolve_layer_ref(
+            target_layer,
+            name_to_index=name_to_index,
+            index_to_name=index_to_name,
+        )
+        if target_index is None:
+            return {"error": f"layer_not_found:{target_name}"}
+
+        instantiate = self.instantiate_puppet_template_layer(
+            target_layer=target_index,
+            template_layer=template_layer,
+            template_comp=template_comp,
+            new_name=new_name,
+            disable_target=disable_target,
+            move_after_target=move_after_target,
+        )
+        if instantiate.get("error"):
+            return instantiate
+
+        template_pin_count = max(0, int(instantiate.get("pin_count", 0) or 0))
+        requested_pin_count = template_pin_count if pin_count is None else max(1, int(pin_count))
+        if template_pin_count < requested_pin_count:
+            instantiate["error"] = "insufficient_template_pins"
+            instantiate["reason"] = (
+                "Template layer does not contain enough real Puppet pins for pure-backend "
+                "repositioning. Provide a template with at least the requested pin count."
+            )
+            instantiate["template_pin_count"] = template_pin_count
+            instantiate["requested_pin_count"] = requested_pin_count
+            instantiate["target_layer_index"] = target_index
+            instantiate["target_layer_name"] = index_to_name.get(target_index) or target_name
+            return instantiate
+
+        outline = self._detect_puppet_pin_targets(
+            layer_index=target_index,
+            pin_count=requested_pin_count,
+            time=time,
+            alpha_threshold=alpha_threshold,
+            edge_inset=edge_inset,
+            band_expand=band_expand,
+            root_mode=root_mode,
+        )
+        if outline.get("error"):
+            outline["instantiated"] = instantiate
+            outline["target_layer_index"] = target_index
+            outline["target_layer_name"] = index_to_name.get(target_index) or target_name
+            return outline
+
+        comp_points = [row["comp_position"] for row in outline.get("points", [])]
+        if not comp_points:
+            return {
+                "error": "no_detected_points",
+                "instantiated": instantiate,
+                "target_layer_index": target_index,
+                "target_layer_name": index_to_name.get(target_index) or target_name,
+            }
+
+        reposition = self.set_puppet_pin_positions(
+            layer=instantiate["layer_index"],
+            points=comp_points,
+            effect_index=instantiate.get("effect_index"),
+            mesh_index=instantiate.get("mesh_index", 1),
+            points_are_comp=True,
+            remove_extra=remove_extra,
+        )
+        reposition["strategy"] = "reposition_existing_real_pins"
+        reposition["detected"] = outline
+        reposition["suggested_comp_points"] = comp_points
+        reposition["instantiated"] = instantiate
+        reposition["template_pin_count"] = template_pin_count
+        reposition["requested_pin_count"] = requested_pin_count
+        reposition["target_layer_index"] = target_index
+        reposition["target_layer_name"] = index_to_name.get(target_index) or target_name
+        return reposition
+
+    def auto_place_puppet_pins_from_template(self, target_layer: Union[str, int],
+                                             template_layer: str,
+                                             template_comp: str = None,
+                                             pin_count: int = 3,
+                                             time: float = -1,
+                                             alpha_threshold: int = 8,
+                                             edge_inset: float = 0,
+                                             band_expand: float = 1.0,
+                                             root_mode: str = "wide_to_narrow",
+                                             new_name: str = None,
+                                             disable_target: bool = True,
+                                             move_after_target: bool = True) -> Dict[str, Any]:
+        """
+        用“真实模板层”走全后台自动打 Puppet pins：
+        1. 对目标层做边缘检测 + 像素精确取点
+        2. 复制真实模板层并 replaceSource 到目标 source
+        3. 在 real mesh 上后台重定位第 1 个 pin 并补其余 pins
+
+        注意：
+        - 这条旧路线本质上仍是“seed pin + 后台补 pin”
+        - 当前实测只确认“已有真实 mesh + 第 1 个脚本新增 pin”可形变
+        - 如果需要 3 个及以上稳定可用 pins，改用
+          `auto_place_puppet_pins_from_multi_pin_template(...)`
+        """
+        pin_count = max(1, int(pin_count))
+        alpha_threshold = max(1, min(255, int(alpha_threshold)))
+        band_expand = max(0.25, float(band_expand))
+        edge_inset = max(0.0, float(edge_inset))
+        root_mode = str(root_mode or "wide_to_narrow").strip().lower()
+        if root_mode not in {"wide_to_narrow", "narrow_to_wide", "forward", "reverse"}:
+            raise ValueError("root_mode must be wide_to_narrow/narrow_to_wide/forward/reverse")
+
+        name_to_index, index_to_name = self._get_layer_lookup_maps()
+        target_index, target_name = self._resolve_layer_ref(
+            target_layer,
+            name_to_index=name_to_index,
+            index_to_name=index_to_name,
+        )
+        if target_index is None:
+            return {"error": f"layer_not_found:{target_name}"}
+
+        outline = self._detect_puppet_pin_targets(
+            layer_index=target_index,
+            pin_count=pin_count,
+            time=time,
+            alpha_threshold=alpha_threshold,
+            edge_inset=edge_inset,
+            band_expand=band_expand,
+            root_mode=root_mode,
+        )
+        if outline.get("error"):
+            return outline
+
+        comp_points = [row["comp_position"] for row in outline.get("points", [])]
+        if not comp_points:
+            return {"error": "no_detected_points", "layer_index": target_index}
+
+        instantiate = self.instantiate_puppet_template_layer(
+            target_layer=target_index,
+            template_layer=template_layer,
+            template_comp=template_comp,
+            new_name=new_name,
+            disable_target=disable_target,
+            move_after_target=move_after_target,
+        )
+        if instantiate.get("error"):
+            instantiate["detected"] = outline
+            instantiate["suggested_comp_points"] = comp_points
+            return instantiate
+
+        add_result = self.add_puppet_pins_on_real_mesh(
+            layer=instantiate["layer_index"],
+            points=comp_points,
+            effect_index=instantiate.get("effect_index"),
+            mesh_index=instantiate.get("mesh_index", 1),
+            points_are_comp=True,
+            reuse_first_pin=True,
+        )
+        add_result["detected"] = outline
+        add_result["suggested_comp_points"] = comp_points
+        add_result["instantiated"] = instantiate
+        add_result["target_layer_index"] = target_index
+        add_result["target_layer_name"] = index_to_name.get(target_index) or target_name
+        return add_result
+
+    def auto_place_puppet_pins(self, layer: Union[str, int],
+                               pin_count: int = 3,
+                               time: float = -1,
+                               alpha_threshold: int = 8,
+                               effect_index: int = None,
+                               mesh_index: int = 1,
+                               clear_existing: bool = False,
+                               edge_inset: float = 0,
+                               band_expand: float = 1.0,
+                               root_mode: str = "wide_to_narrow") -> Dict[str, Any]:
+        """
+        用类似 Spine 的轮廓切片方式自动检测边缘并打 Puppet pins。
+
+        `root_mode`:
+        - `wide_to_narrow`: 自动把更宽的一端当 root
+        - `narrow_to_wide`: 与上面相反
+        - `forward`: 保持主轴正向顺序
+        - `reverse`: 反转主轴顺序
+        """
+        pin_count = max(1, int(pin_count))
+        alpha_threshold = max(1, min(255, int(alpha_threshold)))
+        band_expand = max(0.25, float(band_expand))
+        edge_inset = max(0.0, float(edge_inset))
+        root_mode = str(root_mode or "wide_to_narrow").strip().lower()
+        if root_mode not in {"wide_to_narrow", "narrow_to_wide", "forward", "reverse"}:
+            raise ValueError("root_mode must be wide_to_narrow/narrow_to_wide/forward/reverse")
+
+        name_to_index, index_to_name = self._get_layer_lookup_maps()
+        layer_index, layer_name = self._resolve_layer_ref(
+            layer,
+            name_to_index=name_to_index,
+            index_to_name=index_to_name,
+        )
+        if layer_index is None:
+            return {"error": f"layer_not_found:{layer_name}"}
+
+        outline = self._detect_puppet_pin_targets(
+            layer_index=layer_index,
+            pin_count=pin_count,
+            time=time,
+            alpha_threshold=alpha_threshold,
+            edge_inset=edge_inset,
+            band_expand=band_expand,
+            root_mode=root_mode,
+        )
+        if outline.get("error"):
+            return outline
+
+        comp_points = [row["comp_position"] for row in outline.get("points", [])]
+        if not comp_points:
+            return {"error": "no_detected_points", "layer_index": layer_index}
+
+        add_result = self.add_puppet_pins(
+            layer=layer_index,
+            points=comp_points,
+            effect_index=effect_index,
+            mesh_index=mesh_index,
+            clear_existing=clear_existing,
+            points_are_comp=True,
+        )
+        add_result["suggested_comp_points"] = comp_points
+        add_result["detected"] = outline
+        return add_result
+
     def detect_solid_background_layers(self, max_layers: int = 2,
                                        tolerance: int = 5) -> List[dict]:
         """检测合成底部的纯色图层（不限颜色/亮度/透明度，只要像素一致即为纯色）。"""
@@ -2737,6 +3669,219 @@ class AEBridge:
 
         pixel_info["video_active"] = bool(setup.get("videoActive"))
         return pixel_info
+
+    def _convert_comp_points_to_source_points(self, layer_index: int,
+                                              points: List[List[float]]) -> List[List[float]]:
+        """Convert comp-space points into source/layer-space points for Puppet pins."""
+        jsx = (
+            '(function(){'
+            'var comp=app.project.activeItem;'
+            'if(!comp||!(comp instanceof CompItem))return JSON.stringify({error:"no_comp"});'
+            f'var layer=comp.layer({int(layer_index)});'
+            'if(!layer)return JSON.stringify({error:"no_layer"});'
+            f'var pts={json.dumps(points)};'
+            'var out=[];'
+            'for(var i=0;i<pts.length;i++){'
+            '  var src=layer.compPointToSource(pts[i]);'
+            '  out.push([src[0],src[1]]);'
+            '}'
+            'return JSON.stringify({points:out});'
+            '})()'
+        )
+        result = json.loads(self.run_jsx(jsx, timeout=30000))
+        if result.get("error"):
+            raise RuntimeError(result["error"])
+        return result["points"]
+
+    def _detect_puppet_pin_targets(self, layer_index: int,
+                                   pin_count: int,
+                                   time: float,
+                                   alpha_threshold: int,
+                                   edge_inset: float,
+                                   band_expand: float,
+                                   root_mode: str) -> Dict[str, Any]:
+        """Detect cross-section centers from the rendered alpha silhouette."""
+        setup_jsx = (
+            '(function(){'
+            'var comp=app.project.activeItem;'
+            'if(!comp||!(comp instanceof CompItem))return JSON.stringify({error:"no_comp"});'
+            f'var target={int(layer_index)};'
+            'if(target<1||target>comp.numLayers)return JSON.stringify({error:"no_layer"});'
+            'var states=[];'
+            'for(var i=1;i<=comp.numLayers;i++){'
+            '  var l=comp.layer(i);'
+            '  states.push({enabled:!!l.enabled,solo:!!l.solo});'
+            '  if(i===target){'
+            '    l.enabled=true;'
+            '    l.solo=true;'
+            '  }else if(l.solo){'
+            '    l.solo=false;'
+            '  }'
+            '}'
+            'return JSON.stringify({states:states});'
+            '})()'
+        )
+        setup = json.loads(self.run_jsx(setup_jsx, timeout=30000))
+        if setup.get("error"):
+            return {"error": f"ERR:{setup['error']}"}
+
+        py_code = (
+            'import json\n'
+            'import math\n'
+            f'time_value={float(time)}\n'
+            f'pin_count={max(1, int(pin_count))}\n'
+            f'alpha_threshold={max(1, min(255, int(alpha_threshold)))}\n'
+            f'edge_inset={max(0.0, float(edge_inset))}\n'
+            f'band_expand={max(0.25, float(band_expand))}\n'
+            f'root_mode={json.dumps(root_mode)}\n'
+            'comp=app.project.activeItem\n'
+            'if comp is None or type(comp).__name__ != "CompItem":\n'
+            '    raise RuntimeError("no_active_comp")\n'
+            'px=comp.renderFramePixels(time_value)\n'
+            'alpha=px[:,:,3]\n'
+            'mask=alpha >= alpha_threshold\n'
+            'ys, xs = mask.nonzero()\n'
+            'if int(xs.size) == 0:\n'
+            '    raise RuntimeError("layer_has_no_opaque_pixels")\n'
+            'x_min=int(xs.min())\n'
+            'x_max=int(xs.max())\n'
+            'y_min=int(ys.min())\n'
+            'y_max=int(ys.max())\n'
+            'mx=float(xs.mean())\n'
+            'my=float(ys.mean())\n'
+            'dx=xs.astype("float64")-mx\n'
+            'dy=ys.astype("float64")-my\n'
+            'cov_xx=float((dx*dx).mean())\n'
+            'cov_xy=float((dx*dy).mean())\n'
+            'cov_yy=float((dy*dy).mean())\n'
+            'bbox_w=max(1, x_max-x_min+1)\n'
+            'bbox_h=max(1, y_max-y_min+1)\n'
+            'if abs(cov_xy) < 1e-9 and abs(cov_xx-cov_yy) < 1e-9:\n'
+            '    if bbox_h >= bbox_w:\n'
+            '        axis_u=(0.0, 1.0)\n'
+            '    else:\n'
+            '        axis_u=(1.0, 0.0)\n'
+            'else:\n'
+            '    trace=cov_xx + cov_yy\n'
+            '    diff=cov_xx - cov_yy\n'
+            '    term=math.sqrt(diff*diff + 4.0*cov_xy*cov_xy)\n'
+            '    lam=0.5*(trace + term)\n'
+            '    vx=lam - cov_yy\n'
+            '    vy=cov_xy\n'
+            '    norm=math.hypot(vx, vy)\n'
+            '    if norm < 1e-9:\n'
+            '        vx=cov_xy\n'
+            '        vy=lam - cov_xx\n'
+            '        norm=math.hypot(vx, vy)\n'
+            '    if norm < 1e-9:\n'
+            '        if bbox_h >= bbox_w:\n'
+            '            axis_u=(0.0, 1.0)\n'
+            '        else:\n'
+            '            axis_u=(1.0, 0.0)\n'
+            '    else:\n'
+            '        axis_u=(vx/norm, vy/norm)\n'
+            'axis_v=(-axis_u[1], axis_u[0])\n'
+            'proj_u=dx*axis_u[0] + dy*axis_u[1]\n'
+            'proj_v=dx*axis_v[0] + dy*axis_v[1]\n'
+            'u_min=float(proj_u.min())\n'
+            'u_max=float(proj_u.max())\n'
+            'if pin_count == 1:\n'
+            '    targets=[0.5*(u_min+u_max)]\n'
+            'else:\n'
+            '    start=u_min + edge_inset\n'
+            '    end=u_max - edge_inset\n'
+            '    if end <= start:\n'
+            '        start=u_min\n'
+            '        end=u_max\n'
+            '    step=(end-start)/max(1, pin_count-1)\n'
+            '    targets=[start + step*i for i in range(pin_count)]\n'
+            'total_span=max(1.0, u_max-u_min)\n'
+            'band=max(2.0, (total_span/max(6.0, pin_count*4.0))*band_expand)\n'
+            'points=[]\n'
+            'for target in targets:\n'
+            '    band_mask=abs(proj_u-target) <= band\n'
+            '    if int(band_mask.sum()) == 0:\n'
+            '        nearest=int(abs(proj_u-target).argmin())\n'
+            '        band_mask=(abs(proj_u-target) <= abs(float(proj_u[nearest])-target) + 1e-9)\n'
+            '    slice_x=xs[band_mask]\n'
+            '    slice_y=ys[band_mask]\n'
+            '    slice_u=proj_u[band_mask]\n'
+            '    slice_v=proj_v[band_mask]\n'
+            '    left_idx=int(slice_v.argmin())\n'
+            '    right_idx=int(slice_v.argmax())\n'
+            '    left=[int(slice_x[left_idx]), int(slice_y[left_idx])]\n'
+            '    right=[int(slice_x[right_idx]), int(slice_y[right_idx])]\n'
+            '    v_min=float(slice_v.min())\n'
+            '    v_max=float(slice_v.max())\n'
+            '    center_v=0.5*(v_min+v_max)\n'
+            '    dist2=((slice_u-target)*(slice_u-target))+((slice_v-center_v)*(slice_v-center_v))\n'
+            '    snap_idx=int(dist2.argmin())\n'
+            '    center=[int(slice_x[snap_idx]), int(slice_y[snap_idx])]\n'
+            '    points.append({'
+            '        "comp_position":center,'
+            '        "left_edge":left,'
+            '        "right_edge":right,'
+            '        "width":round(v_max-v_min, 2),'
+            '        "axis_u":round(float(target), 3)'
+            '    })\n'
+            'sample_n=max(1, min(2, len(points)//2 if len(points) > 2 else 1))\n'
+            'start_width=sum(p["width"] for p in points[:sample_n]) / sample_n\n'
+            'end_width=sum(p["width"] for p in points[-sample_n:]) / sample_n\n'
+            'reversed_order=False\n'
+            'if root_mode == "wide_to_narrow":\n'
+            '    if end_width > start_width:\n'
+            '        points=list(reversed(points))\n'
+            '        reversed_order=True\n'
+            'elif root_mode == "narrow_to_wide":\n'
+            '    if start_width > end_width:\n'
+            '        points=list(reversed(points))\n'
+            '        reversed_order=True\n'
+            'elif root_mode == "reverse":\n'
+            '    points=list(reversed(points))\n'
+            '    reversed_order=True\n'
+            'ordered_start_width=sum(p["width"] for p in points[:sample_n]) / sample_n\n'
+            'ordered_end_width=sum(p["width"] for p in points[-sample_n:]) / sample_n\n'
+            'for idx, point in enumerate(points, start=1):\n'
+            '    point["index"]=idx\n'
+            '_result=json.dumps({'
+            '    "layer_index":int(' + str(int(layer_index)) + '),'
+            '    "pin_count":len(points),'
+            '    "bbox":[x_min,y_min,x_max,y_max],'
+            '    "bbox_size":[bbox_w,bbox_h],'
+            '    "axis":[round(axis_u[0],6), round(axis_u[1],6)],'
+            '    "center":[round(mx,2), round(my,2)],'
+            '    "slice_band":round(band,2),'
+            '    "root_mode":root_mode,'
+            '    "axis_start_width":round(start_width,2),'
+            '    "axis_end_width":round(end_width,2),'
+            '    "start_width":round(ordered_start_width,2),'
+            '    "end_width":round(ordered_end_width,2),'
+            '    "reversed":reversed_order,'
+            '    "points":points'
+            '})\n'
+        )
+        try:
+            outline = json.loads(self._run_py(py_code, timeout=180))
+        finally:
+            restore_jsx = (
+                '(function(){'
+                'var comp=app.project.activeItem;'
+                'if(!comp||!(comp instanceof CompItem))return"no_comp";'
+                f'var states={json.dumps(setup.get("states", []))};'
+                'for(var i=1;i<=comp.numLayers&&i<=states.length;i++){'
+                '  var state=states[i-1];'
+                '  try{comp.layer(i).enabled=!!state.enabled;}catch(e){}'
+                '  try{comp.layer(i).solo=!!state.solo;}catch(e){}'
+                '}'
+                'return"ok";'
+                '})()'
+            )
+            try:
+                self.run_jsx(restore_jsx, timeout=30000)
+            except Exception:
+                pass
+
+        return outline
 
     @staticmethod
     def _resolve_effect_prop(prop_key: str) -> Optional[str]:
