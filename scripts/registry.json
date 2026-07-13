@@ -1,5 +1,14 @@
 [
   {
+    "slug": "diagnose-bridge",
+    "name": "AE2Claude 只读诊断",
+    "file": "diagnose-bridge.jsx",
+    "description": "返回 AE 版本、工程、当前合成和完整效果数量，不修改工程",
+    "tags": ["diagnostic", "bridge", "effects", "诊断"],
+    "modes": ["default"],
+    "risk": "read"
+  },
+  {
     "slug": "摄像机",
     "name": "摄像机",
     "file": "摄像机.jsx"
@@ -225,7 +234,8 @@
     "slug": "set-anchor-point",
     "name": "Set Anchor Point",
     "file": "set-anchor-point.jsx",
-    "note": "移动锚点到9宫格位置(tl/tm/tr/ml/mm/mr/bl/bm/br)，--mode指定位置"
+    "note": "移动锚点到9宫格位置(tl/tm/tr/ml/mm/mr/bl/bm/br)，--mode指定位置",
+    "modes": ["default", "tl", "tm", "tr", "ml", "mm", "mr", "bl", "bm", "br"]
   },
   {
     "slug": "auto-trim-comp",

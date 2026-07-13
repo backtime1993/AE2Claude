@@ -9,6 +9,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, ImageContent, TextContent
 
+from .catalog import prepare_script, resolve_script, search_scripts
 from .checkpoints import create_checkpoint, list_checkpoints, revert_checkpoint
 from .previews import render_preview
 from .runtime import (
@@ -135,6 +136,124 @@ def ae_layers(offset: int = 0, limit: int = 100) -> dict[str, Any]:
         "limit": limit,
         "total": len(layers),
         "layers": layers[offset : offset + limit],
+    }
+
+
+@mcp.tool()
+def ae_effects(
+    query: str = "",
+    category: str = "",
+    include_hidden: bool = False,
+    offset: int = 0,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Search AE's complete live effect catalog by name, matchName, or category."""
+    require_enabled()
+    with bridge() as ae:
+        return ae.search_effects(
+            query=query,
+            category=category,
+            include_hidden=include_hidden,
+            offset=offset,
+            limit=limit,
+        )
+
+
+@mcp.tool()
+def ae_describe_effect(match_name: str) -> dict[str, Any]:
+    """Inspect an installed effect's live property tree and default values."""
+    require_enabled()
+    with bridge() as ae:
+        return ae.describe_effect(match_name)
+
+
+@mcp.tool()
+def ae_add_effect(
+    layer_name: str,
+    match_name: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Add an installed effect to a layer using its locale-independent matchName."""
+    require_enabled()
+    authorize("write", confirm=confirm)
+    with bridge() as ae:
+        result = ae.add_effect_by_match_name(layer_name, match_name)
+    return {"ok": True, "layer": layer_name, **result}
+
+
+@mcp.tool()
+def ae_set_effect_property(
+    layer_name: str,
+    effect_index: int,
+    property_match_name: str,
+    value: Any,
+    time_seconds: float | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Set a live effect property by matchName, optionally at a keyframe time."""
+    require_enabled()
+    authorize("write", confirm=confirm)
+    with bridge() as ae:
+        return ae.set_effect_property(
+            layer_name,
+            effect_index,
+            property_match_name,
+            value,
+            at_time=time_seconds,
+        )
+
+
+@mcp.tool()
+def ae_get_effect_property(
+    layer_name: str,
+    effect_index: int,
+    property_match_name: str,
+    time_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Read a live effect property by matchName, optionally at a specific time."""
+    require_enabled()
+    with bridge() as ae:
+        return ae.get_effect_property(
+            layer_name,
+            effect_index,
+            property_match_name,
+            at_time=time_seconds,
+        )
+
+
+@mcp.tool()
+def ae_scripts(query: str = "", offset: int = 0, limit: int = 100) -> dict[str, Any]:
+    """Search the bundled JSX library by name, description, note, or tag."""
+    require_enabled()
+    return search_scripts(query, offset=offset, limit=limit)
+
+
+@mcp.tool()
+def ae_run_script(
+    script: str,
+    mode: str = "default",
+    timeout_ms: int = 60_000,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Run one path-confined registered JSX script under its declared safety level."""
+    require_enabled()
+    entry = resolve_script(script)
+    authorize(entry["risk"], confirm=confirm)
+    code = prepare_script(entry, mode)
+    timeout_ms = max(5_000, min(timeout_ms, 600_000))
+    with bridge() as ae:
+        raw_result = ae.run_jsx(code, timeout=timeout_ms)
+    try:
+        result = json.loads(raw_result)
+    except (TypeError, json.JSONDecodeError):
+        result = raw_result
+    return {
+        "ok": True,
+        "script": entry["slug"],
+        "name": entry["name"],
+        "risk": entry["risk"],
+        "mode": mode,
+        "result": result,
     }
 
 

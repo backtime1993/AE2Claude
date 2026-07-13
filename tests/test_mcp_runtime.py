@@ -6,8 +6,16 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from ae_bridge import AEBridge
+from ae2claude_mcp.catalog import (
+    load_script_registry,
+    prepare_script,
+    resolve_script,
+    script_path,
+    search_scripts,
+)
 from ae2claude_mcp.checkpoints import CheckpointStore, create_checkpoint, project_key
 from ae2claude_mcp.previews import _wait_for_complete_file
 from ae2claude_mcp.runtime import (
@@ -23,6 +31,7 @@ class RuntimeTests(unittest.TestCase):
     def test_method_risk_classification(self) -> None:
         self.assertEqual(classify_bridge_method("project_info"), "read")
         self.assertEqual(classify_bridge_method("list_layers"), "read")
+        self.assertEqual(classify_bridge_method("search_effects"), "read")
         self.assertEqual(classify_bridge_method("add_text_layer"), "write")
         self.assertEqual(classify_bridge_method("remove_layer"), "destructive")
         self.assertEqual(classify_bridge_method("run_jsx"), "destructive")
@@ -111,6 +120,113 @@ class CheckpointStoreTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(result["label"], "before edit")
             self.assertTrue(Path(result["path"]).exists())
+
+
+class EffectCatalogTests(unittest.TestCase):
+    def test_describe_effect_json_encodes_match_name(self) -> None:
+        ae = AEBridge.__new__(AEBridge)
+        ae.run_jsx = Mock(return_value='{"error":"not available"}')  # type: ignore[method-assign]
+        match_name = 'Pseudo/Quote"\\Test'
+        ae.describe_effect(match_name)
+        code = ae.run_jsx.call_args.args[0]
+        self.assertIn("var mn=" + json.dumps(match_name, ensure_ascii=False) + ";", code)
+
+    def test_live_inventory_is_deduplicated_sorted_and_categorized(self) -> None:
+        ae = AEBridge.__new__(AEBridge)
+        ae.run_jsx = Mock(  # type: ignore[method-assign]
+            return_value=json.dumps(
+                [
+                    {
+                        "displayName": "Gaussian Blur",
+                        "matchName": "ADBE Gaussian Blur 2",
+                        "category": "Blur",
+                        "version": "1.0",
+                    },
+                    {
+                        "displayName": "Gaussian Blur",
+                        "matchName": "ADBE Gaussian Blur 2",
+                        "category": "Blur",
+                        "version": "1.0",
+                    },
+                    {
+                        "displayName": "Hidden",
+                        "matchName": "Pseudo/Hidden",
+                        "category": "",
+                        "version": "0.0",
+                    },
+                ]
+            )
+        )
+        result = ae.list_available_effects()
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["categories"], {"(hidden)": 1, "Blur": 1})
+
+    def test_search_effects_filters_hidden_and_paginates(self) -> None:
+        ae = AEBridge.__new__(AEBridge)
+        ae.list_available_effects = Mock(  # type: ignore[method-assign]
+            return_value={
+                "count": 2,
+                "effects": [
+                    {
+                        "displayName": "Gaussian Blur",
+                        "matchName": "ADBE Gaussian Blur 2",
+                        "category": "Blur",
+                        "version": "1.0",
+                    },
+                    {
+                        "displayName": "Hidden",
+                        "matchName": "Pseudo/Hidden",
+                        "category": "",
+                        "version": "0.0",
+                    },
+                ],
+            }
+        )
+        result = ae.search_effects("gaussian", limit=10)
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["effects"][0]["matchName"], "ADBE Gaussian Blur 2")
+
+
+class ScriptCatalogTests(unittest.TestCase):
+    def test_search_and_readonly_resolution(self) -> None:
+        result = search_scripts("诊断")
+        self.assertGreaterEqual(result["total"], 1)
+        entry = resolve_script("diagnose-bridge")
+        self.assertEqual(entry["risk"], "read")
+        self.assertIn("app.effects", prepare_script(entry))
+
+    def test_registry_paths_are_confined(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "registry.json").write_text("[]", encoding="utf-8")
+            self.assertEqual(load_script_registry(root), [])
+            with self.assertRaises(ValueError):
+                script_path({"file": "../escape.jsx"}, root)
+
+    def test_declared_custom_modes_are_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "anchor.jsx").write_text("doThing();", encoding="utf-8")
+            (root / "registry.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "slug": "anchor",
+                            "name": "Anchor",
+                            "file": "anchor.jsx",
+                            "modes": ["tl", "mm", "br", "not valid"],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            entry = resolve_script("anchor", root)
+            self.assertEqual(entry["modes"], ["tl", "mm", "br"])
+            self.assertTrue(
+                prepare_script(entry, "br", root).startswith('var __mode__ = "br";')
+            )
+            with self.assertRaises(ValueError):
+                prepare_script(entry, "not valid", root)
 
 
 if __name__ == "__main__":

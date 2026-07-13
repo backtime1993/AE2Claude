@@ -38,6 +38,9 @@ MCP 暴露以下核心能力：
 
 - `ae_ping` / `ae_status` / `ae_diagnose`：连接与故障定位
 - `ae_overview` / `ae_layers` / `ae_methods`：渐进读取工程状态
+- `ae_effects` / `ae_describe_effect`：搜索 AE 实际安装的完整效果库并读取属性结构
+- `ae_add_effect` / `ae_set_effect_property` / `ae_get_effect_property`：按稳定 `matchName` 通用操控效果
+- `ae_scripts` / `ae_run_script`：模糊搜索并安全运行仓库内登记的 JSX 工具
 - `ae_call`：调用全部公开 AEBridge 方法
 - `ae_exec`：执行原始 ExtendScript，可在执行前自动建检查点
 - `ae_preview_frame`：返回适合模型查看的真实合成帧 PNG 和结构化元数据
@@ -177,13 +180,13 @@ with AEBridge() as ae:
 |------|----------|
 | `AE2Claude.aex` | AE 插件本体（装到 AE 插件目录） |
 | `ae2claude_server.py` | 插件内部的通信服务器 |
-| `ae_bridge.py` | Python API（当前 117 个公开方法） |
+| `ae_bridge.py` | Python API（当前 119 个公开方法） |
 | `ae2claude` | 终端命令行工具 |
 | `ae2claude_mcp/` | MCP、诊断、预览、安全门禁和检查点实现 |
 | `.mcp.json.template` | MCP 客户端配置模板 |
 | `pyproject.toml` / `uv.lock` | 可复现的 Python 依赖 |
 | `src/` | C++ 插件源码 |
-| `scripts/` | 51 个 JSX 脚本工具 |
+| `scripts/` | 48 个已登记 JSX 脚本工具 |
 | `presets/` | 自定义 AE 预设 |
 | `deploy.bat` | 一键安装脚本 |
 | `test_v3.py` | 自动化测试（73 项） |

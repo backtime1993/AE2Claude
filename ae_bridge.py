@@ -363,88 +363,6 @@ TRACK_MATTE_TYPES = {
 }
 
 # ╔══════════════════════════════════════════════════════════╗
-# ║           KNOWN EFFECT MATCHNAMES (PROBE LIST)          ║
-# ╠══════════════════════════════════════════════════════════╣
-# ║ 用于 list_available_effects() 动态探测当前 AE 安装中    ║
-# ║ 实际可用的效果。canAddProperty() 测试后返回。            ║
-# ╚══════════════════════════════════════════════════════════╝
-
-KNOWN_EFFECT_MATCHNAMES = [
-    # ── Blur & Sharpen ──
-    "ADBE Gaussian Blur 2", "ADBE Box Blur2", "ADBE Camera Lens Blur",
-    "ADBE Radial Blur", "ADBE Sharpen", "ADBE Unsharp Mask2",
-    "ADBE Channel Blur", "ADBE Compound Blur", "ADBE Directional Blur",
-    "ADBE Motion Blur", "ADBE Smart Blur", "ADBE Bilateral",
-    "CC Cross Blur", "CC Radial Blur", "CC Radial Fast Blur", "CC Vector Blur",
-    # ── Color Correction ──
-    "ADBE Brightness & Contrast 2", "ADBE CurvesCustom", "ADBE Easy Levels2",
-    "ADBE HUE SATURATION", "ADBE Vibrance", "ADBE Color Balance (HLS)",
-    "ADBE Color Balance 2", "ADBE Tint", "ADBE Tritone", "ADBE Pro Levels2",
-    "ADBE Photo Filter", "ADBE Black&White", "ADBE Exposure2",
-    "ADBE Change To Color", "ADBE Change Color", "ADBE Lumetri",
-    "ADBE Leave Color", "ADBE Equalize", "ADBE Selective Color",
-    "ADBE Shadow/Highlight",
-    "CC Color Neutralizer", "CC Color Offset", "CC Toner",
-    # ── Distort ──
-    "ADBE Turbulent Displace", "ADBE Displacement Map", "ADBE LIQUIFY",
-    "ADBE Ripple", "ADBE Twirl", "ADBE WRPMESH", "ADBE Spherize",
-    "ADBE Polar Coordinates", "ADBE Bulge", "ADBE Wave Warp",
-    "ADBE Reshape", "ADBE Mirror", "ADBE Offset", "ADBE Magnify",
-    "ADBE Transform", "ADBE Optics Compensation",
-    "CC Bend It", "CC Bender", "CC Blobbylize", "CC Flo Motion",
-    "CC Griddler", "CC Lens", "CC Page Turn", "CC Power Pin",
-    "CC Ripple Pulse", "CC Slant", "CC Smear", "CC Split", "CC Split 2", "CC Tiler",
-    # ── Generate ──
-    "ADBE Fill", "ADBE Ramp", "ADBE Stroke", "ADBE Checkerboard",
-    "ADBE Grid", "ADBE Fractal", "ADBE Cell Pattern", "ADBE Ellipse",
-    "ADBE 4ColorGradient", "ADBE Lightning 2", "ADBE Scribble Fill",
-    "ADBE AudiSpek", "ADBE AudiWave", "ADBE Laser", "ADBE Write-on",
-    "CC Glue Gun", "CC Light Burst 2.5", "CC Light Rays", "CC Light Sweep", "CC Threads",
-    # ── Noise & Grain ──
-    "ADBE Fractal Noise", "ADBE Noise Alpha2", "ADBE Noise HLS2",
-    "ADBE Add Grain", "ADBE Remove Grain", "ADBE Match Grain",
-    "ADBE Dust & Scratches", "ADBE Median",
-    # ── Stylize ──
-    "ADBE Glo2", "ADBE Drop Shadow", "ADBE Emboss", "ADBE Find Edges",
-    "ADBE Mosaic", "ADBE Posterize", "ADBE Roughen Edges", "ADBE Scatter",
-    "ADBE Tile", "ADBE Texturize", "ADBE Brush Strokes", "ADBE Color Emboss",
-    "CC Glass", "CC HexTile", "CC Kaleida", "CC Mr. Smoothie",
-    "CC Plastic", "CC RepeTile", "CC Vignette",
-    # ── Transition ──
-    "ADBE Block Dissolve", "ADBE Gradient Wipe", "ADBE Linear Wipe",
-    "ADBE Radial Wipe", "ADBE Venetian Blinds", "ADBE Iris Wipe",
-    "CC Glass Wipe", "CC Grid Wipe", "CC Image Wipe", "CC Jaws",
-    "CC Light Wipe", "CC Line Sweep", "CC Scale Wipe", "CC Twister", "CC WarpoMatic",
-    # ── Channel ──
-    "ADBE Set Channels", "ADBE Set Matte3", "ADBE Shift Channels",
-    "ADBE Minimax", "ADBE Invert", "ADBE Arithmetic",
-    "ADBE Channel Combiner", "ADBE Calculations", "ADBE Remove Color Matting",
-    # ── Keying ──
-    "ADBE KEYLIGHT", "ADBE SPILL2", "ADBE Extract", "ADBE ATG Extract",
-    "ADBE Color Range", "ADBE Difference Matte", "ADBE Inner Outer Key",
-    "ADBE Linear Color Key2",
-    # ── Matte ──
-    "ADBE Simple Choker", "ADBE Matte Choker", "ADBE Refine Soft Matte",
-    # ── Perspective ──
-    "ADBE 3D Glasses2", "ADBE Bevel Alpha",
-    "CC Cylinder", "CC Environment", "CC Sphere", "CC Spotlight",
-    # ── Time ──
-    "ADBE Echo", "ADBE Posterize Time", "ADBE Timewarp", "ADBE Time Difference",
-    "CC Force Motion Blur", "CC Wide Time",
-    # ── Utility ──
-    "ADBE Apply Color LUT2", "ADBE Cineon Converter2",
-    "ADBE Color Profile Converter", "ADBE Grow Bounds",
-    # ── Simulation ──
-    "CC Ball Action", "CC Bubbles", "CC Drizzle", "CC Hair",
-    "CC Mr. Mercury", "CC Particle Systems II", "CC Particle World",
-    "CC Pixel Polly", "CC Rain", "CC Scatterize", "CC Snow", "CC Star Burst",
-    # ── Expression Controls ──
-    "ADBE Angle Control", "ADBE Checkbox Control", "ADBE Color Control",
-    "ADBE Layer Control", "ADBE Point Control", "ADBE Slider Control",
-    "ADBE Dropdown Control", "ADBE Point3D Control",
-]
-
-# ╔══════════════════════════════════════════════════════════╗
 # ║                  AE BRIDGE CLASS                    ║
 # ╚══════════════════════════════════════════════════════════╝
 
@@ -978,19 +896,149 @@ class AEBridge:
         fx = EFFECTS.get(effect_type)
         if not fx:
             raise ValueError(f"Unknown effect '{effect_type}'. Available: {list(EFFECTS.keys())}")
-        mn = fx["matchName"]
+        result = self.add_effect_by_match_name(name, fx["matchName"])
+        return int(result["index"])
+
+    def add_effect_by_match_name(self, name: str, match_name: str) -> dict:
+        """Add any installed effect by its locale-independent matchName.
+
+        This is the generic counterpart to :meth:`add_effect`, whose semantic
+        aliases intentionally cover only a small curated set. The effect group
+        is checked with ``canAddProperty`` first and the returned index is the
+        stable handle callers should retain after adding more effects.
+        """
+        if not match_name.strip():
+            raise ValueError("match_name must not be empty")
+        layer_json = json.dumps(name, ensure_ascii=False)
+        match_json = json.dumps(match_name, ensure_ascii=False)
         jsx = (
-            f'try{{'
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var ef=tl.property("Effects").addProperty("{mn}");'
-            f'ef.propertyIndex;'
-            f'}}catch(e){{"ERR:"+e.toString()}}'
+            '(function(){'
+            'var undoOpen=false;'
+            'try{'
+            'var c=app.project.activeItem;'
+            'if(!c||!(c instanceof CompItem))return JSON.stringify({error:"no_active_comp"});'
+            f'var tl=c.layer({layer_json});'
+            'if(!tl)return JSON.stringify({error:"layer_not_found"});'
+            'var group=tl.property("ADBE Effect Parade");'
+            f'var mn={match_json};'
+            'if(!group.canAddProperty(mn))return JSON.stringify({error:"effect_not_available",matchName:mn});'
+            'app.beginUndoGroup("AE2Claude Add Effect");undoOpen=true;'
+            'var effect=group.addProperty(mn);'
+            'var result={index:effect.propertyIndex,name:effect.name,matchName:effect.matchName};'
+            'app.endUndoGroup();undoOpen=false;'
+            'return JSON.stringify(result);'
+            '}catch(e){'
+            'if(undoOpen){try{app.endUndoGroup();}catch(x){}}'
+            'return JSON.stringify({error:e.toString(),line:e.line||null});'
+            '}'
+            '})()'
         )
         r = self.run_jsx(jsx)
-        if r.startswith("ERR:"):
-            raise RuntimeError(r)
-        return int(r)
+        try:
+            result = json.loads(r)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(r) from exc
+        if not isinstance(result, dict) or result.get("error"):
+            raise RuntimeError(str(result))
+        return result
+
+    def set_effect_property(self, name: str, effect_index: int,
+                            property_match_name: str, value: Any,
+                            at_time: float = None) -> dict:
+        """Set an effect property by matchName, including nested properties."""
+        if not property_match_name.strip():
+            raise ValueError("property_match_name must not be empty")
+        layer_json = json.dumps(name, ensure_ascii=False)
+        prop_json = json.dumps(property_match_name, ensure_ascii=False)
+        value_json = json.dumps(value, ensure_ascii=False)
+        set_call = (
+            f'p.setValueAtTime({float(at_time)},{value_json});'
+            if at_time is not None
+            else f'p.setValue({value_json});'
+        )
+        jsx = (
+            '(function(){'
+            'function find(group,mn){'
+            'for(var i=1;i<=group.numProperties;i++){'
+            'var child=group.property(i);'
+            'if(child.matchName==mn)return child;'
+            'if(child.numProperties>0){var nested=find(child,mn);if(nested)return nested;}'
+            '}return null;}'
+            'var undoOpen=false;'
+            'try{'
+            'var c=app.project.activeItem;'
+            'if(!c||!(c instanceof CompItem))return JSON.stringify({error:"no_active_comp"});'
+            f'var layer=c.layer({layer_json});'
+            'if(!layer)return JSON.stringify({error:"layer_not_found"});'
+            f'var effect=layer.property("ADBE Effect Parade").property({int(effect_index)});'
+            'if(!effect)return JSON.stringify({error:"effect_not_found"});'
+            f'var p=find(effect,{prop_json});'
+            'if(!p)return JSON.stringify({error:"property_not_found"});'
+            'app.beginUndoGroup("AE2Claude Set Effect Property");undoOpen=true;'
+            + set_call +
+            'app.endUndoGroup();undoOpen=false;'
+            'var current;try{current=p.value;}catch(x){current=null;}'
+            'return JSON.stringify({ok:true,effectIndex:effect.propertyIndex,'
+            'propertyName:p.name,propertyMatchName:p.matchName,value:current});'
+            '}catch(e){'
+            'if(undoOpen){try{app.endUndoGroup();}catch(x){}}'
+            'return JSON.stringify({error:e.toString(),line:e.line||null});'
+            '}'
+            '})()'
+        )
+        r = self.run_jsx(jsx)
+        try:
+            result = json.loads(r)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(r) from exc
+        if not isinstance(result, dict) or result.get("error"):
+            raise RuntimeError(str(result))
+        return result
+
+    def get_effect_property(self, name: str, effect_index: int,
+                            property_match_name: str,
+                            at_time: float = None) -> dict:
+        """Read an effect property by matchName, including nested properties."""
+        if not property_match_name.strip():
+            raise ValueError("property_match_name must not be empty")
+        layer_json = json.dumps(name, ensure_ascii=False)
+        prop_json = json.dumps(property_match_name, ensure_ascii=False)
+        read_expr = (
+            f'p.valueAtTime({float(at_time)},false)'
+            if at_time is not None
+            else 'p.value'
+        )
+        jsx = (
+            '(function(){'
+            'function find(group,mn){'
+            'for(var i=1;i<=group.numProperties;i++){'
+            'var child=group.property(i);'
+            'if(child.matchName==mn)return child;'
+            'if(child.numProperties>0){var nested=find(child,mn);if(nested)return nested;}'
+            '}return null;}'
+            'try{'
+            'var c=app.project.activeItem;'
+            'if(!c||!(c instanceof CompItem))return JSON.stringify({error:"no_active_comp"});'
+            f'var layer=c.layer({layer_json});'
+            'if(!layer)return JSON.stringify({error:"layer_not_found"});'
+            f'var effect=layer.property("ADBE Effect Parade").property({int(effect_index)});'
+            'if(!effect)return JSON.stringify({error:"effect_not_found"});'
+            f'var p=find(effect,{prop_json});'
+            'if(!p)return JSON.stringify({error:"property_not_found"});'
+            f'var value={read_expr};'
+            'return JSON.stringify({effectIndex:effect.propertyIndex,'
+            'propertyName:p.name,propertyMatchName:p.matchName,value:value});'
+            '}catch(e){return JSON.stringify({error:e.toString(),line:e.line||null});}'
+            '})()'
+        )
+        r = self.run_jsx(jsx)
+        try:
+            result = json.loads(r)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(r) from exc
+        if not isinstance(result, dict) or result.get("error"):
+            raise RuntimeError(str(result))
+        return result
 
     def set_effect_props(self, name: str, effect_index: int,
                          props: Dict[str, Any]) -> str:
@@ -1175,58 +1223,116 @@ class AEBridge:
     # ── Effect Introspection ──────────────────────────────
 
     def list_available_effects(self) -> dict:
+        """Return AE's complete live effect inventory without mutating a comp.
+
+        ``app.effects`` is the authoritative application-level catalog and
+        exposes the localized display name, localized category, stable
+        matchName, and internal version for every installed effect. Unlike the
+        legacy probe list, this works without an active composition and also
+        discovers third-party and pseudo effects.
         """
-        探测当前 AE 中所有可用效果。
-        创建临时 solid，对 KNOWN_EFFECT_MATCHNAMES 分批 canAddProperty + addProperty
-        获取 displayName，完成后 undo 清理。分批避免 5s IdleHook 超时。
-        """
-        BATCH_SIZE = 25
-        all_effects: list = []
-        for start in range(0, len(KNOWN_EFFECT_MATCHNAMES), BATCH_SIZE):
-            batch = KNOWN_EFFECT_MATCHNAMES[start:start + BATCH_SIZE]
-            mn_json = json.dumps(batch)
-            jsx = (
-                '(function(){'
-                'var c=app.project.activeItem;'
-                'if(!c||!(c instanceof CompItem))return JSON.stringify({error:"No active comp"});'
-                'app.beginUndoGroup("__probe__");'
-                'try{'
-                'var solid=c.layers.addSolid([0,0,0],"__effect_probe__",10,10,1);'
-                'var efx=solid.property("Effects");'
-                'var mns=' + mn_json + ';'
-                'var out=[];'
-                'for(var i=0;i<mns.length;i++){'
-                'try{if(efx.canAddProperty(mns[i])){'
-                'var e=efx.addProperty(mns[i]);'
-                'out.push({matchName:mns[i],displayName:e.name});'
-                '}}catch(x){}}'
-                'solid.remove();'
-                'app.endUndoGroup();'
-                'app.executeCommand(16);'
-                'return JSON.stringify(out);'
-                '}catch(e){'
-                'app.endUndoGroup();'
-                'try{app.executeCommand(16);}catch(x){}'
-                'return JSON.stringify({error:e.toString()});'
-                '}'
-                '})()'
-            )
-            try:
-                r = self.run_jsx(jsx, timeout=30000)
-                data = json.loads(r)
-                if isinstance(data, dict) and 'error' in data:
-                    return data
-                all_effects.extend(data)
-            except (json.JSONDecodeError, RuntimeError):
+        jsx = (
+            '(function(){try{'
+            'var out=[];var effects=app.effects||[];'
+            'for(var i=0;i<effects.length;i++){var effect=effects[i];'
+            'out.push({displayName:effect.displayName||"",'
+            'matchName:effect.matchName||"",category:effect.category||"",'
+            'version:effect.version||""});}'
+            'return JSON.stringify(out);'
+            '}catch(e){return JSON.stringify({error:e.toString(),line:e.line||null});}})()'
+        )
+        r = self.run_jsx(jsx, timeout=30000)
+        try:
+            data = json.loads(r)
+        except json.JSONDecodeError:
+            return {"error": r, "count": 0, "effects": []}
+        if isinstance(data, dict) and data.get("error"):
+            return {**data, "count": 0, "effects": []}
+        if not isinstance(data, list):
+            return {"error": "invalid_effect_inventory", "count": 0, "effects": []}
+
+        unique: dict[tuple[str, str, str, str], dict[str, str]] = {}
+        for effect in data:
+            if not isinstance(effect, dict):
                 continue
-        return {"count": len(all_effects), "effects": all_effects}
+            normalized = {
+                "displayName": str(effect.get("displayName", "")),
+                "matchName": str(effect.get("matchName", "")),
+                "category": str(effect.get("category", "")),
+                "version": str(effect.get("version", "")),
+            }
+            key = (
+                normalized["matchName"],
+                normalized["displayName"],
+                normalized["category"],
+                normalized["version"],
+            )
+            unique[key] = normalized
+
+        effects = sorted(
+            unique.values(),
+            key=lambda item: (
+                item["category"].casefold(),
+                item["displayName"].casefold(),
+                item["matchName"].casefold(),
+            ),
+        )
+        categories: dict[str, int] = {}
+        for effect in effects:
+            category = effect["category"] or "(hidden)"
+            categories[category] = categories.get(category, 0) + 1
+        return {
+            "count": len(effects),
+            "categoryCount": len(categories),
+            "categories": categories,
+            "effects": effects,
+        }
+
+    def search_effects(self, query: str = "", category: str = "",
+                       include_hidden: bool = False, offset: int = 0,
+                       limit: int = 100) -> dict:
+        """Search and paginate the live effect inventory."""
+        inventory = self.list_available_effects()
+        if inventory.get("error"):
+            return inventory
+        query_key = query.strip().casefold()
+        category_key = category.strip().casefold()
+        matches = []
+        for effect in inventory["effects"]:
+            if not include_hidden and not effect["category"]:
+                continue
+            if category_key and effect["category"].casefold() != category_key:
+                continue
+            haystack = " ".join(
+                (
+                    effect["displayName"],
+                    effect["matchName"],
+                    effect["category"],
+                    effect["version"],
+                )
+            ).casefold()
+            if query_key and query_key not in haystack:
+                continue
+            matches.append(effect)
+
+        offset = max(0, int(offset))
+        limit = max(1, min(int(limit), 500))
+        return {
+            "query": query,
+            "category": category or None,
+            "includeHidden": bool(include_hidden),
+            "offset": offset,
+            "limit": limit,
+            "total": len(matches),
+            "effects": matches[offset:offset + limit],
+        }
 
     def describe_effect(self, match_name: str) -> dict:
         """
         自省指定效果的所有属性。
         临时添加效果到 probe solid，递归遍历属性树，返回结构化元数据后 undo。
         """
-        safe_mn = match_name.replace('"', '\\"')
+        match_json = json.dumps(match_name, ensure_ascii=False)
         jsx = (
             '(function(){'
             'var c=app.project.activeItem;'
@@ -1235,7 +1341,7 @@ class AEBridge:
             'try{'
             'var solid=c.layers.addSolid([0,0,0],"__describe__",10,10,1);'
             'var efxG=solid.property("Effects");'
-            'var mn="' + safe_mn + '";'
+            'var mn=' + match_json + ';'
             'if(!efxG.canAddProperty(mn)){'
             'solid.remove();app.endUndoGroup();app.executeCommand(16);'
             'return JSON.stringify({error:"Effect not available",matchName:mn});}'

@@ -25,6 +25,7 @@ READ_PREFIXES = (
     "list_",
     "describe_",
     "enumerate_",
+    "search_",
     "sample_",
     "approximate_",
     "detect_",
