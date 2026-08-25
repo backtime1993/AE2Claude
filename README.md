@@ -3,7 +3,7 @@
 让 AI 操控 After Effects 的原生插件。通过 MCP、终端命令或 Python
 代码直接创建图层、设关键帧、加效果、预览和渲染。
 
-当前兼容基线：AE2Claude 4.2.0、After Effects Beta 27.0、Python 3.12。
+当前兼容基线：AE2Claude 4.3.0、After Effects Beta 27.0、Python 3.12。
 
 ## 它能做什么
 
@@ -54,6 +54,11 @@ MCP 暴露以下核心能力：
 - `ae_preview_frame`：返回适合模型查看的真实合成帧 PNG 和结构化元数据
 - `ae_checkpoint` / `ae_checkpoints` / `ae_revert`：完整 AEP 快照与恢复
 - `ae_set_enabled`：立即关闭或恢复所有 MCP 驱动操作
+- `ae_capabilities`：返回可搜索的方法 schema、风险和 Agent 能力协议
+- `ae_inspect_properties` / `ae_get_property` / `ae_set_property`：按稳定 ID 和 `matchName` 路径开放 AE 属性树
+- `ae_property_batch`：最多 256 项参数读写，一次主线程调度、一次撤销、支持试运行
+- `ae_batch`：跨能力工作流，支持 `$0.field` 结果链；撤销边界遵循各底层方法
+- `ae_submit` / `ae_task` / `ae_cancel` / `ae_events`：后台任务、协作式取消和增量事件流
 
 安全模式通过 `AE2CLAUDE_APPROVAL_MODE` 控制：
 
@@ -68,6 +73,23 @@ MCP 暴露以下核心能力：
 然后原子替换原项目文件并重新打开。未保存项目会安全跳过检查点创建。
 
 ### 基本使用
+
+4.3 新版结构化 CLI：
+
+```powershell
+uv run ae2claude status
+uv run ae2claude capabilities property
+uv run ae2claude inspect --layer id:42 --depth 4
+uv run ae2claude get --layer id:42 --path '["ADBE Transform Group","ADBE Position"]'
+uv run ae2claude set --layer id:42 --path '["ADBE Transform Group","ADBE Opacity"]' --value 70
+uv run ae2claude property-batch plan.json --layer id:42 --dry-run
+uv run ae2claude batch workflow.json --confirm
+```
+
+新 CLI 支持 `--format json|text|ndjson`，原仓库根目录 CLI 继续保留兼容。完整设计见
+[`docs/AGENT_ARCHITECTURE.md`](docs/AGENT_ARCHITECTURE.md)。
+
+旧 CLI 快捷命令：
 
 ```bash
 ae2claude                              # 检查连接状态
@@ -178,9 +200,10 @@ with AEBridge() as ae:
 
 ## 设计原则
 
-1. **一个方法做一件事** — 创建和样式分开，添加效果和设参数分开
-2. **AI 负责编排** — 循环、过滤、多步操作由 AI 组合调用完成
-3. **语义化参数** — 用 `"opacity"` `"position"` 这样的名称，不用 AE 内部代码
+1. **原子方法 + 批处理协议** — 旧方法保持兼容，性能敏感参数通过单次主线程批处理
+2. **可发现而不是猜命令** — Agent 先读 capability schema 和属性树，再组合工作流
+3. **稳定寻址** — 优先使用合成/图层 ID 和跨语言 `matchName`，避免名称重复与索引漂移
+4. **可恢复与可追踪** — 参数批次单次撤销，长任务有状态、取消、TTL 和事件 cursor
 
 ## 文件说明
 
@@ -188,7 +211,7 @@ with AEBridge() as ae:
 |------|----------|
 | `build/Release/AE2Claude.aex` | 当前源码构建出的 AE 插件本体（部署来源） |
 | `ae2claude_server.py` | 插件内部的通信服务器 |
-| `ae_bridge.py` | Python API（当前 119 个公开方法） |
+| `ae_bridge.py` | Python API（当前 123 个公开方法） |
 | `ae2claude` | 终端命令行工具 |
 | `ae2claude_mcp/` | MCP、诊断、预览、安全门禁和检查点实现 |
 | `.mcp.json.template` | MCP 客户端配置模板 |

@@ -1,4 +1,4 @@
-"""AE2Claude v4.2.0 Self-contained Integration Test
+"""AE2Claude v4.3.0 Self-contained Integration Test
 
 Creates its own composition + layers, tests every v3 API domain, then cleans up.
 Does NOT depend on any pre-existing AE project state.

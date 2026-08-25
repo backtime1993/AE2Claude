@@ -12,7 +12,7 @@ from pathlib import Path
 
 _AE_PORT = 8089
 _AE_PIPE = r"\\.\pipe\PyShiftAEBridge"
-BRIDGE_VERSION = "4.2.0"
+BRIDGE_VERSION = "4.3.0"
 
 try:
     import PyShiftCore as psc

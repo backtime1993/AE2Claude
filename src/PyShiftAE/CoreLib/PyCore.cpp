@@ -8,7 +8,9 @@
 #include "../CoreSDK/ItemSuites.h"
 #include "../CoreSDK/ProjectSuites.h"
 #include "../CoreSDK/TaskUtilsQuiet.h"
+#include "../CoreSDK/UtilitySuites.h"
 #include <filesystem>
+#include <deque>
 
 // Macro: first call in a chain uses enqueueSyncTask (wakes idle), rest use quiet version
 #define ENQUEUE_FIRST enqueueSyncTask
@@ -79,6 +81,410 @@ namespace {
             toDispose.push_back(current);
         }
         return true;
+    }
+
+    struct AgentStreamValue {
+        bool scalar = false;
+        double scalarValue = 0.0;
+        std::vector<double> values;
+    };
+
+    struct AgentStreamOperation {
+        std::string action;
+        std::vector<StreamPathStep> path;
+        float time = 0.0f;
+        bool hasTime = false;
+        bool preExpression = false;
+        AgentStreamValue value;
+    };
+
+    struct AgentStreamResult {
+        bool ok = false;
+        std::string error;
+        int streamType = -1;
+        AgentStreamValue value;
+    };
+
+    struct AgentStreamInfo {
+        int depth = 0;
+        int index = -1;
+        int streamType = -1;
+        int groupType = -1;
+        int flags = 0;
+        int uniqueId = -1;
+        int numChildren = 0;
+        bool canVary = false;
+        std::string name;
+        std::string matchName;
+        std::vector<StreamPathStep> path;
+    };
+
+    bool resolveStreamPathDirect(
+        Result<AEGP_StreamRefH> root,
+        const std::vector<StreamPathStep>& steps,
+        std::vector<Result<AEGP_StreamRefH>>& toDispose,
+        Result<AEGP_StreamRefH>& current,
+        std::string& error)
+    {
+        current = root;
+        toDispose.clear();
+        toDispose.push_back(current);
+
+        for (const auto& step : steps) {
+            current = step.isIndex
+                ? getNewStreamByIndex(current, step.index)
+                : getNewStreamByMatchname(current, step.name);
+            if (current.error != A_Err_NONE || current.value == NULL) {
+                error = "ERR:path_not_found:" + streamPathStepLabel(step);
+                return false;
+            }
+            toDispose.push_back(current);
+        }
+        return true;
+    }
+
+    void disposeStreamsDirect(std::vector<Result<AEGP_StreamRefH>>& streams)
+    {
+        for (auto it = streams.rbegin(); it != streams.rend(); ++it) {
+            if (it->value != NULL) {
+                disposeStream(*it);
+            }
+        }
+        streams.clear();
+    }
+
+    bool isAgentValueType(AEGP_StreamType type)
+    {
+        return type == AEGP_StreamType_OneD ||
+               type == AEGP_StreamType_TwoD ||
+               type == AEGP_StreamType_TwoD_SPATIAL ||
+               type == AEGP_StreamType_ThreeD ||
+               type == AEGP_StreamType_ThreeD_SPATIAL ||
+               type == AEGP_StreamType_COLOR;
+    }
+
+    AgentStreamValue readAgentStreamValue(
+        Result<AEGP_StreamRefH> stream,
+        AEGP_StreamType type,
+        float time,
+        bool preExpression,
+        std::string& error)
+    {
+        AgentStreamValue output;
+        A_Time timeT = {};
+        timeT.value = static_cast<A_long>(time * 1000000.0f);
+        timeT.scale = 1000000;
+        auto valueResult = getNewStreamValue(
+            stream,
+            AEGP_LTimeMode_CompTime,
+            timeT,
+            preExpression ? TRUE : FALSE);
+        if (valueResult.error != A_Err_NONE) {
+            error = "ERR:get_value_failed:" + std::to_string(valueResult.error);
+            return output;
+        }
+
+        const auto& value = valueResult.value.val;
+        switch (type) {
+        case AEGP_StreamType_OneD:
+            output.scalar = true;
+            output.scalarValue = value.one_d;
+            break;
+        case AEGP_StreamType_TwoD:
+        case AEGP_StreamType_TwoD_SPATIAL:
+            output.values = { value.two_d.x, value.two_d.y };
+            break;
+        case AEGP_StreamType_ThreeD:
+        case AEGP_StreamType_ThreeD_SPATIAL:
+            output.values = { value.three_d.x, value.three_d.y, value.three_d.z };
+            break;
+        case AEGP_StreamType_COLOR:
+            output.values = {
+                value.color.redF,
+                value.color.greenF,
+                value.color.blueF,
+                value.color.alphaF
+            };
+            break;
+        default:
+            error = "ERR:unsupported_stream_type:" + std::to_string(type);
+            break;
+        }
+        disposeStreamValue(&valueResult.value);
+        return output;
+    }
+
+    std::string validateAgentStreamValue(
+        AEGP_StreamType type,
+        const AgentStreamValue& input)
+    {
+        switch (type) {
+        case AEGP_StreamType_OneD:
+            return input.scalar ? std::string() : "ERR:expected_scalar";
+        case AEGP_StreamType_TwoD:
+        case AEGP_StreamType_TwoD_SPATIAL:
+            return input.values.size() == 2 ? std::string() : "ERR:expected_2d_value";
+        case AEGP_StreamType_ThreeD:
+        case AEGP_StreamType_ThreeD_SPATIAL:
+            return input.values.size() == 3 ? std::string() : "ERR:expected_3d_value";
+        case AEGP_StreamType_COLOR:
+            return (input.values.size() == 3 || input.values.size() == 4)
+                ? std::string() : "ERR:expected_color_value";
+        default:
+            return "ERR:unsupported_stream_type:" + std::to_string(type);
+        }
+    }
+
+    std::string writeAgentStreamValue(
+        Result<AEGP_StreamRefH> stream,
+        AEGP_StreamType type,
+        const AgentStreamValue& input,
+        bool hasTime,
+        float time)
+    {
+        auto validationError = validateAgentStreamValue(type, input);
+        if (!validationError.empty()) return validationError;
+
+        AEGP_StreamValue2 value = {};
+        value.streamH = stream.value;
+        switch (type) {
+        case AEGP_StreamType_OneD:
+            value.val.one_d = input.scalarValue;
+            break;
+        case AEGP_StreamType_TwoD:
+        case AEGP_StreamType_TwoD_SPATIAL:
+            value.val.two_d.x = input.values[0];
+            value.val.two_d.y = input.values[1];
+            break;
+        case AEGP_StreamType_ThreeD:
+        case AEGP_StreamType_ThreeD_SPATIAL:
+            value.val.three_d.x = input.values[0];
+            value.val.three_d.y = input.values[1];
+            value.val.three_d.z = input.values[2];
+            break;
+        case AEGP_StreamType_COLOR:
+            value.val.color.redF = input.values[0];
+            value.val.color.greenF = input.values[1];
+            value.val.color.blueF = input.values[2];
+            value.val.color.alphaF = input.values.size() == 4 ? input.values[3] : 1.0;
+            break;
+        default:
+            return "ERR:unsupported_stream_type:" + std::to_string(type);
+        }
+
+        Result<void> setResult;
+        if (hasTime) {
+            A_Time timeT = {};
+            timeT.value = static_cast<A_long>(time * 1000000.0f);
+            timeT.scale = 1000000;
+            auto keyResult = insertKeyframe(stream, AEGP_LTimeMode_CompTime, timeT);
+            if (keyResult.error != A_Err_NONE || keyResult.value < 0) {
+                return "ERR:insert_keyframe_failed:" + std::to_string(keyResult.error);
+            }
+            setResult = setKeyframeValue(stream, keyResult.value, &value);
+        } else {
+            setResult = setStreamValue(stream, &value);
+        }
+        if (setResult.error != A_Err_NONE) {
+            return "ERR:set_value_failed:" + std::to_string(setResult.error);
+        }
+        return {};
+    }
+
+    std::vector<AgentStreamResult> executeAgentStreamBatchDirect(
+        Result<AEGP_LayerH> layerH,
+        const std::vector<AgentStreamOperation>& operations,
+        bool dryRun,
+        const std::string& undoName,
+        bool failFast)
+    {
+        std::vector<AgentStreamResult> results(operations.size());
+        bool hasWrites = false;
+
+        // Resolve and type-check every path before opening an undo group. This
+        // prevents malformed agent plans from partially editing the project.
+        for (std::size_t i = 0; i < operations.size(); ++i) {
+            const auto& operation = operations[i];
+            hasWrites = hasWrites || operation.action == "set";
+            auto root = getNewStreamRefForLayer(layerH);
+            if (root.error != A_Err_NONE || root.value == NULL) {
+                results[i].error = "ERR:cannot_get_layer_root";
+                if (failFast) return results;
+                continue;
+            }
+
+            std::vector<Result<AEGP_StreamRefH>> streams;
+            Result<AEGP_StreamRefH> current;
+            std::string error;
+            if (resolveStreamPathDirect(root, operation.path, streams, current, error)) {
+                auto typeResult = getStreamType(current);
+                if (typeResult.error != A_Err_NONE) {
+                    error = "ERR:cannot_get_stream_type:" + std::to_string(typeResult.error);
+                } else if (!isAgentValueType(typeResult.value)) {
+                    error = "ERR:unsupported_stream_type:" + std::to_string(typeResult.value);
+                } else {
+                    results[i].streamType = static_cast<int>(typeResult.value);
+                    if (operation.action == "set") {
+                        error = validateAgentStreamValue(typeResult.value, operation.value);
+                    }
+                    results[i].ok = error.empty();
+                }
+            }
+            disposeStreamsDirect(streams);
+            if (!error.empty()) {
+                results[i].ok = false;
+                results[i].error = error;
+                if (failFast) return results;
+            }
+        }
+
+        if (dryRun) return results;
+        if (failFast) {
+            for (const auto& result : results) {
+                if (!result.ok) return results;
+            }
+        }
+
+        bool undoOpen = false;
+        if (hasWrites) {
+            auto undoResult = StartUndoGroup(undoName.empty() ? "AE2Claude Agent Batch" : undoName);
+            undoOpen = undoResult.error == A_Err_NONE;
+            if (!undoOpen) {
+                for (auto& result : results) {
+                    if (result.ok) {
+                        result.ok = false;
+                        result.error = "ERR:cannot_start_undo_group";
+                    }
+                }
+                return results;
+            }
+        }
+
+        for (std::size_t i = 0; i < operations.size(); ++i) {
+            if (!results[i].ok) continue;
+            const auto& operation = operations[i];
+            auto root = getNewStreamRefForLayer(layerH);
+            std::vector<Result<AEGP_StreamRefH>> streams;
+            Result<AEGP_StreamRefH> current;
+            std::string error;
+            if (root.error != A_Err_NONE || root.value == NULL) {
+                error = "ERR:cannot_get_layer_root";
+            } else if (resolveStreamPathDirect(root, operation.path, streams, current, error)) {
+                auto type = static_cast<AEGP_StreamType>(results[i].streamType);
+                if (operation.action == "get") {
+                    results[i].value = readAgentStreamValue(
+                        current, type, operation.time, operation.preExpression, error);
+                } else {
+                    error = writeAgentStreamValue(
+                        current, type, operation.value, operation.hasTime, operation.time);
+                }
+            }
+            disposeStreamsDirect(streams);
+            if (!error.empty()) {
+                results[i].ok = false;
+                results[i].error = error;
+                if (failFast) break;
+            }
+        }
+
+        if (undoOpen) EndUndoGroup();
+        return results;
+    }
+
+    std::vector<AgentStreamInfo> inspectAgentStreamsDirect(
+        Result<AEGP_LayerH> layerH,
+        const std::vector<StreamPathStep>& basePath,
+        int maxDepth,
+        int maxNodes)
+    {
+        std::vector<AgentStreamInfo> output;
+        auto root = getNewStreamRefForLayer(layerH);
+        if (root.error != A_Err_NONE || root.value == NULL) return output;
+
+        std::vector<Result<AEGP_StreamRefH>> baseStreams;
+        Result<AEGP_StreamRefH> base;
+        std::string error;
+        if (!resolveStreamPathDirect(root, basePath, baseStreams, base, error)) {
+            disposeStreamsDirect(baseStreams);
+            return output;
+        }
+
+        struct PendingNode {
+            Result<AEGP_StreamRefH> stream;
+            std::vector<StreamPathStep> path;
+            int depth;
+            int index;
+        };
+        std::deque<PendingNode> pending;
+
+        auto enqueueChildren = [&](Result<AEGP_StreamRefH> parent,
+                                   const std::vector<StreamPathStep>& parentPath,
+                                   int depth) {
+            auto groupResult = getStreamGroupingType(parent);
+            if (groupResult.error != A_Err_NONE ||
+                (groupResult.value != AEGP_StreamGroupingType_NAMED_GROUP &&
+                 groupResult.value != AEGP_StreamGroupingType_INDEXED_GROUP)) return;
+            auto countResult = getNumStreamsInGroup(parent);
+            if (countResult.error != A_Err_NONE) return;
+            for (int index = 0; index < countResult.value; ++index) {
+                auto child = getNewStreamByIndex(parent, index);
+                if (child.error != A_Err_NONE || child.value == NULL) continue;
+                auto matchResult = getStreamMatchName(child);
+                StreamPathStep step;
+                if (groupResult.value == AEGP_StreamGroupingType_INDEXED_GROUP ||
+                    matchResult.error != A_Err_NONE || matchResult.value.empty()) {
+                    step.isIndex = true;
+                    step.index = index;
+                } else {
+                    step.name = matchResult.value;
+                }
+                auto path = parentPath;
+                path.push_back(step);
+                pending.push_back(PendingNode{ child, std::move(path), depth, index });
+            }
+        };
+
+        enqueueChildren(base, basePath, 0);
+        while (!pending.empty() && static_cast<int>(output.size()) < maxNodes) {
+            PendingNode node = std::move(pending.front());
+            pending.pop_front();
+            AgentStreamInfo info;
+            info.depth = node.depth;
+            info.index = node.index;
+            info.path = node.path;
+            auto typeResult = getStreamType(node.stream);
+            auto groupResult = getStreamGroupingType(node.stream);
+            auto flagsResult = getDynamicStreamFlags(node.stream);
+            auto uniqueResult = getUniqueStreamID(node.stream);
+            auto varyResult = canVaryOverTime(node.stream);
+            auto nameResult = getStreamName(node.stream, false);
+            auto matchResult = getStreamMatchName(node.stream);
+            info.streamType = typeResult.error == A_Err_NONE ? static_cast<int>(typeResult.value) : -1;
+            info.groupType = groupResult.error == A_Err_NONE ? static_cast<int>(groupResult.value) : -1;
+            info.flags = flagsResult.error == A_Err_NONE ? static_cast<int>(flagsResult.value) : 0;
+            info.uniqueId = uniqueResult.error == A_Err_NONE ? uniqueResult.value : -1;
+            info.canVary = varyResult.error == A_Err_NONE && varyResult.value != FALSE;
+            info.name = nameResult.error == A_Err_NONE ? nameResult.value : "";
+            info.matchName = matchResult.error == A_Err_NONE ? matchResult.value : "";
+            if (groupResult.error == A_Err_NONE &&
+                (groupResult.value == AEGP_StreamGroupingType_NAMED_GROUP ||
+                 groupResult.value == AEGP_StreamGroupingType_INDEXED_GROUP)) {
+                auto countResult = getNumStreamsInGroup(node.stream);
+                info.numChildren = countResult.error == A_Err_NONE ? countResult.value : 0;
+            }
+            output.push_back(info);
+            if (node.depth + 1 < maxDepth) {
+                enqueueChildren(node.stream, node.path, node.depth + 1);
+            }
+            disposeStream(node.stream);
+        }
+
+        while (!pending.empty()) {
+            disposeStream(pending.front().stream);
+            pending.pop_front();
+        }
+        disposeStreamsDirect(baseStreams);
+        return output;
     }
 }
 
@@ -553,6 +959,149 @@ static const char* streamCollectionTypeName(AEGP_StreamCollectionItemType type)
 
 void bindStreamUtils(py::module_& m)
 {
+    // Agent-facing generic property batch. The whole batch is one idle-hook
+    // message, so AE suite calls never bounce repeatedly between the Python
+    // worker and the main thread.
+    m.def("agent_stream_batch", [](std::shared_ptr<Layer> layer,
+                                     const py::list& pyOperations,
+                                     bool dryRun,
+                                     const std::string& undoName,
+                                     bool failFast) -> py::dict {
+        if (pyOperations.size() > 256) {
+            throw std::invalid_argument("agent stream batch is limited to 256 operations");
+        }
+
+        std::vector<AgentStreamOperation> operations;
+        operations.reserve(pyOperations.size());
+        for (const auto& item : pyOperations) {
+            if (!py::isinstance<py::dict>(item)) {
+                throw std::invalid_argument("each agent stream operation must be a dict");
+            }
+            py::dict source = py::reinterpret_borrow<py::dict>(item);
+            AgentStreamOperation operation;
+            operation.action = py::str(source["action"]);
+            if (operation.action != "get" && operation.action != "set") {
+                throw std::invalid_argument("agent stream action must be get or set");
+            }
+            operation.path = parseStreamPathSteps(source["path"]);
+            if (operation.path.empty() || operation.path.size() > 64) {
+                throw std::invalid_argument("agent stream path must contain 1..64 items");
+            }
+            if (source.contains("time") && !source["time"].is_none()) {
+                operation.time = py::cast<float>(source["time"]);
+                operation.hasTime = true;
+            }
+            if (source.contains("preExpression")) {
+                operation.preExpression = py::cast<bool>(source["preExpression"]);
+            }
+            if (operation.action == "set") {
+                if (!source.contains("value")) {
+                    throw std::invalid_argument("set operation requires value");
+                }
+                py::handle value = source["value"];
+                if (py::isinstance<py::float_>(value) || py::isinstance<py::int_>(value)) {
+                    operation.value.scalar = true;
+                    operation.value.scalarValue = py::cast<double>(value);
+                } else if (py::isinstance<py::sequence>(value) && !py::isinstance<py::str>(value)) {
+                    for (const auto& component : py::reinterpret_borrow<py::sequence>(value)) {
+                        operation.value.values.push_back(py::cast<double>(component));
+                    }
+                } else {
+                    throw std::invalid_argument("set value must be numeric or a numeric sequence");
+                }
+            }
+            operations.push_back(std::move(operation));
+        }
+
+        std::vector<AgentStreamResult> results;
+        {
+            py::gil_scoped_release release;
+            auto message = enqueueSyncTaskQuiet(
+                executeAgentStreamBatchDirect,
+                layer->getLayerHandle(), operations, dryRun, undoName, failFast);
+            message->wait();
+            results = message->getResult();
+        }
+
+        py::list pyResults;
+        bool allOk = true;
+        for (std::size_t i = 0; i < results.size(); ++i) {
+            const auto& result = results[i];
+            py::dict entry;
+            entry["index"] = static_cast<int>(i);
+            entry["ok"] = result.ok;
+            entry["streamType"] = result.streamType;
+            if (!result.error.empty()) entry["error"] = result.error;
+            if (result.ok && operations[i].action == "get" && !dryRun) {
+                if (result.value.scalar) {
+                    entry["value"] = result.value.scalarValue;
+                } else {
+                    entry["value"] = result.value.values;
+                }
+            }
+            allOk = allOk && result.ok;
+            pyResults.append(entry);
+        }
+        py::dict response;
+        response["ok"] = allOk;
+        response["backend"] = "aegp-single-dispatch";
+        response["dryRun"] = dryRun;
+        response["operationCount"] = static_cast<int>(operations.size());
+        response["results"] = pyResults;
+        return response;
+    }, py::arg("layer"), py::arg("operations"), py::arg("dry_run") = false,
+       py::arg("undo_name") = "AE2Claude Agent Batch", py::arg("fail_fast") = true);
+
+    // Breadth-first property discovery with stable matchName/index paths. Like
+    // agent_stream_batch, the complete traversal occupies one main-thread task.
+    m.def("agent_inspect_streams", [](std::shared_ptr<Layer> layer,
+                                       py::iterable path,
+                                       int maxDepth,
+                                       int maxNodes) -> py::dict {
+        auto steps = parseStreamPathSteps(path);
+        maxDepth = (std::max)(1, (std::min)(maxDepth, 16));
+        maxNodes = (std::max)(1, (std::min)(maxNodes, 4096));
+        std::vector<AgentStreamInfo> infos;
+        {
+            py::gil_scoped_release release;
+            auto message = enqueueSyncTaskQuiet(
+                inspectAgentStreamsDirect,
+                layer->getLayerHandle(), steps, maxDepth, maxNodes);
+            message->wait();
+            infos = message->getResult();
+        }
+
+        py::list streams;
+        for (const auto& info : infos) {
+            py::dict entry;
+            entry["depth"] = info.depth;
+            entry["index"] = info.index;
+            entry["streamType"] = info.streamType;
+            entry["groupType"] = info.groupType;
+            entry["flags"] = info.flags;
+            entry["uniqueId"] = info.uniqueId;
+            entry["numChildren"] = info.numChildren;
+            entry["canVary"] = info.canVary;
+            entry["name"] = info.name;
+            entry["matchName"] = info.matchName;
+            py::list pyPath;
+            for (const auto& step : info.path) {
+                if (step.isIndex) pyPath.append(step.index);
+                else pyPath.append(step.name);
+            }
+            entry["path"] = pyPath;
+            streams.append(entry);
+        }
+        py::dict response;
+        response["ok"] = true;
+        response["backend"] = "aegp-single-dispatch";
+        response["count"] = static_cast<int>(infos.size());
+        response["truncated"] = static_cast<int>(infos.size()) >= maxNodes;
+        response["streams"] = streams;
+        return response;
+    }, py::arg("layer"), py::arg("path") = py::list(),
+       py::arg("max_depth") = 3, py::arg("max_nodes") = 512);
+
     // Enable a Layer Style by navigating: layer root → "ADBE Layer Styles" → style matchname
     // Then set AEGP_DynStreamFlag_ACTIVE_EYEBALL
     // Usage: psc.enable_layer_style(layer, "dropShadow/enabled", True)

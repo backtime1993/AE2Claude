@@ -28,7 +28,7 @@ import urllib.request
 import urllib.error
 from typing import Optional, List, Dict, Any, Tuple, Union
 
-__version__ = "4.2.0"
+__version__ = "4.3.0"
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║              EFFECT MATCHNAME REGISTRY                  ║
@@ -368,7 +368,7 @@ TRACK_MATTE_TYPES = {
 
 class AEBridge:
     """
-    AE2Claude Bridge v4.2.0 - Atomic API for After Effects.
+    AE2Claude Bridge v4.3.0 - Agent-native API for After Effects.
 
     Design principles:
     - One method = one AE logical action (no fat methods)
@@ -626,7 +626,7 @@ class AEBridge:
 
     def begin_undo(self, name: str = "Script"):
         """开始 undo 组"""
-        self.run_jsx(f'app.beginUndoGroup("{name}");')
+        self.run_jsx(f"app.beginUndoGroup({json.dumps(str(name), ensure_ascii=False)});")
 
     def end_undo(self):
         """结束 undo 组"""
@@ -3996,6 +3996,80 @@ class AEBridge:
                 pass
 
         return outline
+
+    # ── Agent Property Graph ──────────────────────────────
+
+    def property_batch(
+        self,
+        layer: Union[str, int, Dict[str, Any]],
+        operations: List[Dict[str, Any]],
+        dry_run: bool = False,
+        undo_name: str = "AE2Claude Agent Batch",
+        fail_fast: bool = True,
+        backend: str = "auto",
+    ) -> dict:
+        """Execute generic matchName property operations in one AE dispatch."""
+        from ae2claude_mcp.properties import property_batch
+
+        return property_batch(
+            self, layer, operations, dry_run, undo_name, fail_fast, backend
+        )
+
+    def get_property(
+        self,
+        layer: Union[str, int, Dict[str, Any]],
+        path: List[Union[str, int]],
+        at_time: float = None,
+        pre_expression: bool = False,
+        backend: str = "auto",
+    ) -> Any:
+        """Read an arbitrary property using stable layer and matchName paths."""
+        result = self.property_batch(
+            layer,
+            [{"action": "get", "path": path, "time": at_time,
+              "preExpression": pre_expression}],
+            backend=backend,
+        )
+        entry = result.get("results", [{}])[0]
+        if not entry.get("ok"):
+            raise RuntimeError(entry.get("error", "property read failed"))
+        return entry.get("value")
+
+    def set_property(
+        self,
+        layer: Union[str, int, Dict[str, Any]],
+        path: List[Union[str, int]],
+        value: Any,
+        at_time: float = None,
+        undo_name: str = "AE2Claude Set Property",
+        backend: str = "auto",
+    ) -> dict:
+        """Set an arbitrary property, optionally creating a keyframe."""
+        result = self.property_batch(
+            layer,
+            [{"action": "set", "path": path, "value": value, "time": at_time}],
+            undo_name=undo_name,
+            backend=backend,
+        )
+        entry = result.get("results", [{}])[0]
+        if not entry.get("ok"):
+            raise RuntimeError(entry.get("error", "property write failed"))
+        return result
+
+    def inspect_properties(
+        self,
+        layer: Union[str, int, Dict[str, Any]],
+        path: List[Union[str, int]] = None,
+        max_depth: int = 3,
+        max_nodes: int = 512,
+        backend: str = "auto",
+    ) -> dict:
+        """Discover the live AE property graph with agent-addressable paths."""
+        from ae2claude_mcp.properties import inspect_properties
+
+        return inspect_properties(
+            self, layer, path, max_depth, max_nodes, backend
+        )
 
     @staticmethod
     def _resolve_effect_prop(prop_key: str) -> Optional[str]:

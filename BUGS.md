@@ -7,6 +7,9 @@
 - `comp.addSolid/addNull/addCamera/addLight/addText/addShape`
 - `layer.name/label/is3D/layerID/parent/transferMode/stretch/objectType`
 - `psc.refresh_ui()`
+- `psc.agent_stream_batch()`（整批只进入一次 AE 主线程）
+- `psc.agent_inspect_streams()`（整棵属性树只进入一次 AE 主线程）
+- `AEBridge.property_batch/get_property/set_property/inspect_properties`
 
 ### 不稳定 ⚠️（多步链式调用，可能死锁）
 以下 API 因 `enqueueSyncTaskQuiet` + `wait()` 链式调用机制，在 HTTP 线程中可能死锁。**请走 JSX (ae_bridge.py) 替代**：
@@ -26,5 +29,6 @@ AE 的 AEGP idle hook 从非主线程唤醒不可靠：
 - `PostMessage(WM_NULL)` + `max_sleep=10ms` 不能保证及时响应
 - 链式 `enqueueSyncTaskQuiet → wait()` 在 idle 未及时触发时死锁
 
-### 解决方向（未来）
-将多步 stream 操作封装为单个 task，一次 enqueue 完成所有工作，避免链式 wait。
+### 4.3 已落地的解决方案
+
+新 Agent property API 已将多步 stream 寻址、预检、读写和释放封装成单个 task，一次 enqueue 完成整批工作。上面列出的旧 `psc.*` 链式 API 为了兼容仍保留且继续标记不稳定；Agent 和新 CLI 不应再直接使用它们。

@@ -184,12 +184,115 @@ def run_write_cycles(cycles: int, layers_per_cycle: int) -> dict[str, Any]:
         return result
 
 
+def run_agent_property_pressure(operation_count: int) -> dict[str, Any]:
+    """Compare repeated bridge calls with one bounded native property batch."""
+    operation_count = max(1, min(int(operation_count), 256))
+    with AEBridge(timeout=120) as ae:
+        project_state = json.loads(
+            ae.run_jsx(
+                "JSON.stringify({file:app.project.file?app.project.file.fsName:null,"
+                "items:app.project.numItems})"
+            )
+        )
+        if project_state["file"] is not None or int(project_state["items"]) != 0:
+            return {
+                "ok": False,
+                "skipped": True,
+                "reason": "agent property pressure requires an empty, unsaved AE project",
+                "projectState": project_state,
+            }
+
+        setup = json.loads(
+            ae.run_jsx(
+                "(function(){var c=app.project.items.addComp('__AE2CLAUDE_AGENT_STRESS__',"
+                "640,360,1,3,30);var l=c.layers.addSolid([0.1,0.2,0.3],'agent_probe',"
+                "100,100,1,3);c.openInViewer();return JSON.stringify({compId:c.id,"
+                "layerId:l.id,sourceId:l.source.id,folderId:l.source.parentFolder.id});})()"
+            )
+        )
+        layer = {"id": int(setup["layerId"])}
+        position = ["ADBE Transform Group", "ADBE Position"]
+        opacity = ["ADBE Transform Group", "ADBE Opacity"]
+        result: dict[str, Any] | None = None
+        try:
+            inspection = ae.inspect_properties(
+                layer, ["ADBE Transform Group"], max_depth=2, max_nodes=64,
+                backend="native",
+            )
+            if not inspection.get("ok") or not inspection.get("streams"):
+                raise RuntimeError(f"property inspection failed: {inspection}")
+
+            started = time.perf_counter()
+            individual_values = [
+                ae.get_property(layer, position, backend="native")
+                for _ in range(operation_count)
+            ]
+            individual_ms = (time.perf_counter() - started) * 1000
+
+            operations = [{"action": "get", "path": position}] * operation_count
+            dry_run = ae.property_batch(
+                layer, operations, dry_run=True, backend="native"
+            )
+            started = time.perf_counter()
+            batched = ae.property_batch(layer, operations, backend="native")
+            batch_ms = (time.perf_counter() - started) * 1000
+
+            write_ops = [
+                {"action": "set", "path": opacity, "value": 10 + (index % 81)}
+                for index in range(operation_count)
+            ]
+            write_result = ae.property_batch(
+                layer,
+                write_ops,
+                undo_name="AE2Claude agent property pressure",
+                backend="native",
+            )
+            final_opacity = ae.get_property(layer, opacity, backend="native")
+            expected_opacity = 10 + ((operation_count - 1) % 81)
+            ok = (
+                bool(dry_run.get("ok"))
+                and bool(batched.get("ok"))
+                and bool(write_result.get("ok"))
+                and len(individual_values) == operation_count
+                and len(batched.get("results", [])) == operation_count
+                and abs(float(final_opacity) - expected_opacity) < 0.001
+            )
+            result = {
+                "ok": ok,
+                "skipped": False,
+                "operations": operation_count,
+                "backend": batched.get("backend"),
+                "inspectionNodes": inspection.get("count"),
+                "dryRun": dry_run.get("ok"),
+                "individualMs": round(individual_ms, 3),
+                "batchMs": round(batch_ms, 3),
+                "speedup": round(individual_ms / batch_ms, 2) if batch_ms else None,
+                "finalOpacity": final_opacity,
+                "expectedOpacity": expected_opacity,
+            }
+            return result
+        finally:
+            cleanup_remaining = int(
+                ae.run_jsx(
+                    "(function(){var ids=[" + str(int(setup["compId"])) + ","
+                    + str(int(setup["sourceId"])) + "," + str(int(setup["folderId"]))
+                    + "];for(var i=0;i<ids.length;i++){try{var x=app.project.itemByID(ids[i]);"
+                    "if(x)x.remove();}catch(e){}}return app.project.numItems;})()"
+                )
+            )
+            if result is not None:
+                result["remainingItems"] = cleanup_remaining
+                result["cleanupOk"] = cleanup_remaining == 0
+                result["ok"] = bool(result["ok"]) and cleanup_remaining == 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--requests", type=int, default=200)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--write-cycles", type=int, default=12)
     parser.add_argument("--layers-per-cycle", type=int, default=30)
+    parser.add_argument("--agent-operations", type=int, default=200)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
@@ -197,6 +300,8 @@ def main() -> int:
         parser.error("requests and workers must be positive")
     if args.write_cycles < 0 or args.layers_per_cycle < 1:
         parser.error("invalid write pressure bounds")
+    if not 1 <= args.agent_operations <= 256:
+        parser.error("agent-operations must be between 1 and 256")
 
     output = args.output or (
         ROOT / "artifacts" / "stress" / f"stress-{datetime.now():%Y%m%d-%H%M%S}.json"
@@ -240,25 +345,35 @@ def main() -> int:
     suites.append(summarize("mcp-ae-ping", mcp_timings, mcp_errors))
 
     write_result = run_write_cycles(args.write_cycles, args.layers_per_cycle)
+    agent_result = run_agent_property_pressure(args.agent_operations)
     after = process_snapshot()
     failures = sum(int(suite["failed"]) for suite in suites)
     write_failed = not write_result.get("ok", False)
+    agent_failed = not agent_result.get("ok", False)
     report = {
-        "ok": failures == 0 and not write_failed,
+        "ok": failures == 0 and not write_failed and not agent_failed,
         "timestamp": datetime.now().astimezone().isoformat(),
         "bounds": {
             "requestsPerReadSuite": args.requests,
             "workers": args.workers,
             "writeCycles": args.write_cycles,
             "layersPerCycle": args.layers_per_cycle,
+            "agentOperations": args.agent_operations,
         },
         "processBefore": before,
         "processAfter": after,
         "suites": suites,
         "writePressure": write_result,
+        "agentPropertyPressure": agent_result,
     }
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"ok": report["ok"], "report": str(output), "suites": suites, "writePressure": write_result}, ensure_ascii=False, indent=2))
+    print(json.dumps({
+        "ok": report["ok"],
+        "report": str(output),
+        "suites": suites,
+        "writePressure": write_result,
+        "agentPropertyPressure": agent_result,
+    }, ensure_ascii=False, indent=2))
     return 0 if report["ok"] else 1
 
 

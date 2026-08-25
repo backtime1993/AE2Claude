@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ae2claude"
-version = "4.2.0"
+version = "4.3.0"
 description = "Native After Effects bridge with a safe MCP interface for AI agents"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -16,6 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
+ae2claude = "ae2claude_mcp.cli:main"
 ae2claude-mcp = "ae2claude_mcp.server:main"
 
 [tool.setuptools]

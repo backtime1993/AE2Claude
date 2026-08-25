@@ -11,6 +11,8 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 
 from . import __version__
 from .catalog import prepare_script, resolve_script, search_scripts
+from .agent_runtime import EVENTS, JOBS, execute_batch
+from .capabilities import capabilities
 from .checkpoints import create_checkpoint, list_checkpoints, revert_checkpoint
 from .previews import render_preview
 from .runtime import (
@@ -272,6 +274,148 @@ def ae_methods() -> dict[str, Any]:
             {"name": name, "risk": classify_bridge_method(name)} for name in methods
         ],
     }
+
+
+@mcp.tool()
+def ae_capabilities(query: str = "", category: str = "") -> dict[str, Any]:
+    """Discover self-describing Agent operations, schemas, risks, and limits."""
+    return capabilities(query=query, category=category)
+
+
+@mcp.tool()
+def ae_inspect_properties(
+    layer: Any,
+    path: list[Any] | None = None,
+    max_depth: int = 3,
+    max_nodes: int = 512,
+    backend: str = "auto",
+) -> dict[str, Any]:
+    """Inspect a layer's live AE property graph using stable matchName/index paths."""
+    require_enabled()
+    with bridge() as ae:
+        return ae.inspect_properties(
+            layer, path=path, max_depth=max_depth, max_nodes=max_nodes, backend=backend
+        )
+
+
+@mcp.tool()
+def ae_get_property(
+    layer: Any,
+    path: list[Any],
+    time_seconds: float | None = None,
+    pre_expression: bool = False,
+    backend: str = "auto",
+) -> dict[str, Any]:
+    """Read any scriptable AE property from a stable layer/path address."""
+    require_enabled()
+    with bridge() as ae:
+        value = ae.get_property(
+            layer, path, at_time=time_seconds,
+            pre_expression=pre_expression, backend=backend
+        )
+    return {"ok": True, "layer": layer, "path": path, "value": value}
+
+
+@mcp.tool()
+def ae_set_property(
+    layer: Any,
+    path: list[Any],
+    value: Any,
+    time_seconds: float | None = None,
+    undo_name: str = "AE2Claude Set Property",
+    backend: str = "auto",
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Set any scriptable AE property, optionally creating a keyframe."""
+    require_enabled()
+    authorize("write", confirm=confirm)
+    with bridge() as ae:
+        return ae.set_property(
+            layer, path, value, at_time=time_seconds,
+            undo_name=undo_name, backend=backend
+        )
+
+
+@mcp.tool()
+def ae_property_batch(
+    layer: Any,
+    operations: list[dict[str, Any]],
+    dry_run: bool = False,
+    undo_name: str = "AE2Claude Property Batch",
+    fail_fast: bool = True,
+    backend: str = "auto",
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Run up to 256 property reads/writes in one AE main-thread dispatch."""
+    require_enabled()
+    if any(str(item.get("action", "")).lower() == "set" for item in operations):
+        authorize("write", confirm=confirm)
+    with bridge() as ae:
+        return ae.property_batch(
+            layer, operations, dry_run=dry_run, undo_name=undo_name,
+            fail_fast=fail_fast, backend=backend
+        )
+
+
+@mcp.tool()
+def ae_batch(
+    operations: list[dict[str, Any]],
+    dry_run: bool = False,
+    fail_fast: bool = True,
+    confirm: bool = False,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Execute method calls with $0.field result references and per-method undo."""
+    return execute_batch(
+        operations,
+        dry_run=dry_run,
+        fail_fast=fail_fast,
+        confirm=confirm,
+        request_id=request_id,
+    )
+
+
+@mcp.tool()
+def ae_submit(
+    operations: list[dict[str, Any]],
+    dry_run: bool = False,
+    fail_fast: bool = True,
+    ttl_ms: int = 900_000,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Submit a durable-in-session AE task and return immediately for polling."""
+    require_enabled()
+    return JOBS.submit(
+        operations,
+        dry_run=dry_run,
+        fail_fast=fail_fast,
+        ttl_ms=ttl_ms,
+        confirm=confirm,
+    )
+
+
+@mcp.tool()
+def ae_task(task_id: str) -> dict[str, Any]:
+    """Poll one background AE task and retrieve its terminal result."""
+    return JOBS.get(task_id)
+
+
+@mcp.tool()
+def ae_tasks(limit: int = 50) -> dict[str, Any]:
+    """List recent background AE tasks in the current MCP session."""
+    return JOBS.list(limit=limit)
+
+
+@mcp.tool()
+def ae_cancel(task_id: str) -> dict[str, Any]:
+    """Cooperatively cancel a queued task or stop it between AE operations."""
+    return JOBS.cancel(task_id)
+
+
+@mcp.tool()
+def ae_events(after: int = 0, limit: int = 100, wait_ms: int = 0) -> dict[str, Any]:
+    """Read cursor-based Agent events, optionally long-polling for 30 seconds."""
+    return EVENTS.read(after=after, limit=limit, wait_ms=wait_ms)
 
 
 @mcp.tool()
