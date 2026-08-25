@@ -24,9 +24,10 @@ We need a reliable in-process click endpoint that does not depend on third-party
 
 ## Install / update
 
-Panel lives at `F:/claude/longterm/AE2ClaudePinClicker/`. A symlink in
-`%APPDATA%/Roaming/Adobe/CEP/extensions/AE2ClaudePinClicker` points to this tree
-so code edits are picked up on the next AE launch.
+The canonical panel source lives at
+`F:/claude/longterm/AE2Claude/extensions/pin-clicker/`. A symlink in
+`%APPDATA%/Roaming/Adobe/CEP/extensions/AE2ClaudePinClicker` points directly to
+this tree, so code edits are picked up on the next AE launch.
 
 `PlayerDebugMode=1` must be set under `HKCU\Software\Adobe\CSXS.9..12` (already done on this host).
 

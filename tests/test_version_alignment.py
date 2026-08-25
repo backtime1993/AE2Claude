@@ -32,9 +32,11 @@ class VersionAlignmentTests(unittest.TestCase):
 
     def test_deployer_uses_release_build_not_stale_root_binary(self) -> None:
         deployer = (ROOT / "deploy.bat").read_text(encoding="utf-8")
-        self.assertIn(r"build\Release\AE2Claude.aex", deployer)
+        sync_script = (ROOT / "tools" / "sync-installation.ps1").read_text(encoding="utf-8")
+        self.assertIn(r"tools\sync-installation.ps1", deployer)
+        self.assertIn(r"build\Release\AE2Claude.aex", sync_script)
+        self.assertIn("Get-FileHash", sync_script)
         self.assertNotIn('copy /Y "%~dp0AE2Claude.aex"', deployer)
-        self.assertIn("fc /B", deployer)
 
     def test_read_only_cli_calls_do_not_ensure_a_comp(self) -> None:
         cli = (ROOT / "ae2claude").read_text(encoding="utf-8")

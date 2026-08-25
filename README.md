@@ -18,10 +18,16 @@
 
 ### 安装
 
-1. 关闭 After Effects
-2. 先构建 `build\Release\AE2Claude.aex`，再运行 `deploy.bat`（会自动找到你的 AE 安装位置）
+1. 关闭需要更新的 After Effects
+2. 先构建 `build\Release\AE2Claude.aex`，再运行 `deploy.bat`（默认同步当前或 Beta；也可传入完整 AE 产品名）
 3. 确保 AE 目录里有 `python312.dll`（从 Python 3.12 安装目录复制）
 4. 启动 After Effects
+
+只核验所有受支持安装、不写入：
+
+```powershell
+pwsh -File tools\sync-installation.ps1 -Mode Verify -AllSupported
+```
 
 ### MCP 接入（推荐）
 
@@ -191,6 +197,8 @@ with AEBridge() as ae:
 | `scripts/` | 48 个已登记 JSX 脚本工具 |
 | `presets/` | 自定义 AE 预设 |
 | `deploy.bat` | 一键安装脚本 |
+| `extensions/pin-clicker/` | 与主工程同版本管理的 Puppet Pin 精确点击端点 |
+| `tools/` | 初始化、安装同步、自动拉齐、定向清理和压力测试 |
 | `test_v3.py` | 自动化测试（73 项） |
 
 ## 从源码构建（可选）
