@@ -46,6 +46,19 @@ class ProjectGovernanceTests(unittest.TestCase):
         ):
             self.assertTrue((ROOT / relative).is_file(), relative)
 
+    def test_native_http_server_has_burst_backlog_without_parallel_ae_calls(self) -> None:
+        server = (ROOT / "ae2claude_server.py").read_text(encoding="utf-8")
+        self.assertIn("class _AEHTTPServer(HTTPServer)", server)
+        self.assertIn("request_queue_size = 64", server)
+        self.assertNotIn("ThreadingHTTPServer", server)
+
+    def test_main_thread_wait_supports_bounded_heavy_operations(self) -> None:
+        queue = (
+            ROOT / "src" / "PyShiftAE" / "CoreSDK" / "MessageQueue.h"
+        ).read_text(encoding="utf-8")
+        self.assertIn("kWaitTimeout = std::chrono::seconds(120)", queue)
+        self.assertNotIn("timeout (5s)", queue)
+
 
 if __name__ == "__main__":
     unittest.main()

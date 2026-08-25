@@ -203,8 +203,15 @@ class _AEHandler(BaseHTTPRequestHandler):
         pass
 
 
+class _AEHTTPServer(HTTPServer):
+    """Serialize AE calls while allowing a bounded concurrent connection burst."""
+
+    allow_reuse_address = True
+    request_queue_size = 64
+
+
 try:
-    _srv = HTTPServer(("127.0.0.1", _AE_PORT), _AEHandler)
+    _srv = _AEHTTPServer(("127.0.0.1", _AE_PORT), _AEHandler)
 except Exception:
     _TRANSPORT_ERRORS["http"] = traceback.format_exc()
 else:

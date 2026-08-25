@@ -54,6 +54,17 @@ def t(name, fn):
 
 print('\n[Setup] Creating TestV3 composition...')
 
+preflight = json.loads(jsx(
+    'JSON.stringify({'
+    'file:app.project.file?app.project.file.fsName:null,'
+    'items:app.project.numItems})'
+))
+if preflight['file'] is not None or int(preflight['items']) != 0:
+    raise RuntimeError(
+        'TestV3 requires an empty, unsaved AE project; '
+        f'got file={preflight["file"]!r}, items={preflight["items"]}'
+    )
+
 # Delete any leftover TestV3 comp from a previous run
 jsx(
     '(function(){'
@@ -496,16 +507,18 @@ t('set_time_remap_keyframes', _set_time_remap_kfs)
 # CLEANUP: Remove test compositions
 # ══════════════════════════════════════════════════════════
 
-print('\n[Cleanup] Removing test compositions...')
+print('\n[Cleanup] Removing all items created by this test...')
 
-jsx(
+cleanup = json.loads(jsx(
     '(function(){'
-    'var names={"TestV3":1,"SubComp":1,"PreSolid":1};'
     'for(var i=app.project.numItems;i>=1;i--){'
     'var it=app.project.item(i);'
-    'if(it instanceof CompItem&&names[it.name])it.remove();}'
+    'it.remove();}'
+    'return JSON.stringify({remaining:app.project.numItems});'
     '})()'
-)
+))
+if int(cleanup['remaining']) != 0:
+    raise RuntimeError(f'TestV3 cleanup left {cleanup["remaining"]} project items')
 
 print('[Cleanup] Done.')
 

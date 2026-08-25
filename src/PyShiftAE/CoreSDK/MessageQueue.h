@@ -35,7 +35,10 @@ public:
 };
 
 namespace MessageQueueConfig {
-    constexpr auto kWaitTimeout = std::chrono::seconds(5);
+    // ExtendScript mutations can legitimately occupy AE's main thread for
+    // longer than the old five-second guard. Keep the wait bounded, but give
+    // heavy project operations enough time to finish and clean up safely.
+    constexpr auto kWaitTimeout = std::chrono::seconds(120);
     constexpr std::size_t kMaxPendingMessages = 128;
 }
 
@@ -83,7 +86,7 @@ public:
         auto status = resultFuture.wait_for(MessageQueueConfig::kWaitTimeout);
         if (status == std::future_status::timeout) {
             cancel();
-            throw std::runtime_error("AE IdleHook timeout (5s) - main thread not responding");
+            throw std::runtime_error("AE IdleHook timeout (120s) - main thread not responding");
         }
     }
 

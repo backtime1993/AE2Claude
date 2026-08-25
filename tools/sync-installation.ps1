@@ -162,7 +162,8 @@ foreach ($targetInfo in $targets) {
                     Copy-Item -LiteralPath $difference.destination -Destination $backupFile -Force
                 }
             }
-            foreach ($entry in $map) {
+            $changedLabels = @($differences | ForEach-Object { $_.label })
+            foreach ($entry in $map | Where-Object { $changedLabels -contains $_.label }) {
                 New-Item -ItemType Directory -Path (Split-Path -Parent $entry.destination) -Force | Out-Null
                 Copy-Item -LiteralPath $entry.source -Destination $entry.destination -Force
             }
