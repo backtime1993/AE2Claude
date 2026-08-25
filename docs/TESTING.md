@@ -21,10 +21,10 @@ AE 正在运行且插件已加载时：
 $env:AE2CLAUDE_LIVE_TEST='1'
 uv run python -m unittest discover -s tests -v
 uv run python test_v3.py
-uv run python tools\stress_test.py --requests 200 --workers 8 --write-cycles 12 --layers-per-cycle 30
+uv run python tools\stress_test.py --requests 200 --workers 8 --write-cycles 12 --layers-per-cycle 30 --agent-operations 200
 ```
 
-压力测试包含 8089、8891、并发 JSX 只读、MCP 门面与受控写入。写入阶段只有在 AE 是空白且未保存的工程时才执行；每轮创建的合成和图层会在返回前删除。完整 JSON 报告写入 `artifacts\stress`。
+压力测试包含 8089、8891、并发 JSX 只读、MCP 门面、受控写入，以及 Agent 属性树的单次 AEGP 批处理与逐条请求对比。写入阶段只有在 AE 是空白且未保存的工程时才执行；每轮创建的合成和图层会在返回前删除。完整 JSON 报告写入 `artifacts\stress`。
 
 只有以下条件全部满足才算通过：
 

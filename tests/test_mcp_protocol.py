@@ -31,6 +31,13 @@ class MCPProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "ae_preview_frame",
                 "ae_checkpoint",
                 "ae_revert",
+                "ae_capabilities",
+                "ae_inspect_properties",
+                "ae_property_batch",
+                "ae_batch",
+                "ae_submit",
+                "ae_task",
+                "ae_events",
             }.issubset(names)
         )
 
@@ -49,7 +56,7 @@ class MCPProtocolTests(unittest.IsolatedAsyncioTestCase):
                 response = await session.call_tool("ae_ping")
         payload = response.structuredContent
         self.assertIsNotNone(payload)
-        self.assertEqual(payload["serverVersion"], "4.2.0")
+        self.assertEqual(payload["serverVersion"], "4.3.0")
         self.assertTrue(payload["bridge"]["connected"], payload["bridge"])
         self.assertTrue(str(payload["bridge"]["aeVersion"]).startswith("27."))
 
