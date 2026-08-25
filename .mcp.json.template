@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "ae2claude": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "<ABSOLUTE_PATH_TO_AE2CLAUDE>",
+        "run",
+        "ae2claude-mcp"
+      ],
+      "env": {
+        "AE2CLAUDE_PORT": "8089",
+        "AE2CLAUDE_APPROVAL_MODE": "auto"
+      }
+    }
+  }
+}

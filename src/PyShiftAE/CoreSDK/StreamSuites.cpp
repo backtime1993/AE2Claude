@@ -125,6 +125,20 @@ Result<AEGP_StreamGroupingType> getStreamGroupingType(Result<AEGP_StreamRefH> st
     return result;
 }
 
+Result<int> getStreamDepth(Result<AEGP_StreamRefH> streamH)
+{
+    AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+    A_Err err = A_Err_NONE;
+    A_long depth = -1;
+
+    ERR(suites.DynamicStreamSuite4()->AEGP_GetStreamDepth(streamH.value, &depth));
+
+    Result<int> result;
+    result.value = static_cast<int>(depth);
+    result.error = err;
+    return result;
+}
+
 Result<std::string> getStreamName(Result<AEGP_StreamRefH> streamH, bool forceEnglish)
 {
     AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
@@ -171,6 +185,40 @@ Result<std::string> getStreamMatchName(Result<AEGP_StreamRefH> streamH)
 
     Result<std::string> result;
     result.value = std::string(matchName);
+    result.error = err;
+    return result;
+}
+
+Result<int> getUniqueStreamID(Result<AEGP_StreamRefH> streamH)
+{
+    AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+    A_Err err = A_Err_NONE;
+    int32_t uniqueID = -1;
+
+    ERR(suites.StreamSuite6()->AEGP_GetUniqueStreamID(streamH.value, &uniqueID));
+
+    Result<int> result;
+    result.value = static_cast<int>(uniqueID);
+    result.error = err;
+    return result;
+}
+
+Result<AEGP_StreamRefH> getNewParentStreamRef(Result<AEGP_StreamRefH> streamH)
+{
+    AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
+    AEGP_PluginID* pluginIDPtr = SuiteManager::GetInstance().GetPluginID();
+    A_Err err = A_Err_NONE;
+    AEGP_StreamRefH parentH = NULL;
+
+    if (pluginIDPtr == nullptr || streamH.value == NULL) {
+        return Result<AEGP_StreamRefH>(parentH, A_Err_STRUCT);
+    }
+
+    ERR(suites.DynamicStreamSuite4()->AEGP_GetNewParentStreamRef(
+        *pluginIDPtr, streamH.value, &parentH));
+
+    Result<AEGP_StreamRefH> result;
+    result.value = parentH;
     result.error = err;
     return result;
 }

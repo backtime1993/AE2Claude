@@ -1,4 +1,6 @@
 #include "PyCore.h"
+#include "../CoreSDK/CompSuites.h"
+#include "../CoreSDK/LayerSuites.h"
 #include "../CoreSDK/StreamSuites.h"
 #include "../CoreSDK/KeyframeSuites.h"
 #include "../CoreSDK/EffectSuites.h"
@@ -11,6 +13,74 @@
 // Macro: first call in a chain uses enqueueSyncTask (wakes idle), rest use quiet version
 #define ENQUEUE_FIRST enqueueSyncTask
 #define ENQUEUE_CHAIN enqueueSyncTaskQuiet
+
+Result<std::vector<AEGP_CollectionItemV2>> GetCompSelectionItems(Result<AEGP_CompH> compH);
+Result<int> getStreamDepth(Result<AEGP_StreamRefH> streamH);
+Result<int> getUniqueStreamID(Result<AEGP_StreamRefH> streamH);
+Result<AEGP_StreamRefH> getNewParentStreamRef(Result<AEGP_StreamRefH> streamH);
+
+namespace {
+    struct StreamPathStep {
+        bool isIndex = false;
+        int index = -1;
+        std::string name;
+    };
+
+    std::string streamPathStepLabel(const StreamPathStep& step)
+    {
+        return step.isIndex ? ("#" + std::to_string(step.index)) : step.name;
+    }
+
+    std::vector<StreamPathStep> parseStreamPathSteps(const py::iterable& path)
+    {
+        std::vector<StreamPathStep> steps;
+        for (auto item : path) {
+            StreamPathStep step;
+            if (py::isinstance<py::int_>(item)) {
+                step.isIndex = true;
+                step.index = item.cast<int>();
+            } else if (py::isinstance<py::str>(item)) {
+                step.isIndex = false;
+                step.name = item.cast<std::string>();
+            } else {
+                throw std::invalid_argument("stream path items must be int or str");
+            }
+            steps.push_back(step);
+        }
+        return steps;
+    }
+
+    bool resolveStreamPath(
+        Result<AEGP_StreamRefH> root,
+        const std::vector<StreamPathStep>& steps,
+        std::vector<Result<AEGP_StreamRefH>>& toDispose,
+        Result<AEGP_StreamRefH>& current,
+        std::string& error)
+    {
+        current = root;
+        toDispose.clear();
+        toDispose.push_back(current);
+
+        for (const auto& step : steps) {
+            if (step.isIndex) {
+                auto& msg = enqueueSyncTaskQuiet(getNewStreamByIndex, current, step.index);
+                msg->wait();
+                current = msg->getResult();
+            } else {
+                auto& msg = enqueueSyncTaskQuiet(getNewStreamByMatchname, current, step.name);
+                msg->wait();
+                current = msg->getResult();
+            }
+
+            if (current.error != A_Err_NONE || current.value == NULL) {
+                error = "ERR:path_not_found:" + streamPathStepLabel(step);
+                return false;
+            }
+            toDispose.push_back(current);
+        }
+        return true;
+    }
+}
 
 /*
 * PyCore.cpp
@@ -445,6 +515,42 @@ void bindApp(py::module_& m)
 
 }
 
+static const char* selectionTypeName(AEGP_CollectionItemType type)
+{
+    switch (type) {
+    case AEGP_CollectionItemType_LAYER:
+        return "layer";
+    case AEGP_CollectionItemType_MASK:
+        return "mask";
+    case AEGP_CollectionItemType_EFFECT:
+        return "effect";
+    case AEGP_CollectionItemType_STREAM:
+        return "stream";
+    case AEGP_CollectionItemType_KEYFRAME:
+        return "keyframe";
+    case AEGP_CollectionItemType_MASK_VERTEX:
+        return "mask_vertex";
+    case AEGP_CollectionItemType_STREAMREF:
+        return "streamref";
+    default:
+        return "none";
+    }
+}
+
+static const char* streamCollectionTypeName(AEGP_StreamCollectionItemType type)
+{
+    switch (type) {
+    case AEGP_StreamCollectionItemType_LAYER:
+        return "layer";
+    case AEGP_StreamCollectionItemType_MASK:
+        return "mask";
+    case AEGP_StreamCollectionItemType_EFFECT:
+        return "effect";
+    default:
+        return "none";
+    }
+}
+
 void bindStreamUtils(py::module_& m)
 {
     // Enable a Layer Style by navigating: layer root → "ADBE Layer Styles" → style matchname
@@ -543,6 +649,83 @@ void bindStreamUtils(py::module_& m)
         return "ok";
     }, py::arg("layer"), py::arg("path"), py::arg("flag"), py::arg("set"),
        py::call_guard<py::gil_scoped_release>());
+
+    // Generic: get dynamic stream flags via mixed path (matchname + child index)
+    m.def("get_stream_flags_at_path", [](std::shared_ptr<Layer> layer,
+                                          py::iterable path) -> py::object {
+        auto steps = parseStreamPathSteps(path);
+        std::string error;
+        int flags = 0;
+
+        {
+            py::gil_scoped_release release;
+
+            auto layerH = layer->getLayerHandle();
+            auto& msg1 = enqueueSyncTaskQuiet(getNewStreamRefForLayer, layerH);
+            msg1->wait();
+            auto root = msg1->getResult();
+            if (root.error != A_Err_NONE || root.value == NULL) {
+                error = "ERR:cannot_get_layer_root";
+            } else {
+                std::vector<Result<AEGP_StreamRefH>> toDispose;
+                Result<AEGP_StreamRefH> current;
+                if (resolveStreamPath(root, steps, toDispose, current, error)) {
+                    auto& msgFlags = enqueueSyncTaskQuiet(getDynamicStreamFlags, current);
+                    msgFlags->wait();
+                    auto flagResult = msgFlags->getResult();
+                    if (flagResult.error != A_Err_NONE) {
+                        error = "ERR:get_flags_failed:" + std::to_string(flagResult.error);
+                    } else {
+                        flags = static_cast<int>(flagResult.value);
+                    }
+                }
+
+                for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it)
+                    enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+            }
+        }
+
+        if (!error.empty()) {
+            return py::cast(error);
+        }
+        return py::cast(flags);
+    }, py::arg("layer"), py::arg("path"));
+
+    // Generic: set any dynamic stream flag via mixed path (matchname + child index)
+    m.def("set_stream_flag_at_path", [](std::shared_ptr<Layer> layer,
+                                         py::iterable path,
+                                         int flag, bool set) -> std::string {
+        auto steps = parseStreamPathSteps(path);
+
+        auto layerH = layer->getLayerHandle();
+
+        auto& msg1 = enqueueSyncTaskQuiet(getNewStreamRefForLayer, layerH);
+        msg1->wait();
+        auto root = msg1->getResult();
+        if (root.error != A_Err_NONE || root.value == NULL)
+            return "ERR:cannot_get_layer_root";
+
+        std::vector<Result<AEGP_StreamRefH>> toDispose;
+        Result<AEGP_StreamRefH> current;
+        std::string error;
+        if (!resolveStreamPath(root, steps, toDispose, current, error)) {
+            for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it)
+                enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+            return error;
+        }
+
+        auto& msgFlag = enqueueSyncTaskQuiet(setDynamicStreamFlag, current,
+            (AEGP_DynStreamFlags)flag, (A_Boolean)TRUE, (A_Boolean)(set ? TRUE : FALSE));
+        msgFlag->wait();
+        auto result = msgFlag->getResult();
+
+        for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it)
+            enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+
+        if (result.error != A_Err_NONE)
+            return "ERR:set_flag_failed:" + std::to_string(result.error);
+        return "ok";
+    }, py::arg("layer"), py::arg("path"), py::arg("flag"), py::arg("set"));
 
     // ── Force UI Refresh ──
     // Force AE to process pending changes (via PostMessage to wake event loop)
@@ -659,6 +842,307 @@ void bindStreamUtils(py::module_& m)
         }
         return py::cast(values);
     }, py::arg("layer"), py::arg("path"), py::arg("time"));
+
+    // ── Get Stream Value by mixed path (matchname + child index) ──
+    // Usage: psc.get_stream_value_at_path(layer, ["ADBE ... PosPins", 2, "ADBE FreePin3 PosPin Vtx Index"], time)
+    m.def("get_stream_value_at_path", [](std::shared_ptr<Layer> layer,
+                                          py::iterable path,
+                                          float time) -> py::object {
+        enum class ValueKind {
+            Error,
+            Scalar,
+            Vector
+        };
+
+        auto steps = parseStreamPathSteps(path);
+
+        ValueKind kind = ValueKind::Error;
+        std::string error;
+        double scalar = 0.0;
+        std::vector<double> values;
+
+        {
+            py::gil_scoped_release release;
+
+            auto layerH = layer->getLayerHandle();
+
+            auto& msg1 = enqueueSyncTaskQuiet(getNewStreamRefForLayer, layerH);
+            msg1->wait();
+            auto root = msg1->getResult();
+            if (root.error != A_Err_NONE || root.value == NULL) {
+                error = "ERR:cannot_get_layer_root";
+            } else {
+                std::vector<Result<AEGP_StreamRefH>> toDispose;
+                Result<AEGP_StreamRefH> current;
+                if (resolveStreamPath(root, steps, toDispose, current, error)) {
+                    A_Time timeT;
+                    timeT.value = static_cast<A_long>(time * 1000000);
+                    timeT.scale = 1000000;
+
+                    auto& msgVal = enqueueSyncTaskQuiet(getNewStreamValue, current,
+                        AEGP_LTimeMode_CompTime, timeT, (A_Boolean)FALSE);
+                    msgVal->wait();
+                    auto valResult = msgVal->getResult();
+
+                    auto& msgType = enqueueSyncTaskQuiet(getStreamType, current);
+                    msgType->wait();
+                    auto typeResult = msgType->getResult();
+
+                    if (valResult.error == A_Err_NONE) {
+                        AEGP_StreamType sType = typeResult.value;
+                        AEGP_StreamVal2& v = valResult.value.val;
+                        switch (sType) {
+                            case AEGP_StreamType_OneD:
+                                kind = ValueKind::Scalar;
+                                scalar = v.one_d;
+                                break;
+                            case AEGP_StreamType_TwoD:
+                            case AEGP_StreamType_TwoD_SPATIAL:
+                                kind = ValueKind::Vector;
+                                values = { v.two_d.x, v.two_d.y };
+                                break;
+                            case AEGP_StreamType_ThreeD:
+                            case AEGP_StreamType_ThreeD_SPATIAL:
+                                kind = ValueKind::Vector;
+                                values = { v.three_d.x, v.three_d.y, v.three_d.z };
+                                break;
+                            case AEGP_StreamType_COLOR:
+                                kind = ValueKind::Vector;
+                                values = { v.color.redF, v.color.greenF, v.color.blueF, v.color.alphaF };
+                                break;
+                            default:
+                                error = "unsupported_type:" + std::to_string(sType);
+                                break;
+                        }
+                        enqueueSyncTaskQuiet(disposeStreamValue, &valResult.value)->wait();
+                    } else {
+                        error = "ERR:get_value_failed:" + std::to_string(valResult.error);
+                    }
+                }
+
+                for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it) {
+                    enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+                }
+            }
+        }
+
+        if (!error.empty()) {
+            return py::cast(error);
+        }
+        if (kind == ValueKind::Scalar) {
+            return py::cast(scalar);
+        }
+        return py::cast(values);
+    }, py::arg("layer"), py::arg("path"), py::arg("time"));
+
+    // ── Set Stream Value by matchname path (native, no JSX) ──
+    // Usage: psc.set_stream_value(layer, ["ADBE Transform Group", "ADBE Opacity"], 42)
+    m.def("set_stream_value", [](std::shared_ptr<Layer> layer,
+                                  const std::vector<std::string>& path,
+                                  py::object value) -> std::string {
+        auto layerH = layer->getLayerHandle();
+
+        auto& msg1 = enqueueSyncTaskQuiet(getNewStreamRefForLayer, layerH);
+        msg1->wait();
+        auto current = msg1->getResult();
+        if (current.error != A_Err_NONE || current.value == NULL)
+            return "ERR:cannot_get_layer_root";
+
+        std::vector<Result<AEGP_StreamRefH>> toDispose;
+        toDispose.push_back(current);
+
+        for (const auto& mn : path) {
+            auto& msg = enqueueSyncTaskQuiet(getNewStreamByMatchname, current, mn);
+            msg->wait();
+            current = msg->getResult();
+            if (current.error != A_Err_NONE || current.value == NULL) {
+                for (auto& s : toDispose) enqueueSyncTaskQuiet(disposeStream, s)->wait();
+                return "ERR:path_not_found:" + mn;
+            }
+            toDispose.push_back(current);
+        }
+
+        auto& msgType = enqueueSyncTaskQuiet(getStreamType, current);
+        msgType->wait();
+        auto typeResult = msgType->getResult();
+        if (typeResult.error != A_Err_NONE) {
+            for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it)
+                enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+            return "ERR:cannot_get_stream_type:" + std::to_string(typeResult.error);
+        }
+
+        AEGP_StreamValue2 streamValue = {};
+        streamValue.streamH = current.value;
+        std::string parseError;
+
+        try {
+            switch (typeResult.value) {
+                case AEGP_StreamType_OneD:
+                    streamValue.val.one_d = value.cast<double>();
+                    break;
+                case AEGP_StreamType_TwoD:
+                case AEGP_StreamType_TwoD_SPATIAL: {
+                    auto seq = value.cast<py::sequence>();
+                    if (py::len(seq) != 2) {
+                        parseError = "ERR:expected_2d_value";
+                    } else {
+                        streamValue.val.two_d.x = seq[0].cast<double>();
+                        streamValue.val.two_d.y = seq[1].cast<double>();
+                    }
+                    break;
+                }
+                case AEGP_StreamType_ThreeD:
+                case AEGP_StreamType_ThreeD_SPATIAL: {
+                    auto seq = value.cast<py::sequence>();
+                    if (py::len(seq) != 3) {
+                        parseError = "ERR:expected_3d_value";
+                    } else {
+                        streamValue.val.three_d.x = seq[0].cast<double>();
+                        streamValue.val.three_d.y = seq[1].cast<double>();
+                        streamValue.val.three_d.z = seq[2].cast<double>();
+                    }
+                    break;
+                }
+                case AEGP_StreamType_COLOR: {
+                    auto seq = value.cast<py::sequence>();
+                    if (py::len(seq) != 4) {
+                        parseError = "ERR:expected_color_value";
+                    } else {
+                        streamValue.val.color.alphaF = seq[3].cast<double>();
+                        streamValue.val.color.redF = seq[0].cast<double>();
+                        streamValue.val.color.greenF = seq[1].cast<double>();
+                        streamValue.val.color.blueF = seq[2].cast<double>();
+                    }
+                    break;
+                }
+                default:
+                    parseError = "ERR:unsupported_type:" + std::to_string(typeResult.value);
+                    break;
+            }
+        } catch (const py::cast_error&) {
+            parseError = "ERR:value_cast_failed";
+        }
+
+        if (!parseError.empty()) {
+            for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it)
+                enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+            return parseError;
+        }
+
+        auto& msgSet = enqueueSyncTaskQuiet(setStreamValue, current, &streamValue);
+        msgSet->wait();
+        auto setResult = msgSet->getResult();
+
+        for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it)
+            enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+
+        if (setResult.error != A_Err_NONE)
+            return "ERR:set_stream_value_failed:" + std::to_string(setResult.error);
+        return "ok";
+    }, py::arg("layer"), py::arg("path"), py::arg("value"));
+
+    // ── Set Stream Value by mixed path (matchname + child index) ──
+    // Usage: psc.set_stream_value_at_path(layer, ["ADBE ... PosPins", 2, "ADBE FreePin3 PosPin Vtx Index"], 9)
+    m.def("set_stream_value_at_path", [](std::shared_ptr<Layer> layer,
+                                          py::iterable path,
+                                          py::object value) -> std::string {
+        auto steps = parseStreamPathSteps(path);
+
+        auto layerH = layer->getLayerHandle();
+
+        auto& msg1 = enqueueSyncTaskQuiet(getNewStreamRefForLayer, layerH);
+        msg1->wait();
+        auto root = msg1->getResult();
+        if (root.error != A_Err_NONE || root.value == NULL)
+            return "ERR:cannot_get_layer_root";
+
+        std::vector<Result<AEGP_StreamRefH>> toDispose;
+        Result<AEGP_StreamRefH> current;
+        std::string error;
+        if (!resolveStreamPath(root, steps, toDispose, current, error)) {
+            for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it)
+                enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+            return error;
+        }
+
+        auto& msgType = enqueueSyncTaskQuiet(getStreamType, current);
+        msgType->wait();
+        auto typeResult = msgType->getResult();
+        if (typeResult.error != A_Err_NONE) {
+            for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it)
+                enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+            return "ERR:cannot_get_stream_type:" + std::to_string(typeResult.error);
+        }
+
+        AEGP_StreamValue2 streamValue = {};
+        streamValue.streamH = current.value;
+        std::string parseError;
+
+        try {
+            switch (typeResult.value) {
+                case AEGP_StreamType_OneD:
+                    streamValue.val.one_d = value.cast<double>();
+                    break;
+                case AEGP_StreamType_TwoD:
+                case AEGP_StreamType_TwoD_SPATIAL: {
+                    auto seq = value.cast<py::sequence>();
+                    if (py::len(seq) != 2) {
+                        parseError = "ERR:expected_2d_value";
+                    } else {
+                        streamValue.val.two_d.x = seq[0].cast<double>();
+                        streamValue.val.two_d.y = seq[1].cast<double>();
+                    }
+                    break;
+                }
+                case AEGP_StreamType_ThreeD:
+                case AEGP_StreamType_ThreeD_SPATIAL: {
+                    auto seq = value.cast<py::sequence>();
+                    if (py::len(seq) != 3) {
+                        parseError = "ERR:expected_3d_value";
+                    } else {
+                        streamValue.val.three_d.x = seq[0].cast<double>();
+                        streamValue.val.three_d.y = seq[1].cast<double>();
+                        streamValue.val.three_d.z = seq[2].cast<double>();
+                    }
+                    break;
+                }
+                case AEGP_StreamType_COLOR: {
+                    auto seq = value.cast<py::sequence>();
+                    if (py::len(seq) != 4) {
+                        parseError = "ERR:expected_color_value";
+                    } else {
+                        streamValue.val.color.alphaF = seq[3].cast<double>();
+                        streamValue.val.color.redF = seq[0].cast<double>();
+                        streamValue.val.color.greenF = seq[1].cast<double>();
+                        streamValue.val.color.blueF = seq[2].cast<double>();
+                    }
+                    break;
+                }
+                default:
+                    parseError = "ERR:unsupported_type:" + std::to_string(typeResult.value);
+                    break;
+            }
+        } catch (const py::cast_error&) {
+            parseError = "ERR:value_cast_failed";
+        }
+
+        if (!parseError.empty()) {
+            for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it)
+                enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+            return parseError;
+        }
+
+        auto& msgSet = enqueueSyncTaskQuiet(setStreamValue, current, &streamValue);
+        msgSet->wait();
+        auto setResult = msgSet->getResult();
+
+        for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it)
+            enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+
+        if (setResult.error != A_Err_NONE)
+            return "ERR:set_stream_value_failed:" + std::to_string(setResult.error);
+        return "ok";
+    }, py::arg("layer"), py::arg("path"), py::arg("value"));
 
     // ── List child streams (enumerate property tree) ──
     // Usage: psc.list_streams(layer, ["ADBE Effect Parade"]) → [{"index":0,"matchName":"...","name":"..."}, ...]
@@ -811,6 +1295,319 @@ void bindStreamUtils(py::module_& m)
         }
         return result;
     }, py::arg("layer"), py::arg("path"));
+
+    // ── Describe current comp selection via CollectionSuite ──
+    // Useful for inspecting real Puppet Pin selections, selected dynamic streams, keyframes, etc.
+    m.def("describe_comp_selection", [](std::shared_ptr<CompItem> comp) -> py::object {
+        struct StreamSummary {
+            bool valid = false;
+            int uniqueId = -1;
+            int type = -1;
+            int groupType = static_cast<int>(AEGP_StreamGroupingType_NONE);
+            int flags = 0;
+            bool canVary = false;
+            std::string name;
+            std::string matchName;
+            std::vector<std::string> pathNames;
+            std::vector<std::string> pathMatchNames;
+        };
+
+        struct SelectionInfo {
+            int index = -1;
+            int type = static_cast<int>(AEGP_CollectionItemType_NONE);
+            std::string typeName;
+            int layerIndex = -1;
+            std::string layerName;
+            int maskIndex = -1;
+            int effectIndex = -1;
+            int paramIndex = -1;
+            int layerStream = -1;
+            int maskStream = -1;
+            int keyframeIndex = -1;
+            int vertexIndex = -1;
+            int streamCollectionType = static_cast<int>(AEGP_StreamCollectionItemType_NONE);
+            std::string streamCollectionTypeLabel;
+            StreamSummary stream;
+        };
+
+        std::string error;
+        std::vector<SelectionInfo> infos;
+
+        {
+            py::gil_scoped_release release;
+
+            auto itemH = comp->getItemHandle();
+            auto& msgComp = enqueueSyncTaskQuiet(getCompFromItem, itemH);
+            msgComp->wait();
+            auto compH = msgComp->getResult();
+            if (compH.error != A_Err_NONE || compH.value == NULL) {
+                error = "ERR:cannot_get_comp";
+            } else {
+                auto& msgSelection = enqueueSyncTaskQuiet(GetCompSelectionItems, compH);
+                msgSelection->wait();
+                auto selectionResult = msgSelection->getResult();
+                if (selectionResult.error != A_Err_NONE) {
+                    error = "ERR:cannot_get_selection:" + std::to_string(selectionResult.error);
+                } else {
+                    auto populateLayer = [&](AEGP_LayerH layerH, SelectionInfo& info) {
+                        if (layerH == NULL) {
+                            return;
+                        }
+                        Result<AEGP_LayerH> layerResult(layerH, A_Err_NONE);
+
+                        auto& msgLayerIndex = enqueueSyncTaskQuiet(getLayerIndex, layerResult);
+                        msgLayerIndex->wait();
+                        auto layerIndexResult = msgLayerIndex->getResult();
+                        if (layerIndexResult.error == A_Err_NONE) {
+                            info.layerIndex = layerIndexResult.value;
+                        }
+
+                        auto& msgLayerName = enqueueSyncTaskQuiet(getLayerName, layerResult);
+                        msgLayerName->wait();
+                        auto layerNameResult = msgLayerName->getResult();
+                        if (layerNameResult.error == A_Err_NONE) {
+                            info.layerName = layerNameResult.value;
+                        }
+                    };
+
+                    auto populateStream = [&](AEGP_StreamRefH streamRefH, StreamSummary& summary) {
+                        if (streamRefH == NULL) {
+                            return;
+                        }
+                        summary.valid = true;
+                        Result<AEGP_StreamRefH> streamRef(streamRefH, A_Err_NONE);
+
+                        auto& msgUnique = enqueueSyncTaskQuiet(getUniqueStreamID, streamRef);
+                        msgUnique->wait();
+                        auto uniqueResult = msgUnique->getResult();
+                        if (uniqueResult.error == A_Err_NONE) {
+                            summary.uniqueId = uniqueResult.value;
+                        }
+
+                        auto& msgType = enqueueSyncTaskQuiet(getStreamType, streamRef);
+                        msgType->wait();
+                        auto typeResult = msgType->getResult();
+                        if (typeResult.error == A_Err_NONE) {
+                            summary.type = static_cast<int>(typeResult.value);
+                        }
+
+                        auto& msgGroup = enqueueSyncTaskQuiet(getStreamGroupingType, streamRef);
+                        msgGroup->wait();
+                        auto groupResult = msgGroup->getResult();
+                        if (groupResult.error == A_Err_NONE) {
+                            summary.groupType = static_cast<int>(groupResult.value);
+                        }
+
+                        auto& msgFlags = enqueueSyncTaskQuiet(getDynamicStreamFlags, streamRef);
+                        msgFlags->wait();
+                        auto flagsResult = msgFlags->getResult();
+                        if (flagsResult.error == A_Err_NONE) {
+                            summary.flags = static_cast<int>(flagsResult.value);
+                        }
+
+                        auto& msgCanVary = enqueueSyncTaskQuiet(canVaryOverTime, streamRef);
+                        msgCanVary->wait();
+                        auto canVaryResult = msgCanVary->getResult();
+                        if (canVaryResult.error == A_Err_NONE) {
+                            summary.canVary = canVaryResult.value != FALSE;
+                        }
+
+                        std::vector<Result<AEGP_StreamRefH>> parentRefs;
+                        std::vector<int> seenUniqueIds;
+                        Result<AEGP_StreamRefH> current = streamRef;
+                        int depth = 0;
+
+                        while (current.error == A_Err_NONE && current.value != NULL && depth < 64) {
+                            depth++;
+                            auto& msgNodeUnique = enqueueSyncTaskQuiet(getUniqueStreamID, current);
+                            msgNodeUnique->wait();
+                            auto nodeUniqueResult = msgNodeUnique->getResult();
+                            if (nodeUniqueResult.error == A_Err_NONE) {
+                                if (std::find(seenUniqueIds.begin(), seenUniqueIds.end(),
+                                              nodeUniqueResult.value) != seenUniqueIds.end()) {
+                                    break;
+                                }
+                                seenUniqueIds.push_back(nodeUniqueResult.value);
+                            }
+
+                            auto& msgName = enqueueSyncTaskQuiet(getStreamName, current, false);
+                            msgName->wait();
+                            auto nameResult = msgName->getResult();
+
+                            auto& msgMatch = enqueueSyncTaskQuiet(getStreamMatchName, current);
+                            msgMatch->wait();
+                            auto matchResult = msgMatch->getResult();
+
+                            summary.pathNames.push_back(nameResult.error == A_Err_NONE ? nameResult.value : "");
+                            summary.pathMatchNames.push_back(matchResult.error == A_Err_NONE ? matchResult.value : "");
+
+                            auto& msgDepth = enqueueSyncTaskQuiet(getStreamDepth, current);
+                            msgDepth->wait();
+                            auto depthResult = msgDepth->getResult();
+                            if (depthResult.error == A_Err_NONE && depthResult.value <= 0) {
+                                break;
+                            }
+
+                            auto& msgParent = enqueueSyncTaskQuiet(getNewParentStreamRef, current);
+                            msgParent->wait();
+                            auto parentResult = msgParent->getResult();
+                            if (parentResult.error != A_Err_NONE || parentResult.value == NULL) {
+                                break;
+                            }
+                            parentRefs.push_back(parentResult);
+                            current = parentResult;
+                        }
+
+                        std::reverse(summary.pathNames.begin(), summary.pathNames.end());
+                        std::reverse(summary.pathMatchNames.begin(), summary.pathMatchNames.end());
+                        if (!summary.pathNames.empty()) {
+                            summary.name = summary.pathNames.back();
+                        }
+                        if (!summary.pathMatchNames.empty()) {
+                            summary.matchName = summary.pathMatchNames.back();
+                        }
+
+                        for (auto it = parentRefs.rbegin(); it != parentRefs.rend(); ++it) {
+                            enqueueSyncTaskQuiet(disposeStream, *it)->wait();
+                        }
+                    };
+
+                    for (size_t i = 0; i < selectionResult.value.size(); ++i) {
+                        const auto& item = selectionResult.value[i];
+                        SelectionInfo info;
+                        info.index = static_cast<int>(i);
+                        info.type = static_cast<int>(item.type);
+                        info.typeName = selectionTypeName(item.type);
+
+                        switch (item.type) {
+                        case AEGP_CollectionItemType_LAYER:
+                            populateLayer(item.u.layer.layerH, info);
+                            break;
+                        case AEGP_CollectionItemType_MASK:
+                            populateLayer(item.u.mask.layerH, info);
+                            info.maskIndex = static_cast<int>(item.u.mask.index);
+                            break;
+                        case AEGP_CollectionItemType_EFFECT:
+                            populateLayer(item.u.effect.layerH, info);
+                            info.effectIndex = static_cast<int>(item.u.effect.index);
+                            break;
+                        case AEGP_CollectionItemType_STREAM:
+                            info.streamCollectionType = static_cast<int>(item.u.stream.type);
+                            info.streamCollectionTypeLabel = streamCollectionTypeName(item.u.stream.type);
+                            switch (item.u.stream.type) {
+                            case AEGP_StreamCollectionItemType_LAYER:
+                                populateLayer(item.u.stream.u.layer_stream.layerH, info);
+                                info.layerStream = static_cast<int>(item.u.stream.u.layer_stream.layer_stream);
+                                break;
+                            case AEGP_StreamCollectionItemType_MASK:
+                                populateLayer(item.u.stream.u.mask_stream.mask.layerH, info);
+                                info.maskIndex = static_cast<int>(item.u.stream.u.mask_stream.mask.index);
+                                info.maskStream = static_cast<int>(item.u.stream.u.mask_stream.mask_stream);
+                                break;
+                            case AEGP_StreamCollectionItemType_EFFECT:
+                                populateLayer(item.u.stream.u.effect_stream.effect.layerH, info);
+                                info.effectIndex = static_cast<int>(item.u.stream.u.effect_stream.effect.index);
+                                info.paramIndex = static_cast<int>(item.u.stream.u.effect_stream.param_index);
+                                break;
+                            default:
+                                break;
+                            }
+                            break;
+                        case AEGP_CollectionItemType_KEYFRAME:
+                            info.keyframeIndex = static_cast<int>(item.u.keyframe.index);
+                            info.streamCollectionType = static_cast<int>(item.u.keyframe.stream_coll.type);
+                            info.streamCollectionTypeLabel = streamCollectionTypeName(item.u.keyframe.stream_coll.type);
+                            switch (item.u.keyframe.stream_coll.type) {
+                            case AEGP_StreamCollectionItemType_LAYER:
+                                populateLayer(item.u.keyframe.stream_coll.u.layer_stream.layerH, info);
+                                info.layerStream = static_cast<int>(item.u.keyframe.stream_coll.u.layer_stream.layer_stream);
+                                break;
+                            case AEGP_StreamCollectionItemType_MASK:
+                                populateLayer(item.u.keyframe.stream_coll.u.mask_stream.mask.layerH, info);
+                                info.maskIndex = static_cast<int>(item.u.keyframe.stream_coll.u.mask_stream.mask.index);
+                                info.maskStream = static_cast<int>(item.u.keyframe.stream_coll.u.mask_stream.mask_stream);
+                                break;
+                            case AEGP_StreamCollectionItemType_EFFECT:
+                                populateLayer(item.u.keyframe.stream_coll.u.effect_stream.effect.layerH, info);
+                                info.effectIndex = static_cast<int>(item.u.keyframe.stream_coll.u.effect_stream.effect.index);
+                                info.paramIndex = static_cast<int>(item.u.keyframe.stream_coll.u.effect_stream.param_index);
+                                break;
+                            default:
+                                break;
+                            }
+                            break;
+                        case AEGP_CollectionItemType_MASK_VERTEX:
+                            populateLayer(item.u.mask_vertex.mask_sel.layerH, info);
+                            info.maskIndex = static_cast<int>(item.u.mask_vertex.mask_sel.index);
+                            info.vertexIndex = static_cast<int>(item.u.mask_vertex.index);
+                            break;
+                        case AEGP_CollectionItemType_STREAMREF:
+                        default:
+                            break;
+                        }
+
+                        populateStream(item.stream_refH, info.stream);
+                        infos.push_back(info);
+                    }
+
+                    for (const auto& item : selectionResult.value) {
+                        if (item.stream_refH != NULL) {
+                            enqueueSyncTaskQuiet(disposeStream, Result<AEGP_StreamRefH>(item.stream_refH, A_Err_NONE))->wait();
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!error.empty()) {
+            return py::cast(error);
+        }
+
+        py::list result;
+        for (const auto& info : infos) {
+            py::dict item;
+            item["index"] = info.index;
+            item["type"] = info.type;
+            item["typeName"] = info.typeName;
+            item["layerIndex"] = info.layerIndex;
+            item["layerName"] = info.layerName;
+            item["maskIndex"] = info.maskIndex;
+            item["effectIndex"] = info.effectIndex;
+            item["paramIndex"] = info.paramIndex;
+            item["layerStream"] = info.layerStream;
+            item["maskStream"] = info.maskStream;
+            item["keyframeIndex"] = info.keyframeIndex;
+            item["vertexIndex"] = info.vertexIndex;
+            item["streamCollectionType"] = info.streamCollectionType;
+            item["streamCollectionTypeName"] = info.streamCollectionTypeLabel;
+
+            py::dict stream;
+            stream["valid"] = info.stream.valid;
+            stream["uniqueId"] = info.stream.uniqueId;
+            stream["type"] = info.stream.type;
+            stream["groupType"] = info.stream.groupType;
+            stream["flags"] = info.stream.flags;
+            stream["canVary"] = info.stream.canVary;
+            stream["name"] = info.stream.name;
+            stream["matchName"] = info.stream.matchName;
+
+            py::list pathNames;
+            for (const auto& name : info.stream.pathNames) {
+                pathNames.append(name);
+            }
+            stream["pathNames"] = pathNames;
+
+            py::list pathMatchNames;
+            for (const auto& matchName : info.stream.pathMatchNames) {
+                pathMatchNames.append(matchName);
+            }
+            stream["pathMatchNames"] = pathMatchNames;
+
+            item["stream"] = stream;
+            result.append(item);
+        }
+        return result;
+    }, py::arg("comp"));
 
     // ── Unhide all children of a property group ──
     // Useful for Essential Properties, hidden effect params, etc.

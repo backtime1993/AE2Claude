@@ -1,6 +1,11 @@
 *.old*
 __pycache__/
 *.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+/dist/
 /docs/
 
 # Local Adobe SDK links/junctions used for Windows builds.
