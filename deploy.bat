@@ -1,10 +1,28 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal EnableExtensions EnableDelayedExpansion
 
-echo === AE2Claude Deployer ===
+set "VERSION=4.2.0"
+set "SOURCE_AEX=%~dp0build\Release\AE2Claude.aex"
 
-:: Auto-detect AE installations
-set FOUND=0
+echo === AE2Claude %VERSION% Deployer ===
+
+if not exist "%SOURCE_AEX%" (
+    echo ERROR: Release build not found: %SOURCE_AEX%
+    echo Build Release x64 before deploying. The stale repository-root binary is never used.
+    exit /b 1
+)
+
+if not "%~1"=="" (
+    set "AE_NAME=%~1"
+    set "AE_DIR=C:\Program Files\Adobe\%~1\Support Files"
+    if not exist "!AE_DIR!" (
+        echo ERROR: Requested After Effects target was not found: !AE_DIR!
+        exit /b 1
+    )
+    goto target_selected
+)
+
+set "FOUND=0"
 for %%V in ("Adobe After Effects (Beta)" "Adobe After Effects 2025" "Adobe After Effects 2024" "Adobe After Effects 2023") do (
     if exist "C:\Program Files\Adobe\%%~V\Support Files" (
         set /a FOUND+=1
@@ -19,11 +37,11 @@ if %FOUND%==0 (
     exit /b 1
 )
 
-if %FOUND%==1 (
-    echo Auto-selected: %AE_NAME%
-) else (
+if not %FOUND%==1 (
+    set "AE_NAME="
+    set "AE_DIR="
     set /p CHOICE="Select [1-%FOUND%]: "
-    set IDX=0
+    set "IDX=0"
     for %%V in ("Adobe After Effects (Beta)" "Adobe After Effects 2025" "Adobe After Effects 2024" "Adobe After Effects 2023") do (
         if exist "C:\Program Files\Adobe\%%~V\Support Files" (
             set /a IDX+=1
@@ -35,51 +53,61 @@ if %FOUND%==1 (
     )
 )
 
-set PLUGIN_DIR=%AE_DIR%\Plug-ins
+if not defined AE_DIR (
+    echo ERROR: Invalid target selection.
+    exit /b 1
+)
+
+:target_selected
+set "PLUGIN_DIR=%AE_DIR%\Plug-ins"
 echo Deploying to: %AE_NAME%
 
-:: Copy plugin
-echo Copying AE2Claude.aex...
-copy /Y "%~dp0AE2Claude.aex" "%PLUGIN_DIR%\AE2Claude.aex"
+if not exist "!AE_DIR!\python312.dll" (
+    echo ERROR: python312.dll is missing from !AE_DIR!
+    exit /b 1
+)
+
+if exist "!PLUGIN_DIR!\AE2Claude.aex" if not exist "!PLUGIN_DIR!\AE2Claude.aex.bak-before-!VERSION!" (
+    copy /Y "!PLUGIN_DIR!\AE2Claude.aex" "!PLUGIN_DIR!\AE2Claude.aex.bak-before-!VERSION!" >nul
+    if errorlevel 1 (
+        echo ERROR: Could not create plugin backup. Close After Effects and retry.
+        exit /b 1
+    )
+)
+
+copy /Y "!SOURCE_AEX!" "!PLUGIN_DIR!\AE2Claude.aex" >nul
 if errorlevel 1 (
-    echo WARNING: Could not copy .aex - AE may be running. Close AE first.
-) else (
-    echo OK
+    echo ERROR: Could not deploy AE2Claude.aex. Close After Effects and retry.
+    exit /b 1
 )
 
-:: Copy server script
-echo Copying ae2claude_server.py...
-copy /Y "%~dp0ae2claude_server.py" "%PLUGIN_DIR%\ae2claude_server.py"
-echo OK
-
-:: Copy bridge + CLI + scripts + presets to plugin dir
-echo Copying ae_bridge.py...
-copy /Y "%~dp0ae_bridge.py" "%PLUGIN_DIR%\ae_bridge.py"
-echo OK
-
-echo Copying ae2claude CLI...
-copy /Y "%~dp0ae2claude" "%PLUGIN_DIR%\ae2claude"
-echo OK
-
-echo Copying scripts...
-if not exist "%PLUGIN_DIR%\scripts" mkdir "%PLUGIN_DIR%\scripts"
-xcopy /Y /E /Q "%~dp0scripts\*" "%PLUGIN_DIR%\scripts\"
-echo OK
-
-echo Copying presets...
-if not exist "%PLUGIN_DIR%\presets" mkdir "%PLUGIN_DIR%\presets"
-xcopy /Y /E /Q "%~dp0presets\*" "%PLUGIN_DIR%\presets\"
-echo OK
-
-:: Ensure python DLLs are present
-if not exist "%AE_DIR%\python312.dll" (
-    echo WARNING: python312.dll not found in Support Files.
-    echo Copy python312.dll + python3.dll from your Python 3.12 installation.
+fc /B "!SOURCE_AEX!" "!PLUGIN_DIR!\AE2Claude.aex" >nul
+if errorlevel 1 (
+    echo ERROR: Deployed AE2Claude.aex failed byte-for-byte verification.
+    exit /b 1
 )
 
-echo.
-echo === Done. Restart AE to activate. ===
-echo.
-echo To use the CLI, add the plugin dir to PATH or copy ae2claude to a PATH dir:
-echo   copy "%PLUGIN_DIR%\ae2claude" "%%USERPROFILE%%\bin\ae2claude"
-pause
+for %%F in (ae2claude_server.py ae_bridge.py ae2claude) do (
+    copy /Y "%~dp0%%F" "!PLUGIN_DIR!\%%F" >nul
+    if errorlevel 1 (
+        echo ERROR: Could not deploy %%F.
+        exit /b 1
+    )
+)
+
+if not exist "!PLUGIN_DIR!\scripts" mkdir "!PLUGIN_DIR!\scripts"
+xcopy /Y /E /Q "%~dp0scripts\*" "!PLUGIN_DIR!\scripts\" >nul
+if errorlevel 2 (
+    echo ERROR: Could not deploy scripts.
+    exit /b 1
+)
+
+if not exist "!PLUGIN_DIR!\presets" mkdir "!PLUGIN_DIR!\presets"
+xcopy /Y /E /Q "%~dp0presets\*" "!PLUGIN_DIR!\presets\" >nul
+if errorlevel 2 (
+    echo ERROR: Could not deploy presets.
+    exit /b 1
+)
+
+echo === Deploy verified. Restart After Effects to activate AE2Claude %VERSION%. ===
+exit /b 0

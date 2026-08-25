@@ -9,6 +9,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, ImageContent, TextContent
 
+from . import __version__
 from .catalog import prepare_script, resolve_script, search_scripts
 from .checkpoints import create_checkpoint, list_checkpoints, revert_checkpoint
 from .previews import render_preview
@@ -55,6 +56,7 @@ def ae_ping() -> dict[str, Any]:
     """Check MCP safety state and the live native AE bridge connection."""
     return {
         "ok": True,
+        "serverVersion": __version__,
         "enabled": is_enabled(),
         "approvalMode": approval_mode(),
         "bridge": _connection_status(),
@@ -66,6 +68,7 @@ def ae_status() -> dict[str, Any]:
     """Return concise MCP, bridge, and checkpoint configuration status."""
     return {
         "ok": True,
+        "serverVersion": __version__,
         "enabled": is_enabled(),
         "approvalMode": approval_mode(),
         "killSwitchFile": str(kill_switch_path()),
@@ -97,6 +100,7 @@ def ae_diagnose() -> dict[str, Any]:
         checks.append({"name": "bridge", "ok": False, "error": str(exc)})
     return {
         "ok": all(item["ok"] for item in checks),
+        "serverVersion": __version__,
         "enabled": is_enabled(),
         "approvalMode": approval_mode(),
         "checks": checks,

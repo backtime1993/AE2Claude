@@ -1,15 +1,18 @@
 """PyShiftAE bridge server for embedded AE Python."""
 
 import io
+import hashlib
 import json
 import sys
 import threading
 import traceback
 from multiprocessing.connection import Listener
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
 
 _AE_PORT = 8089
 _AE_PIPE = r"\\.\pipe\PyShiftAEBridge"
+BRIDGE_VERSION = "4.2.0"
 
 try:
     import PyShiftCore as psc
@@ -30,12 +33,36 @@ _TRANSPORT_STATE = {
 _TRANSPORT_ERRORS = {}
 
 
+def _plugin_artifact_payload():
+    path = Path(__file__).resolve().with_name("AE2Claude.aex")
+    payload = {"path": str(path), "present": path.is_file()}
+    if not path.is_file():
+        return payload
+    try:
+        payload.update(
+            {
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "size": path.stat().st_size,
+                "modified_ns": path.stat().st_mtime_ns,
+            }
+        )
+    except OSError as exc:
+        payload["error"] = str(exc)
+    return payload
+
+
+_PLUGIN_ARTIFACT = _plugin_artifact_payload()
+
+
 def _health_payload():
     return {
         "status": "ok",
+        "bridge_version": BRIDGE_VERSION,
         "engine": "PyShiftAE",
         "module": "PyShiftCore" if psc is not None else None,
         "module_available": psc is not None,
+        "python_version": sys.version.split()[0],
+        "plugin_artifact": dict(_PLUGIN_ARTIFACT),
         "port": _AE_PORT,
         "pipe": _AE_PIPE,
         "transports": {
