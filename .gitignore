@@ -2,3 +2,5 @@ node_modules/
 .vscode/
 *.log
 .ZXPInstaller.log
+__pycache__/
+*.pyc

@@ -59,6 +59,7 @@
 
     // --- Node.js loading -----------------------------------------------------
     let http, url, path, fs;
+    let extensionVersion = 'unknown';
     try {
         http = cep_node.require('http');
         url = cep_node.require('url');
@@ -68,6 +69,13 @@
         setStatus('cep_node missing', 'status-err');
         log('FATAL: cep_node.require failed: ' + err.message);
         return;
+    }
+
+    try {
+        const packagePath = path.join(cs.getSystemPath(SystemPath.EXTENSION), 'package.json');
+        extensionVersion = JSON.parse(fs.readFileSync(packagePath, 'utf8')).version || 'unknown';
+    } catch (err) {
+        log('package version read failed: ' + err.message);
     }
 
     try {
@@ -111,7 +119,6 @@
             const SendInput = user32.func('uint32 SendInput(uint32, _In_ void*, int32)');
             const GetSystemMetrics = user32.func('int32 GetSystemMetrics(int32)');
             const SetCursorPos = user32.func('int32 SetCursorPos(int32, int32)');
-            const FindWindowA = user32.func('void* FindWindowA(const char*, const char*)');
             const SetForegroundWindow = user32.func('int32 SetForegroundWindow(void*)');
             const ShowWindow = user32.func('int32 ShowWindow(void*, int32)');
             const BringWindowToTop = user32.func('int32 BringWindowToTop(void*)');
@@ -121,20 +128,63 @@
             const RECT = koffi.struct('RECT', { left: 'int32', top: 'int32', right: 'int32', bottom: 'int32' });
             const GetWindowRect = user32.func('int32 GetWindowRect(void*, _Out_ RECT*)');
             const IsWindowVisible = user32.func('int32 IsWindowVisible(void*)');
+            const EnumWindowsProc = koffi.proto('int32 EnumWindowsProc(void*, int64)');
+            const EnumWindows = user32.func('int32 EnumWindows(EnumWindowsProc*, int64)');
             const EnumChildWindowsProc = koffi.proto('int32 EnumChildWindowsProc(void*, int64)');
             const EnumChildWindows = user32.func('int32 EnumChildWindows(void*, EnumChildWindowsProc*, int64)');
             const SW_RESTORE = 9;
 
+            // Discover the AE main window by class prefix instead of maintaining
+            // a version whitelist. This covers AE 27.0 and future AE releases.
+            function findAEHwnd() {
+                const matches = [];
+                const cb = koffi.register(function (hwnd, lparam) {
+                    const classBuf = Buffer.alloc(256);
+                    const textBuf = Buffer.alloc(512);
+                    let cls = '';
+                    let text = '';
+                    try {
+                        const n = GetClassNameA(hwnd, classBuf, 255);
+                        cls = classBuf.toString('utf8', 0, Math.max(0, n));
+                    } catch (_) {}
+                    if (cls.indexOf('AE_CApplication') !== 0) return 1;
+                    try {
+                        const n = GetWindowTextA(hwnd, textBuf, 511);
+                        text = textBuf.toString('utf8', 0, Math.max(0, n));
+                    } catch (_) {}
+                    const rect = { left: 0, top: 0, right: 0, bottom: 0 };
+                    let area = 0;
+                    try {
+                        if (GetWindowRect(hwnd, rect)) {
+                            area = Math.max(0, rect.right - rect.left) * Math.max(0, rect.bottom - rect.top);
+                        }
+                    } catch (_) {}
+                    matches.push({
+                        hwnd: hwnd,
+                        cls: cls,
+                        text: text,
+                        visible: IsWindowVisible(hwnd) !== 0,
+                        area: area
+                    });
+                    return 1;
+                }, koffi.pointer(EnumWindowsProc));
+                try {
+                    EnumWindows(cb, 0);
+                } finally {
+                    koffi.unregister(cb);
+                }
+                matches.sort(function (a, b) {
+                    if (a.visible !== b.visible) return a.visible ? -1 : 1;
+                    return b.area - a.area;
+                });
+                return matches.length ? matches[0] : null;
+            }
+
             // --- Enumerate every descendant HWND of AE main window with class/text/rect/visibility.
             enumerateAEWindows = function () {
-                // Find AE main first.
-                let aeHwnd = null;
-                const candidates = ['AE_CApplication_26.3', 'AE_CApplication_26.2', 'AE_CApplication_26.1', 'AE_CApplication_26.0'];
-                for (let i = 0; i < candidates.length; i++) {
-                    const h = FindWindowA(candidates[i], null);
-                    if (h) { aeHwnd = h; break; }
-                }
-                if (!aeHwnd) return { error: 'AE window not found' };
+                const aeWindow = findAEHwnd();
+                if (!aeWindow) return { error: 'AE window not found', discovery: 'EnumWindows:AE_CApplication*' };
+                const aeHwnd = aeWindow.hwnd;
 
                 const rows = [];
                 const classBuf = Buffer.alloc(256);
@@ -173,7 +223,7 @@
                 }
                 let aeHwndStr = '?';
                 try { aeHwndStr = '0x' + koffi.address(aeHwnd).toString(16); } catch (_) {}
-                return { ae_hwnd: aeHwndStr, count: rows.length, rows: rows };
+                return { ae_hwnd: aeHwndStr, ae_class: aeWindow.cls, count: rows.length, rows: rows };
             };
 
             const SM_CXSCREEN = 0, SM_CYSCREEN = 1;
@@ -229,18 +279,9 @@
             };
 
             // --- AE window focus ---
-            // AE classname "AE_CApplication_26.3" (varies by version). Find by class prefix.
-            const AE_CLASSES = ['AE_CApplication_26.3', 'AE_CApplication_26.2', 'AE_CApplication_26.1', 'AE_CApplication_26.0', 'AE_CApplication_25.0', 'AE_CApplication_24.0'];
-            function findAEHwnd() {
-                for (let i = 0; i < AE_CLASSES.length; i++) {
-                    const h = FindWindowA(AE_CLASSES[i], null);
-                    if (h) return { hwnd: h, cls: AE_CLASSES[i] };
-                }
-                return null;
-            }
             focusAEWindow = function () {
                 const r = findAEHwnd();
-                if (!r) return { ok: false, tried: AE_CLASSES };
+                if (!r) return { ok: false, error: 'ae_window_not_found', discovery: 'EnumWindows:AE_CApplication*' };
                 const wasMin = IsIconic(r.hwnd) ? true : false;
                 if (wasMin) ShowWindow(r.hwnd, SW_RESTORE);
                 BringWindowToTop(r.hwnd);
@@ -249,7 +290,7 @@
             };
             getAEWindowRect = function () {
                 const r = findAEHwnd();
-                if (!r) return { error: 'ae_window_not_found', tried: AE_CLASSES };
+                if (!r) return { error: 'ae_window_not_found', discovery: 'EnumWindows:AE_CApplication*' };
                 const rc = { left: 0, top: 0, right: 0, bottom: 0 };
                 const got = GetWindowRect(r.hwnd, rc);
                 if (!got) return { error: 'GetWindowRect failed' };
@@ -445,10 +486,13 @@
 
     async function handleHealth() {
         const v = await aeVersion();
+        const windowInfo = getAEWindowRect ? getAEWindowRect() : { error: 'window_runtime_unavailable' };
         return {
             ok: true,
             port: PORT,
+            extension_version: extensionVersion,
             ae: v,
+            window: windowInfo,
             mouse_ready: !!sendInputClick,
             keyboard_ready: !!sendKeySequence,
             focus_ready: !!focusAEWindow,
@@ -963,6 +1007,94 @@
         return { lines: slice, log_file: logFilePath, buffer_size: logBuffer.length };
     }
 
+    // --- Ensure Puppet Position Pin tool ---------------------------------
+    // Probe-click at the given screen point. If it lands in PosPins: done.
+    // If in another puppet group: remove probe + Ctrl+P rotate + retry.
+    // If NO pin appears: Ctrl+P (activates Puppet from non-puppet tool) + retry.
+    // Always cleans up probe pins it created.
+    async function handleEnsurePuppetPositionTool(body) {
+        if (!body) throw new Error('missing_body');
+        const compId = Number(body.comp_id);
+        const layerIndex = Number(body.layer_index);
+        if (!compId || !layerIndex) throw new Error('missing_comp_id_or_layer_index');
+        const maxRot = body.max_rotations != null ? Math.max(1, Number(body.max_rotations)) : 6;
+        let probeX = body.probe_x != null ? Number(body.probe_x) : null;
+        let probeY = body.probe_y != null ? Number(body.probe_y) : null;
+        if (probeX == null || probeY == null) {
+            const ae = getAEWindowRect && getAEWindowRect();
+            if (!ae || ae.error) throw new Error('need_probe_point_or_ae_rect');
+            probeX = ae.center_x; probeY = ae.center_y;
+        }
+
+        initMouse();
+        if (!sendInputClick || !focusAEWindow || !sendKeySequence)
+            throw new Error('runtime_unavailable:' + mouseLoadError);
+
+        // One-time focus + move cursor into viewer so Ctrl+P reaches AE.
+        focusAEWindow();
+        await new Promise(r => setTimeout(r, 80));
+
+        async function probeOnce() {
+            const before = await readPuppetPinCount(compId, layerIndex);
+            if (before && before.error) return { error: before.error };
+            const b = { pos: Number(before.pos_count||0), hght: Number(before.hght_count||0), starch: Number(before.starch_count||0) };
+            await sendInputClick(probeX, probeY, { preMoveMs: 30, holdMs: 40 });
+            const deadline = Date.now() + 1500;
+            let after = before;
+            while (Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, 100));
+                after = await readPuppetPinCount(compId, layerIndex);
+                if (after && (Number(after.pos_count||0) > b.pos
+                    || Number(after.hght_count||0) > b.hght
+                    || Number(after.starch_count||0) > b.starch)) break;
+            }
+            const a = { pos: Number(after.pos_count||0), hght: Number(after.hght_count||0), starch: Number(after.starch_count||0) };
+            const group = (a.pos > b.pos) ? 'PosPins'
+                : (a.hght > b.hght) ? 'HghtPins'
+                : (a.starch > b.starch) ? 'StarchPins' : null;
+            return { before: b, after: a, group };
+        }
+
+        async function removeLast(group) {
+            // group ∈ PosPins / HghtPins / StarchPins
+            const mn = group === 'PosPins' ? 'ADBE FreePin3 PosPins'
+                : group === 'HghtPins' ? 'ADBE FreePin3 HghtPins'
+                : 'ADBE FreePin3 StarchPins';
+            const code = [
+                'var t=null;for(var i=1;i<=app.project.numItems;i++){var it=app.project.item(i); if(it.id==' + compId + '){t=it;break;}}',
+                'if(!t) return {err:"no_comp"};',
+                'var L=t.layer(' + layerIndex + ');',
+                'var fx=L.property("ADBE Effect Parade").property("ADBE FreePin3");',
+                'var g=fx.property("ADBE FreePin3 ARAP Group").property("ADBE FreePin3 Mesh Group").property(1).property("' + mn + '");',
+                'if(g && g.numProperties>=1){g.property(g.numProperties).remove(); return {removed:true};}',
+                'return {removed:false};'
+            ].join('');
+            try { return await evalJSXJson(code); } catch (e) { return { error: String(e) }; }
+        }
+
+        const trail = [];
+        // Pass 0: try without Ctrl+P first — maybe user is already on PosPin.
+        for (let cycle = 0; cycle <= maxRot; cycle++) {
+            const r = await probeOnce();
+            trail.push({ cycle, probe: r });
+            if (r.error) return { ok: false, error: r.error, trail };
+            if (r.group === 'PosPins') {
+                // Clean up probe pin
+                await removeLast('PosPins');
+                return { ok: true, tool: 'position_pin', cycles: cycle, trail };
+            }
+            if (r.group) {
+                // Wrong puppet sub-tool — clean up + rotate
+                await removeLast(r.group);
+            }
+            if (cycle === maxRot) break;
+            // Rotate Ctrl+P (activates puppet from non-puppet; cycles within puppet)
+            await sendKeySequence(parseCombo('Ctrl+P'), { betweenMs: 20 });
+            await new Promise(r => setTimeout(r, 180));
+        }
+        return { ok: false, reason: 'max_rotations', trail };
+    }
+
     const ROUTES = {
         'GET /health':        function () { return handleHealth(); },
         'GET /logs':          function (req) { return handleLogs(req); },
@@ -979,6 +1111,7 @@
         'GET /ae-rect':       function () { return handleAERect(); },
         'GET /enum-ae-windows': function () { return handleEnumAE(); },
         'POST /ensure-viewer':function (req, body) { return handleEnsureViewer(body); },
+        'POST /ensure-puppet-position-tool': function (req, body) { return handleEnsurePuppetPositionTool(body); },
         'POST /place-pin':    function (req, body) { return handlePlacePin(body); },
         'POST /begin-session':function (req, body) { return handleBeginSession(body); },
         'POST /end-session':  function () { return handleEndSession(); },

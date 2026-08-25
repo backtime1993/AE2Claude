@@ -2,11 +2,11 @@
 <ExtensionManifest
     Version="6.0"
     ExtensionBundleId="com.kensei.ae2claude.pinclicker"
-    ExtensionBundleVersion="0.1.0"
+    ExtensionBundleVersion="0.6.0"
     ExtensionBundleName="AE2ClaudePinClicker"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
     <ExtensionList>
-        <Extension Id="com.kensei.ae2claude.pinclicker.main" Version="0.1.0" />
+        <Extension Id="com.kensei.ae2claude.pinclicker.main" Version="0.6.0" />
     </ExtensionList>
     <ExecutionEnvironment>
         <HostList>

@@ -250,15 +250,20 @@ class PinPlacer:
         self.read_zoom()
         return r
 
-    def center_layer_via_diff(self, layer_info, desired_zoom=None, coverage=0.4):
-        """Purely geometric center-layer routine, no seed pin needed.
+    def center_layer_via_diff(self, layer_info, desired_zoom="auto", coverage=0.5):
+        """Purely geometric center-layer + zoom-to-comfortable routine.
 
-        1. Pick a zoom that makes the layer visibly small but not too small —
-           default: `coverage * min(viewer dims) / max(layer dims)`.
-        2. Write that zoom via ExtendScript.
-        3. Diff screenshot to locate where the layer currently sits on screen.
-        4. pan_delta = viewer_center - layer_screen_center (middle-drag).
-        5. Diff again as sanity check.
+        Order matters: PAN first (using current zoom so layer is findable
+        via diff), THEN zoom — AE anchors zoom on the viewer centre, so
+        after pan centres the layer, raising zoom keeps the layer centred
+        while making it big enough to comfortably place pins on.
+
+        Steps:
+          1. Locate layer screen position via enable/disable diff (current zoom).
+          2. pan_delta = viewer_center - layer_screen_center (middle-drag).
+          3. Re-diff to confirm layer now near viewer centre; compute residual.
+          4. If desired_zoom='auto', zoom so layer max dim = coverage * viewer short.
+          5. Set zoom via JSX (viewer-centre anchored, layer stays centred).
         """
         if self.viewer_rect is None:
             # Best-effort: locate viewer via AE window centre.
@@ -524,13 +529,15 @@ class PinPlacer:
         # Snapshot every layer's enabled state, then force ALL non-target
         # layers off so AE's viewer renders only the target — independent of
         # the viewer Solo switch.
+        # Save BOTH enabled AND solo because setting enabled=true after
+        # enabled=false silently resets solo=false in AE 26.x.
         snap = self.jsx(
             f'var t=null;for(var i=1;i<=app.project.numItems;i++){{var it=app.project.item(i); if(it.id=={self.comp_id}){{t=it;break;}}}}'
             'var s=[];'
-            f'for(var k=1;k<=t.numLayers;k++){{var L=t.layer(k); s.push({{i:k,e:L.enabled}}); L.enabled=(k=={self.layer_index});}}'
+            f'for(var k=1;k<=t.numLayers;k++){{var L=t.layer(k); s.push({{i:k,e:L.enabled,so:L.solo}}); L.enabled=(k=={self.layer_index});}}'
             'return s;'
         )
-        time.sleep(1.2)
+        time.sleep(0.35)
         img_a_pil = ImageGrab.grab(all_screens=True)
         img_a_pil.save(r"F:\claude\projects\原画skill制作\_diag_diff_a.png")
         img_a = np.asarray(img_a_pil, dtype=np.int16)
@@ -540,16 +547,16 @@ class PinPlacer:
             f'var t=null;for(var i=1;i<=app.project.numItems;i++){{var it=app.project.item(i); if(it.id=={self.comp_id}){{t=it;break;}}}}'
             f't.layer({self.layer_index}).enabled=false; return true;'
         )
-        time.sleep(1.2)
+        time.sleep(0.35)
         img_b_pil = ImageGrab.grab(all_screens=True)
         img_b_pil.save(r"F:\claude\projects\原画skill制作\_diag_diff_b.png")
         img_b = np.asarray(img_b_pil, dtype=np.int16)
 
-        # Restore every layer's original enabled state.
+        # Restore every layer's original enabled AND solo state.
         snap_json = json.dumps(snap)
         self.jsx(
             f'var t=null;for(var i=1;i<=app.project.numItems;i++){{var it=app.project.item(i); if(it.id=={self.comp_id}){{t=it;break;}}}}'
-            f'var s={snap_json};for(var j=0;j<s.length;j++){{t.layer(s[j].i).enabled=s[j].e;}}'
+            f'var s={snap_json};for(var j=0;j<s.length;j++){{var L=t.layer(s[j].i); L.enabled=s[j].e; if(s[j].so) L.solo=true;}}'
             'return true;'
         )
 
@@ -803,3 +810,645 @@ class PinPlacer:
             "r"
         )
         return self._ae_py(py)
+
+    # ---- v2 API (fast, one-liner-friendly) -------------------------------
+
+    def load_layer_meta(self):
+        """One JSX call: fetch position, anchor, scale, width, height, solo,
+        and 'has_puppet' so the rest of the pipeline can compute src<->comp
+        transforms analytically. Cached in self.layer_meta."""
+        if self.comp_id is None or self.layer_index is None:
+            raise CEPError("call ensure_target first")
+        code = (
+            f'var t=null;for(var i=1;i<=app.project.numItems;i++){{var it=app.project.item(i); if(it.id=={self.comp_id}){{t=it;break;}}}}'
+            'if(!t) return {err:"no_comp"};'
+            f'var L=t.layer({self.layer_index});'
+            'var tr=L.property("ADBE Transform Group");'
+            'var p=tr.property("ADBE Position").value;'
+            'var a=tr.property("ADBE Anchor Point").value;'
+            'var s=tr.property("ADBE Scale").value;'
+            'var src=L.source;'
+            'var w=src?src.width:0; var h=src?src.height:0;'
+            'var solo=false; try{solo=L.solo;}catch(_){}'
+            'var hasFx=false; try{var ep=L.property("ADBE Effect Parade"); for(var k=1;k<=ep.numProperties;k++){if(ep.property(k).matchName=="ADBE FreePin3"){hasFx=true;break;}}}catch(_){}'
+            'return {name:L.name,position:[p[0],p[1]],anchor:[a[0],a[1]],scale:[s[0],s[1]],width:w,height:h,solo:solo,has_puppet:hasFx};'
+        )
+        m = self.jsx(code)
+        if m.get("err"):
+            raise CEPError(f"load_layer_meta: {m['err']}")
+        self.layer_meta = m
+        return m
+
+    def comp_to_layer_src(self, cx, cy):
+        """Convert comp coordinate to layer-source coordinate (what Puppet
+        pin Position values use). Requires load_layer_meta first. Ignores
+        layer rotation (rare for 2D PSD pipelines)."""
+        m = self.layer_meta
+        sx = m["scale"][0] / 100.0
+        sy = m["scale"][1] / 100.0
+        return m["anchor"][0] + (cx - m["position"][0]) / sx, \
+               m["anchor"][1] + (cy - m["position"][1]) / sy
+
+    def layer_src_to_comp(self, sx, sy):
+        m = self.layer_meta
+        scx = m["scale"][0] / 100.0
+        scy = m["scale"][1] / 100.0
+        return m["position"][0] + (sx - m["anchor"][0]) * scx, \
+               m["position"][1] + (sy - m["anchor"][1]) * scy
+
+    def place_at_layer_src(self, sx: float, sy: float, retries: int = 1, inset_dir=None):
+        """Place a PosPin at LAYER SOURCE coords (x, y). This is what the
+        Puppet pin's Position property actually stores. Synonym for the
+        legacy place_at_comp — use this when you mean source coords."""
+        return self.place_at_comp(sx, sy, retries=retries, inset_dir=inset_dir)
+
+    def place_at_comp_true(self, cx: float, cy: float, retries: int = 1, inset_dir=None):
+        """Place a PosPin at COMP coords. Converts to layer-source via the
+        layer's pos/anchor/scale (load_layer_meta required) before placing."""
+        if getattr(self, "layer_meta", None) is None:
+            self.load_layer_meta()
+        src_x, src_y = self.comp_to_layer_src(cx, cy)
+        r = self.place_at_comp(src_x, src_y, retries=retries, inset_dir=inset_dir)
+        r["target_comp_true"] = [cx, cy]
+        r["target_src"] = [src_x, src_y]
+        if r.get("placed") and "actual_comp" in r:
+            acx, acy = self.layer_src_to_comp(*r["actual_comp"])
+            r["actual_comp_true"] = [acx, acy]
+        return r
+
+    def ensure_puppet_position_tool_fast(self, max_rotations: int = 5, probe_point=None):
+        """Delegate to CEP /ensure-puppet-position-tool. Pass probe_point
+        (screen x,y) on an opaque alpha pixel of the target layer — falling
+        back to preferred_seed_point, then the layer's viewer-screen centre
+        (via diff if needed). Falls back to the local probe loop if the
+        endpoint is absent."""
+        if probe_point is None:
+            probe_point = self.preferred_seed_point
+        if probe_point is None:
+            d = self.find_layer_on_screen_via_diff(alpha_thresh=25)
+            probe_point = d["center"]
+            self.preferred_seed_point = probe_point
+        payload = {"comp_id": self.comp_id, "layer_index": self.layer_index,
+                   "max_rotations": max_rotations,
+                   "probe_x": int(probe_point[0]), "probe_y": int(probe_point[1])}
+        try:
+            r = self._post("/ensure-puppet-position-tool", payload)
+            if r.get("ok"):
+                return r
+            raise CEPError(f"ensure-puppet-position-tool: {r}")
+        except CEPError as e:
+            if "404" not in str(e):
+                raise
+            return self.ensure_pospin_tool(max_rotations=max_rotations,
+                                           probe_point=probe_point)
+
+    def zoom_around_center(self, target_zoom: float, tol: float = 0.1, max_steps: int = 12):
+        """Step AE viewer zoom via CTRL+= / CTRL+- (anchored on viewer
+        canvas centre). Loops one keystroke at a time, reading zoom after
+        each, until within `tol` of target OR one more step would overshoot.
+
+        AE's CTRL+= sequence is non-uniform (mixes 2x and sqrt(2) steps
+        depending on zoom range) so we can't analytically predict steps —
+        measure-and-iterate is the only reliable approach.
+        """
+        self.read_zoom()
+        if self.zoom is None or self.zoom <= 0:
+            raise CEPError("zoom read failed")
+        if target_zoom <= 0:
+            raise CEPError(f"bad target_zoom {target_zoom}")
+        if abs(self.zoom / target_zoom - 1) <= tol:
+            return self.zoom, 0
+        zoom_in = target_zoom > self.zoom
+        combo = "CTRL+EQUALS" if zoom_in else "CTRL+MINUS"
+        self._post("/focus-ae"); time.sleep(0.08)
+        steps = 0
+        prev = self.zoom
+        while steps < max_steps:
+            if zoom_in and self.zoom >= target_zoom: break
+            if (not zoom_in) and self.zoom <= target_zoom: break
+            self._post("/press-key", {"hotkey": combo, "pre_focus": False})
+            time.sleep(0.1)
+            self.zoom = None
+            self.read_zoom()
+            steps += 1
+            if self.zoom == prev:  # stuck (AE ignored the key)
+                break
+            # Check if next step would overshoot the target past doubling worth
+            if zoom_in and self.zoom >= target_zoom:
+                # If overshoot is bigger than undershoot-before, step back one
+                overshoot = self.zoom / target_zoom - 1
+                undershoot = 1 - prev / target_zoom
+                if overshoot > undershoot and undershoot > 0:
+                    self._post("/press-key", {"hotkey": "CTRL+MINUS", "pre_focus": False})
+                    time.sleep(0.1)
+                    self.zoom = None; self.read_zoom()
+                break
+            if (not zoom_in) and self.zoom <= target_zoom:
+                break
+            prev = self.zoom
+        return self.zoom, (steps if zoom_in else -steps)
+
+    def _resolve_viewer_rect(self):
+        if getattr(self, "viewer_rect", None):
+            return self.viewer_rect
+        ae = self.ae_window_rect()
+        if ae.get("error"):
+            raise CEPError(f"ae_window_rect: {ae}")
+        vr = self.find_viewer_rect((ae["center_x"], ae["center_y"]))
+        if not vr:
+            raise CEPError("cannot locate Composition viewer panel")
+        self.viewer_rect = vr
+        return vr
+
+    def _pan_delta_damped(self, lx, ly, vcx, vcy, damping):
+        dx = int(round((vcx - lx) * damping))
+        dy = int(round((vcy - ly) * damping))
+        if dx == 0 and dy == 0:
+            dx = 1 if (vcx - lx) > 0 else (-1 if (vcx - lx) < 0 else 0)
+            dy = 1 if (vcy - ly) > 0 else (-1 if (vcy - ly) < 0 else 0)
+        return dx, dy
+
+    def center_layer_fast_v2(self, coverage: float = 0.55,
+                              pan_tol: int = 10, fallback_low_zoom: float = 0.25):
+        """Fast 2-3 step centering + zoom. Flow:
+          1) One diff at current zoom. If clipped/invisible → reset to low zoom, retry.
+          2) One middle-drag pan (damping=1.0).
+          3) One verify diff + optional one corrective pan (damping=0.6).
+          4) Analytic CTRL+= step count to target zoom.
+          5) One verify diff at new zoom + optional one corrective pan.
+
+        Max ≈ 4 diffs + 3 pans + zoom-step keystrokes ≈ 5-6 seconds."""
+        import math, time
+        vr = self._resolve_viewer_rect()
+        vcx = (vr["left"] + vr["right"]) / 2.0
+        vcy = (vr["top"] + vr["bottom"]) / 2.0
+        out = {"phases": []}
+
+        def _diff_safe():
+            try:
+                d = self.find_layer_on_screen_via_diff(alpha_thresh=25)
+                return d["center"][0], d["center"][1], d["bbox"]["w"], d["bbox"]["h"], None
+            except CEPError as e:
+                return None, None, None, None, str(e)
+
+        lx, ly, bw, bh, err = _diff_safe()
+        if err:
+            self.set_viewer_zoom(fallback_low_zoom); time.sleep(0.3); self.read_zoom()
+            lx, ly, bw, bh, err = _diff_safe()
+            if err:
+                raise CEPError(f"center_layer_fast_v2: layer invisible even at low zoom: {err}")
+        out["phases"].append({"stage": "diff0", "layer": [lx, ly], "bbox": [bw, bh]})
+
+        # Single full-delta pan
+        dx, dy = self._pan_delta_damped(lx, ly, vcx, vcy, 1.0)
+        self.pan_viewer_middle(dx, dy); time.sleep(0.3)
+        out["phases"].append({"stage": "pan1", "drag": [dx, dy]})
+
+        # Verify + one corrective pan if needed
+        lx, ly, bw, bh, err = _diff_safe()
+        if err is None:
+            rx, ry = lx - int(vcx), ly - int(vcy)
+            out["phases"].append({"stage": "diff1", "layer": [lx, ly], "res": [rx, ry]})
+            if abs(rx) > pan_tol or abs(ry) > pan_tol:
+                dx, dy = self._pan_delta_damped(lx, ly, vcx, vcy, 0.6)
+                self.pan_viewer_middle(dx, dy); time.sleep(0.3)
+                out["phases"].append({"stage": "pan2", "drag": [dx, dy]})
+
+        # Compute target zoom from source dims if known
+        self.read_zoom()
+        if getattr(self, "layer_meta", None) is None:
+            try: self.load_layer_meta()
+            except Exception: pass
+        short_v = min(vr["w"], vr["h"])
+        if self.layer_meta and self.layer_meta["width"]:
+            sx = self.layer_meta["scale"][0] / 100.0
+            sy = self.layer_meta["scale"][1] / 100.0
+            long_src = max(self.layer_meta["width"] * sx, self.layer_meta["height"] * sy)
+        else:
+            long_src = max(bw or 100, bh or 100) / self.zoom
+        target_zoom = max(0.05, min((coverage * short_v) / long_src, 16.0))
+        out["target_zoom"] = target_zoom
+        new_zoom, steps = self.zoom_around_center(target_zoom)
+        out["zoom_steps"] = steps; out["zoom_after_step"] = new_zoom
+
+        # Final pan at new zoom
+        lx, ly, bw, bh, err = _diff_safe()
+        if err is None:
+            rx, ry = lx - int(vcx), ly - int(vcy)
+            out["phases"].append({"stage": "diffZ", "layer": [lx, ly], "res": [rx, ry]})
+            if abs(rx) > pan_tol or abs(ry) > pan_tol:
+                dx, dy = self._pan_delta_damped(lx, ly, vcx, vcy, 0.7)
+                self.pan_viewer_middle(dx, dy); time.sleep(0.3)
+                out["phases"].append({"stage": "panZ", "drag": [dx, dy]})
+                lx, ly, bw, bh, err = _diff_safe()
+        out["residual"] = [lx - int(vcx), ly - int(vcy)] if err is None else None
+        out["final_zoom"] = self.zoom
+        return out
+
+    def center_layer_fast(self, coverage: float = 0.55, low_zoom: float = 0.25,
+                           pan_tol: int = 6, max_passes: int = 5, damping: float = 0.7):
+        """One-call centre-and-zoom:
+          1. JSX-set zoom LOW so the layer is visible (no clipping).
+          2. Iterative middle-drag pan to centre (damped, tol = pan_tol).
+          3. CTRL+= step zoom to target coverage (layer long dim / viewer short).
+          4. Final corrective pan pass.
+
+        Returns a dict with phases and the final residual."""
+        vr = self._resolve_viewer_rect()
+        vcx = (vr["left"] + vr["right"]) / 2.0
+        vcy = (vr["top"] + vr["bottom"]) / 2.0
+        out = {"phases": []}
+
+        self.set_viewer_zoom(low_zoom); time.sleep(0.3); self.read_zoom()
+
+        def _diff():
+            d = self.find_layer_on_screen_via_diff(alpha_thresh=25)
+            return d["center"][0], d["center"][1], d["bbox"]["w"], d["bbox"]["h"]
+
+        # Pan at low zoom
+        for p in range(max_passes):
+            lx, ly, bw, bh = _diff()
+            rx, ry = lx - int(vcx), ly - int(vcy)
+            out["phases"].append({"stage": "pan_lo", "pass": p, "res": [rx, ry], "bbox": [bw, bh]})
+            if abs(rx) <= pan_tol and abs(ry) <= pan_tol:
+                break
+            dx = int(round((vcx - lx) * damping))
+            dy = int(round((vcy - ly) * damping))
+            if dx == 0 and dy == 0:
+                dx = 1 if rx < 0 else (-1 if rx > 0 else 0)
+                dy = 1 if ry < 0 else (-1 if ry > 0 else 0)
+            self.pan_viewer_middle(dx, dy); time.sleep(0.35)
+
+        # Target zoom from source dims (preferred) or observed bbox (fallback)
+        if getattr(self, "layer_meta", None) is None:
+            try: self.load_layer_meta()
+            except Exception: pass
+        short_v = min(vr["w"], vr["h"])
+        if self.layer_meta and self.layer_meta["width"] and self.layer_meta["height"]:
+            sx = self.layer_meta["scale"][0] / 100.0
+            sy = self.layer_meta["scale"][1] / 100.0
+            long_src = max(self.layer_meta["width"] * sx, self.layer_meta["height"] * sy)
+        else:
+            long_src = max(bw, bh) / self.zoom
+        target_zoom = max(0.05, min((coverage * short_v) / long_src, 16.0))
+        out["target_zoom"] = target_zoom
+
+        new_zoom, steps = self.zoom_around_center(target_zoom)
+        out["zoom_steps"] = steps
+        out["zoom_after_step"] = new_zoom
+
+        # Corrective pan at new zoom
+        for p in range(max_passes):
+            lx, ly, bw, bh = _diff()
+            rx, ry = lx - int(vcx), ly - int(vcy)
+            out["phases"].append({"stage": "pan_hi", "pass": p, "res": [rx, ry], "bbox": [bw, bh]})
+            if abs(rx) <= pan_tol and abs(ry) <= pan_tol:
+                break
+            dx = int(round((vcx - lx) * damping))
+            dy = int(round((vcy - ly) * damping))
+            if dx == 0 and dy == 0:
+                dx = 1 if rx < 0 else (-1 if rx > 0 else 0)
+                dy = 1 if ry < 0 else (-1 if ry > 0 else 0)
+            self.pan_viewer_middle(dx, dy); time.sleep(0.3)
+
+        out["residual"] = [lx - int(vcx), ly - int(vcy)]
+        out["final_zoom"] = self.zoom
+        return out
+
+    # ---- Analytic affine (no calibrate-click) ---------------------------
+
+    def set_affine_from_centered_layer(self, layer_screen_centre=None):
+        """Set self.tx, self.ty, self.zoom analytically. If
+        `layer_screen_centre` is given, use it as the screen position of the
+        layer's anchor. Otherwise run ONE diff to locate the layer and use
+        that centre (more accurate than assuming viewer centre).
+
+        Affine: `screen = (tx, ty) + src * zoom`. Only matches layer-source
+        coords when layer scale ≈ 100%. For scaled layers, use calibrate().
+        """
+        if getattr(self, "layer_meta", None) is None:
+            self.load_layer_meta()
+        self.read_zoom()
+        sx = self.layer_meta["scale"][0] / 100.0
+        sy = self.layer_meta["scale"][1] / 100.0
+        if abs(sx - 1) > 0.01 or abs(sy - 1) > 0.01:
+            raise CEPError(f"scale {sx},{sy} != 1.0 — analytic affine not safe; use calibrate()")
+        if layer_screen_centre is None:
+            d = self.find_layer_on_screen_via_diff(alpha_thresh=25)
+            layer_screen_centre = d["center"]
+        lsx, lsy = layer_screen_centre
+        # The layer anchor is the point that maps to layer.position (comp),
+        # which is where AE's diff centroid lands (approximately — diff gives
+        # the alpha centroid, not the anchor. For symmetric layers they
+        # coincide; for asymmetric layers the diff centroid may differ from
+        # the anchor by a few src pixels, which is still far better than the
+        # 10-130px viewer-centre assumption).
+        self.tx = lsx - self.layer_meta["anchor"][0] * self.zoom
+        self.ty = lsy - self.layer_meta["anchor"][1] * self.zoom
+        self.viewer_rect = self._resolve_viewer_rect()
+        return {"tx": self.tx, "ty": self.ty, "zoom": self.zoom,
+                "layer_screen_centre": [int(lsx), int(lsy)]}
+
+    # ---- Alpha medial-line skeleton (real hair骨架) --------------------
+
+    def _grab_viewer_np(self, pad: int = 30):
+        """Screenshot the viewer panel as numpy (H,W,3). Returns (arr, vr)."""
+        from PIL import ImageGrab
+        import numpy as np, ctypes
+        try: ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            try: ctypes.windll.user32.SetProcessDPIAware()
+            except Exception: pass
+        vr = self._resolve_viewer_rect()
+        u = ctypes.windll.user32
+        vx0, vy0 = u.GetSystemMetrics(76), u.GetSystemMetrics(77)
+        img = ImageGrab.grab(all_screens=True)
+        arr = np.asarray(img, dtype=np.uint8)
+        crop = arr[max(0, vr["top"]-vy0+pad):vr["bottom"]-vy0-pad,
+                   max(0, vr["left"]-vx0+pad):vr["right"]-vx0-pad]
+        return crop, vr, pad, vx0, vy0
+
+    def _resample_arclength(self, points, n):
+        import math
+        if n < 2: return list(points[:n])
+        if len(points) < 2: return [tuple(points[0])] * n if points else []
+        lens = [0.0]
+        for i in range(1, len(points)):
+            dx = points[i][0] - points[i-1][0]
+            dy = points[i][1] - points[i-1][1]
+            lens.append(lens[-1] + math.hypot(dx, dy))
+        total = lens[-1]
+        if total <= 1e-6: return [tuple(points[0])] * n
+        out = []
+        for i in range(n):
+            t = (i / (n - 1)) * total
+            j = 1
+            while j < len(lens) and lens[j] < t: j += 1
+            if j >= len(lens): out.append(tuple(points[-1])); continue
+            seg = lens[j] - lens[j-1]
+            frac = (t - lens[j-1]) / seg if seg > 0 else 0
+            x = points[j-1][0] + (points[j][0] - points[j-1][0]) * frac
+            y = points[j-1][1] + (points[j][1] - points[j-1][1]) * frac
+            out.append((x, y))
+        return out
+
+    def skeleton_chain_medial(self, count: int = 4, root: str = "top",
+                                slice_step: int = 4, bg_thresh: int = 20,
+                                edge_shrink: float = 0.04):
+        """Compute N pin positions along the layer's ALPHA MEDIAL LINE.
+
+        Requires: layer soloed + screen→src affine set (via
+        set_affine_from_centered_layer or calibrate).
+
+        Uses the affine to crop the screenshot to the layer's expected
+        bbox + small margin (in screen coords), avoiding AE UI elements
+        that would otherwise count as "non-black" pixels.
+
+        `edge_shrink` trims a fraction of the measured span from each end
+        of the LONG axis so pin 0 and pin N-1 sit inside the alpha body,
+        not right on the edge where pins are unstable.
+        """
+        import numpy as np
+        from PIL import ImageGrab
+        import ctypes
+        if self.tx is None or self.zoom is None:
+            raise CEPError("set_affine_from_centered_layer() or calibrate() first")
+        if getattr(self, "layer_meta", None) is None:
+            self.load_layer_meta()
+        m = self.layer_meta
+        w_src, h_src = m["width"], m["height"]
+
+        try: ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            try: ctypes.windll.user32.SetProcessDPIAware()
+            except Exception: pass
+        u = ctypes.windll.user32
+        vx0, vy0 = u.GetSystemMetrics(76), u.GetSystemMetrics(77)
+
+        # Expected layer bbox in screen coords via the affine
+        # screen = (tx, ty) + src * zoom
+        sl = int(self.tx)
+        st = int(self.ty)
+        sr = int(self.tx + w_src * self.zoom)
+        sb = int(self.ty + h_src * self.zoom)
+        margin = max(6, int(round(self.zoom * 2)))  # few src-pixels worth
+        vr = self._resolve_viewer_rect()
+        # Clamp to viewer panel so UI chrome never enters the crop
+        ui_pad_top = 50     # AE composition viewer title/tab strip
+        ui_pad_bot = 55     # bottom zoom/time controls
+        ui_pad_h = 20
+        c_l = max(vr["left"] + ui_pad_h, sl - margin)
+        c_t = max(vr["top"] + ui_pad_top, st - margin)
+        c_r = min(vr["right"] - ui_pad_h, sr + margin)
+        c_b = min(vr["bottom"] - ui_pad_bot, sb + margin)
+        if c_r - c_l < 4 or c_b - c_t < 4:
+            raise CEPError(f"computed layer bbox too small or outside viewer: {c_l},{c_t}-{c_r},{c_b}")
+
+        img = ImageGrab.grab(all_screens=True)
+        arr = np.asarray(img, dtype=np.uint8)
+        crop = arr[c_t - vy0:c_b - vy0, c_l - vx0:c_r - vx0]
+        if crop.size == 0:
+            raise CEPError("crop empty")
+        lum = crop.max(axis=2).astype(np.uint8)
+        mask = lum > bg_thresh
+        if not mask.any():
+            raise CEPError("no layer pixels in crop (bg_thresh too high or layer not soloed)")
+
+        long_axis = "y" if root in ("top", "bottom") else "x"
+        centerline = []  # list of (screen_x, screen_y), virtual-desktop coords
+        if long_axis == "y":
+            H = mask.shape[0]
+            # find first/last row with enough layer pixels
+            row_counts = mask.sum(axis=1)
+            occupied = np.where(row_counts > 2)[0]
+            if len(occupied) < 2:
+                raise CEPError(f"too few populated rows: {len(occupied)}")
+            y0_px, y1_px = int(occupied[0]), int(occupied[-1])
+            span = y1_px - y0_px
+            y_start = y0_px + int(span * edge_shrink)
+            y_end = y1_px - int(span * edge_shrink)
+            for y in range(y_start, y_end + 1, slice_step):
+                xs = np.where(mask[y])[0]
+                if len(xs) < 3: continue
+                cx = float(xs.mean())
+                centerline.append((c_l + cx, c_t + y))
+        else:
+            W = mask.shape[1]
+            col_counts = mask.sum(axis=0)
+            occupied = np.where(col_counts > 2)[0]
+            if len(occupied) < 2:
+                raise CEPError(f"too few populated cols: {len(occupied)}")
+            x0_px, x1_px = int(occupied[0]), int(occupied[-1])
+            span = x1_px - x0_px
+            x_start = x0_px + int(span * edge_shrink)
+            x_end = x1_px - int(span * edge_shrink)
+            for x in range(x_start, x_end + 1, slice_step):
+                ys = np.where(mask[:, x])[0]
+                if len(ys) < 3: continue
+                cy = float(ys.mean())
+                centerline.append((c_l + x, c_t + cy))
+
+        if len(centerline) < 2:
+            raise CEPError(f"centerline too short ({len(centerline)} samples)")
+
+        if root in ("bottom", "right"):
+            centerline = list(reversed(centerline))
+
+        samples = self._resample_arclength(centerline, count)
+        # Clamp src coords to layer bounds (guard against affine residual)
+        chain = []
+        for i, (scr_x, scr_y) in enumerate(samples):
+            src_x = (scr_x - self.tx) / self.zoom
+            src_y = (scr_y - self.ty) / self.zoom
+            src_x = max(1.0, min(src_x, w_src - 1.0))
+            src_y = max(1.0, min(src_y, h_src - 1.0))
+            chain.append({
+                "src": [round(src_x, 1), round(src_y, 1)],
+                "screen": [int(scr_x), int(scr_y)],
+                "kind": "starch" if i == 0 else "pos",
+                "t": round(i / (count - 1), 3),
+            })
+        return chain
+
+    # ---- Skeleton chain + adaptive pipeline -----------------------------
+
+    def skeleton_chain(self, count: int = 4, root: str = "top", edge_inset: float = 0.08):
+        """Straight-centerline chain as a geometry-only fallback (no zig-zag).
+        Prefer `skeleton_chain_medial` for curved / non-symmetric layers — it
+        reads the actual alpha medial line from a viewer screenshot.
+
+        Returns: [{src:[x,y], kind:"starch"|"pos", t:float}, ...]
+        Pin 0 = root end (starch), pin N-1 = tip end."""
+        if getattr(self, "layer_meta", None) is None:
+            self.load_layer_meta()
+        m = self.layer_meta
+        w, h = m["width"], m["height"]
+        count = max(2, int(count))
+        if root in ("top", "bottom"):
+            cross_mid = w / 2.0
+            a = edge_inset * h
+            b = (1 - edge_inset) * h
+            pts = [(cross_mid, a + t * (b - a)) for t in [i/(count-1) for i in range(count)]]
+            if root == "bottom": pts = [(x, h - y) for (x, y) in pts]
+        elif root in ("left", "right"):
+            cross_mid = h / 2.0
+            a = edge_inset * w
+            b = (1 - edge_inset) * w
+            pts = [(a + t * (b - a), cross_mid) for t in [i/(count-1) for i in range(count)]]
+            if root == "right": pts = [(w - x, y) for (x, y) in pts]
+        else:
+            raise CEPError(f"unknown root: {root}")
+        return [{"src": [round(x, 1), round(y, 1)],
+                 "kind": "starch" if i == 0 else "pos",
+                 "t": round(i/(count-1), 3)} for i, (x, y) in enumerate(pts)]
+
+    # (zig-zag removed: straight-centerline chain. medial-line version is
+    # `skeleton_chain_medial`, preferred for curved hair / non-symmetric shapes.)
+
+    def adaptive_pin(self, coverage: float = 0.55, count: int = 4,
+                     root: str = "top", center_first: bool = True,
+                     ensure_tool: bool = True, starch_type: int = 3,
+                     solo: bool = True, use_medial: bool = True,
+                     skeleton_slice_step: int = 4):
+        """One-call adaptive pipeline:
+          1. Solo the layer (optional).
+          2. Load layer meta (position/anchor/scale/w/h).
+          3. center_layer_fast (pan + zoom to comfortable coverage).
+          4. ensure_puppet_position_tool (Ctrl+P cycle until PosPins).
+          5. Calibrate from a probe placed at the root pin (saves a click).
+          6. Place remaining chain pins at layer-source coords.
+          7. Optionally coerce pin 0 Type = 3 (Starch-equivalent "固定"
+             behaviour: Type 3 = Advanced with 刚度 high). For a real
+             Starch pin use starch_type=None and the caller should place
+             a separate Starch pin via Ctrl+P cycling — AE stores those
+             in a different group.
+        """
+        self.load_layer_meta()
+        if solo:
+            self.jsx(
+                f'var t=null;for(var i=1;i<=app.project.numItems;i++){{var it=app.project.item(i); if(it.id=={self.comp_id}){{t=it;break;}}}}'
+                f'if(t){{t.layer({self.layer_index}).solo=true;}} 1;'
+            )
+        result = {"meta": self.layer_meta, "pins": [], "center": None, "chain": []}
+
+        if center_first:
+            result["center"] = self.center_layer_fast_v2(coverage=coverage)
+
+        if ensure_tool:
+            vr = self._resolve_viewer_rect()
+            probe = (int((vr["left"] + vr["right"]) / 2),
+                     int((vr["top"] + vr["bottom"]) / 2))
+            self.preferred_seed_point = probe
+            result["ensure_tool"] = self.ensure_puppet_position_tool_fast(probe_point=probe)
+
+        # Analytic affine — skip the calibrate seed-click. Assumes centered
+        # layer (true after center_layer_fast_v2) and scale=100% (common for
+        # PSD layers). Falls back to calibrate() for scaled layers.
+        try:
+            result["affine"] = self.set_affine_from_centered_layer()
+        except CEPError:
+            try:
+                d = self.find_layer_on_screen_via_diff(alpha_thresh=25)
+                self.preferred_seed_point = d.get("center")
+                self.preferred_seed_bbox = {
+                    "x": d.get("x"),
+                    "y": d.get("y"),
+                    "w": d.get("w"),
+                    "h": d.get("h"),
+                }
+            except Exception as e:
+                result["seed_point_error"] = str(e)
+            self.read_zoom()
+            calib = self.calibrate()
+            result["affine"] = {"calibrated": True, "tx": calib["tx"], "ty": calib["ty"]}
+
+        # Build chain: prefer alpha medial line; fall back to straight centerline
+        chain = None
+        if use_medial:
+            try:
+                chain = self.skeleton_chain_medial(count=count, root=root,
+                                                     slice_step=skeleton_slice_step)
+                result["chain_source"] = "medial"
+            except Exception as e:
+                result["medial_error"] = str(e)
+        if chain is None:
+            chain = self.skeleton_chain(count=count, root=root)
+            result["chain_source"] = "straight"
+        result["chain"] = chain
+
+        placed = []
+        for i, p in enumerate(chain):
+            r = self.place_at_layer_src(*p["src"])
+            p_out = {"i": i, "target_src": p["src"], "kind": p["kind"]}
+            if r.get("placed"):
+                p_out["actual_src"] = r["actual_comp"]
+                p_out["err"] = r.get("err_comp")
+                p_out["vtx"] = r.get("vtx_index")
+                p_out["pin_index"] = r.get("pin_index")
+            else:
+                p_out["placed"] = False
+                p_out["reason"] = r.get("reason")
+            placed.append(p_out)
+        result["pins"] = placed
+
+        # Coerce root pin type for "固定" behaviour
+        if starch_type and placed and placed[0].get("actual_src"):
+            rx, ry = chain[0]["src"]
+            code = (
+                f'var t=null;for(var i=1;i<=app.project.numItems;i++){{var it=app.project.item(i); if(it.id=={self.comp_id}){{t=it;break;}}}}'
+                f'var L=t.layer({self.layer_index});'
+                'var fx=L.property("ADBE Effect Parade").property("ADBE FreePin3");'
+                'var pins=fx.property("ADBE FreePin3 ARAP Group").property("ADBE FreePin3 Mesh Group").property(1).property("ADBE FreePin3 PosPins");'
+                f'var rx={rx},ry={ry},best=-1,bestD=1e9;'
+                'for(var p=1;p<=pins.numProperties;p++){'
+                '  var v=pins.property(p).property("ADBE FreePin3 PosPin Position").value;'
+                '  var dx=v[0]-rx,dy=v[1]-ry,d=dx*dx+dy*dy;'
+                '  if(d<bestD){bestD=d;best=p;}'
+                '}'
+                f'var tp=pins.property(best).property("ADBE FreePin3 PosPin Type");'
+                f'var before=tp.value; var err=null; try{{tp.setValue({starch_type});}}catch(e){{err=String(e);}}'
+                'return {prop:best,before:before,after:tp.value,err:err};'
+            )
+            result["root_type_coerce"] = self.jsx(code)
+
+        return result

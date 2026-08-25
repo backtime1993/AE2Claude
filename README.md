@@ -1,5 +1,7 @@
 # AE2Claude PinClicker
 
+Current compatibility baseline: PinClicker 0.6.0 with After Effects Beta 27.0.
+
 ## Endpoints (listen on `127.0.0.1:8891`)
 
 | Method | Path | Purpose |
@@ -11,7 +13,8 @@
 | POST | `/begin-session` | Snapshot active item / selection / solo / enabled / time / tool |
 | POST | `/end-session` | Restore snapshot |
 
-Higher level `/place-pin` + viewer↔screen mapping land in v0.2.
+`/place-pin`, viewer↔screen mapping, session restore, and version-independent
+`AE_CApplication*` window discovery are available in v0.6.
 
 ## Why this exists
 
