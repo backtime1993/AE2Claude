@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import os
 import unittest
 
 from mcp import ClientSession, StdioServerParameters
@@ -32,6 +33,25 @@ class MCPProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "ae_revert",
             }.issubset(names)
         )
+
+    @unittest.skipUnless(
+        os.environ.get("AE2CLAUDE_LIVE_TEST") == "1",
+        "set AE2CLAUDE_LIVE_TEST=1 with AE running",
+    )
+    async def test_stdio_server_reaches_live_ae27(self) -> None:
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "ae2claude_mcp.server"],
+        )
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                response = await session.call_tool("ae_ping")
+        payload = response.structuredContent
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["serverVersion"], "4.2.0")
+        self.assertTrue(payload["bridge"]["connected"], payload["bridge"])
+        self.assertTrue(str(payload["bridge"]["aeVersion"]).startswith("27."))
 
 
 if __name__ == "__main__":

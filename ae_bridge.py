@@ -28,7 +28,7 @@ import urllib.request
 import urllib.error
 from typing import Optional, List, Dict, Any, Tuple, Union
 
-__version__ = "3.0.0"
+__version__ = "4.2.0"
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║              EFFECT MATCHNAME REGISTRY                  ║
@@ -368,7 +368,7 @@ TRACK_MATTE_TYPES = {
 
 class AEBridge:
     """
-    AE2Claude Bridge v3.0 - Atomic API for After Effects.
+    AE2Claude Bridge v4.2.0 - Atomic API for After Effects.
 
     Design principles:
     - One method = one AE logical action (no fat methods)
@@ -398,6 +398,7 @@ class AEBridge:
         self.port = port
         self.timeout = timeout
         self._base_url = f"http://127.0.0.1:{port}"
+        self.health = {}
         self._dismiss_thread = None
         self._dismiss_running = False
 
@@ -424,6 +425,13 @@ class AEBridge:
                 data = json.loads(resp.read())
                 if data.get('status') != 'ok':
                     raise ConnectionError("PyShiftAE health check failed")
+                self.health = data
+                server_version = str(data.get('bridge_version') or '')
+                if server_version and server_version.split('.', 1)[0] != __version__.split('.', 1)[0]:
+                    raise ConnectionError(
+                        f"AE2Claude major version mismatch: client={__version__}, "
+                        f"server={server_version}"
+                    )
         except (urllib.error.URLError, OSError) as e:
             raise ConnectionError(
                 f"Cannot connect to PyShiftAE on port {self.port}. "

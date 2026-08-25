@@ -3,6 +3,8 @@
 让 AI 操控 After Effects 的原生插件。通过 MCP、终端命令或 Python
 代码直接创建图层、设关键帧、加效果、预览和渲染。
 
+当前兼容基线：AE2Claude 4.2.0、After Effects Beta 27.0、Python 3.12。
+
 ## 它能做什么
 
 - 在终端输入命令，AE 就会执行对应操作
@@ -16,10 +18,16 @@
 
 ### 安装
 
-1. 关闭 After Effects
-2. 双击运行 `deploy.bat`（会自动找到你的 AE 安装位置）
+1. 关闭需要更新的 After Effects
+2. 先构建 `build\Release\AE2Claude.aex`，再运行 `deploy.bat`（默认同步当前或 Beta；也可传入完整 AE 产品名）
 3. 确保 AE 目录里有 `python312.dll`（从 Python 3.12 安装目录复制）
 4. 启动 After Effects
+
+只核验所有受支持安装、不写入：
+
+```powershell
+pwsh -File tools\sync-installation.ps1 -Mode Verify -AllSupported
+```
 
 ### MCP 接入（推荐）
 
@@ -178,7 +186,7 @@ with AEBridge() as ae:
 
 | 文件 | 干什么的 |
 |------|----------|
-| `AE2Claude.aex` | AE 插件本体（装到 AE 插件目录） |
+| `build/Release/AE2Claude.aex` | 当前源码构建出的 AE 插件本体（部署来源） |
 | `ae2claude_server.py` | 插件内部的通信服务器 |
 | `ae_bridge.py` | Python API（当前 119 个公开方法） |
 | `ae2claude` | 终端命令行工具 |
@@ -189,11 +197,13 @@ with AEBridge() as ae:
 | `scripts/` | 48 个已登记 JSX 脚本工具 |
 | `presets/` | 自定义 AE 预设 |
 | `deploy.bat` | 一键安装脚本 |
+| `extensions/pin-clicker/` | 与主工程同版本管理的 Puppet Pin 精确点击端点 |
+| `tools/` | 初始化、安装同步、自动拉齐、定向清理和压力测试 |
 | `test_v3.py` | 自动化测试（73 项） |
 
 ## 从源码构建（可选）
 
-普通用户不需要构建——直接用 `deploy.bat` 安装预编译的插件即可。
+`deploy.bat` 只部署 `build/Release/AE2Claude.aex`，避免误装仓库根目录里的旧二进制。
 
 如果你想修改 C++ 插件源码，需要：
 
@@ -221,7 +231,7 @@ python test_v3.py    # 73 项测试，需要 AE 正在运行
 ## 环境要求
 
 - Windows 10/11 (x64)
-- After Effects 2023 / 2024 / 2025 / Beta
+- After Effects 2023 / 2024 / 2025 / Beta 27.0（当前实机基线）
 - Python 3.12（`python312.dll` 放到 AE 目录）
 - MCP Python SDK `>=1.27,<2` 与 Pillow（由 `uv sync` 自动安装）
 

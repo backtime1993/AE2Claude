@@ -6,12 +6,18 @@ __pycache__/
 .mypy_cache/
 *.egg-info/
 /dist/
-/docs/
+/artifacts/
+/state/
 
 # Local Adobe SDK links/junctions used for Windows builds.
 /Headers/
 /Resources/
 /Util/
+/vendor/after-effects-sdk/
+
+# Local JavaScript dependencies for bundled CEP extensions.
+/extensions/pin-clicker/node_modules/
+/extensions/pin-clicker/logs/
 
 # Visual Studio and local build outputs.
 /build/
