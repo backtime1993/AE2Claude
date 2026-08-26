@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ae_bridge import AEBridge, JSXExecutionError
+
 from . import __version__
 from .agent_runtime import execute_batch
 from .capabilities import capabilities
@@ -64,6 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="live bridge, project, and comp status")
+
+    recover = sub.add_parser("recover-modal", help="close a blocking AE script-error dialog")
+    recover.add_argument("--confirm", action="store_true")
 
     cap = sub.add_parser("capabilities", aliases=["methods"], help="search operation schemas")
     cap.add_argument("query", nargs="?", default="")
@@ -142,6 +147,10 @@ def dispatch(args: argparse.Namespace) -> Any:
             args.method, args.args, args.kwargs, confirm=args.confirm
         )
         return {"ok": True, "method": args.method, "result": result}
+    if args.command == "recover-modal":
+        require_enabled()
+        authorize("write", confirm=args.confirm)
+        return AEBridge.dismiss_blocking_script_dialog(confirm=args.confirm)
 
     require_enabled()
     with bridge() as ae:
@@ -197,6 +206,9 @@ def main() -> None:
     except (ConnectionError, TimeoutError) as exc:
         _emit({"ok": False, "error": str(exc), "kind": "connection"}, args.format)
         raise SystemExit(3) from exc
+    except JSXExecutionError as exc:
+        _emit(exc.payload, args.format)
+        raise SystemExit(4) from exc
     except Exception as exc:
         _emit({"ok": False, "error": str(exc), "kind": "operation"}, args.format)
         raise SystemExit(4) from exc

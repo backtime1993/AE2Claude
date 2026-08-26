@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from ae_bridge import AEBridge
+from ae_bridge import AEBridge, JSXExecutionError, _wrap_jsx_for_structured_errors
 from ae2claude_mcp.catalog import (
     load_script_registry,
     prepare_script,
@@ -56,7 +56,30 @@ class RuntimeTests(unittest.TestCase):
                 set_enabled(False)
                 self.assertFalse(is_enabled())
                 set_enabled(True)
-                self.assertTrue(is_enabled())
+            self.assertTrue(is_enabled())
+
+
+class JSXGuardTests(unittest.TestCase):
+    def test_wrapper_json_encodes_source_and_returns_structured_fields(self) -> None:
+        source = 'var name="含引号";\nthrow new Error(name);'
+        wrapped = _wrap_jsx_for_structured_errors(source)
+        self.assertIn("return eval(" + json.dumps(source, ensure_ascii=True) + ")", wrapped)
+        self.assertIn("__ae2claude_error__", wrapped)
+        self.assertIn("fileName", wrapped)
+        self.assertIn("line", wrapped)
+
+    def test_jsx_execution_error_is_machine_readable(self) -> None:
+        payload = {"ok": False, "kind": "jsx", "error": "probe", "line": 7}
+        error = JSXExecutionError(payload)
+        self.assertEqual(error.payload, payload)
+        self.assertEqual(json.loads(str(error)), payload)
+
+    def test_list_layers_guards_an_empty_project(self) -> None:
+        ae = AEBridge.__new__(AEBridge)
+        ae.run_jsx = Mock(return_value="[]")  # type: ignore[method-assign]
+        self.assertEqual(ae.list_layers(), [])
+        code = ae.run_jsx.call_args.args[0]
+        self.assertIn("if(!c || !(c instanceof CompItem))return \"[]\"", code)
 
 
 class CheckpointStoreTests(unittest.TestCase):

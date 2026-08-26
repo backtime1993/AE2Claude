@@ -20,6 +20,7 @@ Built-in:
   ae2claude scripts                      list all user scripts
   ae2claude unprecomp                    un-precompose selected layer (auto OK)
   ae2claude snapshot [path]              save current frame as PNG
+  ae2claude recover-modal --confirm      close a blocking AE script-error dialog
   ae2claude methods                      list all bridge methods
   ae2claude pin <subcmd>                 Puppet pin workflows (adapt/center/place/skeleton/tool/clean/pins/meta/snap)
   ae2claude help                         this help
@@ -469,7 +470,25 @@ def main():
 
     if cmd == "jsx":
         code = " ".join(args[1:]) if len(args) > 1 else sys.stdin.read()
-        r = req("/jsx", code)
+        try:
+            result = _get_bridge().run_jsx(code)
+        except Exception as exc:
+            payload = getattr(exc, "payload", None)
+            if not isinstance(payload, dict):
+                payload = {"ok": False, "kind": "operation", "error": str(exc)}
+            print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
+            sys.exit(1)
+        if result:
+            print(result)
+        return
+    elif cmd == "recover-modal":
+        if "--confirm" not in args[1:]:
+            print(json.dumps({"ok": False, "error": "--confirm required"}, ensure_ascii=False), file=sys.stderr)
+            sys.exit(1)
+        sys.path.insert(0, _BRIDGE_DIR)
+        from ae_bridge import AEBridge
+        print(json.dumps(AEBridge.dismiss_blocking_script_dialog(confirm=True), ensure_ascii=False))
+        return
     elif cmd == "py":
         code = " ".join(args[1:]) if len(args) > 1 else sys.stdin.read()
         r = req("/", code)

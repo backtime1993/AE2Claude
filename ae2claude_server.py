@@ -13,6 +13,21 @@ from pathlib import Path
 _AE_PORT = 8089
 _AE_PIPE = r"\\.\pipe\PyShiftAEBridge"
 BRIDGE_VERSION = "4.3.0"
+_JSX_ERROR_KEY = "__ae2claude_error__"
+
+
+def _wrap_jsx_for_structured_errors(code):
+    source = json.dumps(str(code), ensure_ascii=True)
+    return (
+        '(function(){try{return eval(' + source + ');}'
+        'catch(__ae2e){return JSON.stringify({'
+        '__ae2claude_error__:String(__ae2e),'
+        'name:(__ae2e&&__ae2e.name)?String(__ae2e.name):null,'
+        'line:(__ae2e&&__ae2e.line)?Number(__ae2e.line):null,'
+        'fileName:(__ae2e&&__ae2e.fileName)?String(__ae2e.fileName):null,'
+        'stack:(__ae2e&&__ae2e.stack)?String(__ae2e.stack):null'
+        '});}})();'
+    )
 
 try:
     import PyShiftCore as psc
@@ -155,12 +170,28 @@ def _execute_jsx(script):
     try:
         if not app or not hasattr(app, "executeScript"):
             return {"ok": False, "error": "executeScript not available"}
-        result = app.executeScript(script)
-        # Check for in-band error from C++ layer
-        if isinstance(result, str) and result.startswith('{"__jsx_error__":'):
-            import json as _j
-            err_obj = _j.loads(result)
-            return {"ok": False, "error": err_obj.get("__jsx_error__", result)}
+        result = app.executeScript(_wrap_jsx_for_structured_errors(script))
+        if isinstance(result, str) and result.startswith("{"):
+            try:
+                err_obj = json.loads(result)
+            except json.JSONDecodeError:
+                err_obj = None
+            if isinstance(err_obj, dict) and _JSX_ERROR_KEY in err_obj:
+                response = {
+                    "ok": False,
+                    "kind": "jsx",
+                    "error": err_obj.get(_JSX_ERROR_KEY, "Unknown JSX error"),
+                }
+                for key in ("name", "line", "fileName", "stack"):
+                    if err_obj.get(key) is not None:
+                        response[key] = err_obj[key]
+                return response
+            if isinstance(err_obj, dict) and "__jsx_error__" in err_obj:
+                return {
+                    "ok": False,
+                    "kind": "jsx-native",
+                    "error": err_obj.get("__jsx_error__", result),
+                }
         return {"ok": True, "result": result}
     except Exception:
         return {"ok": False, "error": traceback.format_exc()}

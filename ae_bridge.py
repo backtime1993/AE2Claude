@@ -30,6 +30,31 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 
 __version__ = "4.3.0"
 
+_JSX_ERROR_KEY = "__ae2claude_error__"
+
+
+def _wrap_jsx_for_structured_errors(code: str) -> str:
+    """Keep ExtendScript failures inside eval so AE returns JSON instead of a modal."""
+    source = json.dumps(str(code), ensure_ascii=True)
+    return (
+        '(function(){try{return eval(' + source + ');}'
+        'catch(__ae2e){return JSON.stringify({'
+        '__ae2claude_error__:String(__ae2e),'
+        'name:(__ae2e&&__ae2e.name)?String(__ae2e.name):null,'
+        'line:(__ae2e&&__ae2e.line)?Number(__ae2e.line):null,'
+        'fileName:(__ae2e&&__ae2e.fileName)?String(__ae2e.fileName):null,'
+        'stack:(__ae2e&&__ae2e.stack)?String(__ae2e.stack):null'
+        '});}})();'
+    )
+
+
+class JSXExecutionError(RuntimeError):
+    """Machine-readable ExtendScript failure returned by the AE bridge."""
+
+    def __init__(self, payload: Dict[str, Any]):
+        self.payload = payload
+        super().__init__(json.dumps(payload, ensure_ascii=False, default=str))
+
 # ╔══════════════════════════════════════════════════════════╗
 # ║              EFFECT MATCHNAME REGISTRY                  ║
 # ╠══════════════════════════════════════════════════════════╣
@@ -401,6 +426,7 @@ class AEBridge:
         self.health = {}
         self._dismiss_thread = None
         self._dismiss_running = False
+        self.last_jsx_error = None
 
         # 验证连接
         self._check_connection()
@@ -449,6 +475,51 @@ class AEBridge:
 
     # ── Core JSX Executor ──────────────────────────────────
 
+    @staticmethod
+    def _pin_request(path: str, payload: dict = None, timeout: float = 0.5) -> dict:
+        data = None
+        headers = {}
+        if payload is not None:
+            data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+            headers['Content-Type'] = 'application/json'
+        req = urllib.request.Request(
+            f'http://127.0.0.1:8891{path}', data=data, headers=headers
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+
+    def _arm_script_dialog_watchdog(self, timeout_ms: int) -> Optional[str]:
+        request_id = f'{threading.get_ident()}-{time.time_ns()}'
+        try:
+            self._pin_request(
+                '/arm-script-dialog-watchdog',
+                {
+                    'request_id': request_id,
+                    'timeout_ms': max(1000, min(120000, int(timeout_ms))),
+                },
+            )
+            return request_id
+        except Exception:
+            return None
+
+    def _script_dialog_watchdog_status(self, request_id: Optional[str]) -> Optional[dict]:
+        if not request_id:
+            return None
+        try:
+            status = self._pin_request('/script-dialog-watchdog-status')
+        except Exception:
+            return None
+        return status if status.get('request_id') == request_id else None
+
+    @staticmethod
+    def dismiss_blocking_script_dialog(confirm: bool = False) -> dict:
+        """Close only an AE #32770 script dialog through the independent CEP helper."""
+        if not confirm:
+            raise PermissionError('confirm=true required')
+        return AEBridge._pin_request(
+            '/dismiss-script-dialog', {'confirm': True}, timeout=3.0
+        )
+
     def run_jsx(self, code: str, timeout: int = 60000) -> str:
         """
         通过 PyShiftAE AEGP_ExecuteScript 执行 ExtendScript 代码。
@@ -464,6 +535,7 @@ class AEBridge:
             RuntimeError: 脚本执行出错
             ConnectionError: PyShiftAE 服务器不可达
         """
+        request_id = self._arm_script_dialog_watchdog(timeout)
         data = code.encode('utf-8')
         req = urllib.request.Request(
             f'{self._base_url}/jsx',
@@ -474,12 +546,33 @@ class AEBridge:
             with urllib.request.urlopen(req, timeout=max(timeout / 1000, 5)) as resp:
                 r = json.loads(resp.read())
         except (urllib.error.URLError, OSError) as e:
-            raise ConnectionError(f"PyShiftAE request failed: {e}")
+            recovery = self._script_dialog_watchdog_status(request_id)
+            payload = {
+                'ok': False,
+                'kind': 'connection',
+                'error': f'PyShiftAE request failed: {e}',
+            }
+            if recovery and recovery.get('dismissed'):
+                payload['modal_recovery'] = recovery
+            self.last_jsx_error = payload
+            raise JSXExecutionError(payload) from e
 
         if r.get('ok'):
+            self.last_jsx_error = None
             return r.get('result', '')
-        error = r.get('error', 'Unknown JSX error')
-        raise RuntimeError(f"JSX error: {error}")
+        payload = {
+            'ok': False,
+            'kind': r.get('kind', 'jsx'),
+            'error': r.get('error', 'Unknown JSX error'),
+        }
+        for key in ('name', 'line', 'fileName', 'stack'):
+            if r.get(key) is not None:
+                payload[key] = r[key]
+        recovery = self._script_dialog_watchdog_status(request_id)
+        if recovery and recovery.get('dismissed'):
+            payload['modal_recovery'] = recovery
+        self.last_jsx_error = payload
+        raise JSXExecutionError(payload)
 
     def run_jsx_checked(self, code: str, timeout: int = 60000,
                          expect: str = None) -> str:
@@ -637,11 +730,12 @@ class AEBridge:
     def list_layers(self) -> List[dict]:
         """列出当前合成所有图层"""
         r = self.run_jsx(
-            'var c=app.project.activeItem;var out=[];'
+            '(function(){var c=app.project.activeItem;'
+            'if(!c || !(c instanceof CompItem))return "[]";var out=[];'
             'for(var i=1;i<=c.numLayers;i++){'
             'var l=c.layer(i);out.push({id:l.id,index:i,name:l.name,'
             'startTime:l.startTime,outPoint:l.outPoint,label:l.label});}'
-            'JSON.stringify(out);'
+            'return JSON.stringify(out);})()'
         )
         try:
             return json.loads(r)

@@ -95,6 +95,8 @@
     let sendKeySequence = null;
     let focusAEWindow = null;
     let enumerateAEWindows = null;
+    let enumerateAETopWindows = null;
+    let dismissAEScriptDialogs = null;
     let getAEWindowRect = null;
     let mouseLoadError = null;
 
@@ -125,6 +127,9 @@
             const IsIconic = user32.func('int32 IsIconic(void*)');
             const GetClassNameA = user32.func('int32 GetClassNameA(void*, _Out_ char*, int32)');
             const GetWindowTextA = user32.func('int32 GetWindowTextA(void*, _Out_ char*, int32)');
+            const GetWindowTextW = user32.func('int32 GetWindowTextW(void*, _Out_ uint16_t*, int32)');
+            const GetWindowThreadProcessId = user32.func('uint32 GetWindowThreadProcessId(void*, _Out_ uint32*)');
+            const PostMessageW = user32.func('int32 PostMessageW(void*, uint32, uint64, int64)');
             const RECT = koffi.struct('RECT', { left: 'int32', top: 'int32', right: 'int32', bottom: 'int32' });
             const GetWindowRect = user32.func('int32 GetWindowRect(void*, _Out_ RECT*)');
             const IsWindowVisible = user32.func('int32 IsWindowVisible(void*)');
@@ -179,6 +184,106 @@
                 });
                 return matches.length ? matches[0] : null;
             }
+
+            function hwndString(hwnd) {
+                try { return '0x' + koffi.address(hwnd).toString(16); }
+                catch (_) { return '?'; }
+            }
+
+            function windowPid(hwnd) {
+                const pidBuf = Buffer.alloc(4);
+                GetWindowThreadProcessId(hwnd, pidBuf);
+                return pidBuf.readUInt32LE(0);
+            }
+
+            function windowTextW(hwnd) {
+                const textBuf = Buffer.alloc(4096);
+                const n = GetWindowTextW(hwnd, textBuf, 2047);
+                return n > 0 ? textBuf.toString('utf16le', 0, n * 2) : '';
+            }
+
+            enumerateAETopWindows = function () {
+                const aeWindow = findAEHwnd();
+                if (!aeWindow) return { error: 'AE window not found', discovery: 'EnumWindows:AE_CApplication*' };
+                const aePid = windowPid(aeWindow.hwnd);
+                const aeHwnd = hwndString(aeWindow.hwnd);
+                const rows = [];
+                const cb = koffi.register(function (hwnd, lparam) {
+                    if (windowPid(hwnd) !== aePid) return 1;
+                    const classBuf = Buffer.alloc(256);
+                    let cls = '';
+                    try {
+                        const n = GetClassNameA(hwnd, classBuf, 255);
+                        cls = classBuf.toString('utf8', 0, Math.max(0, n));
+                    } catch (_) {}
+                    const rect = { left: 0, top: 0, right: 0, bottom: 0 };
+                    try { GetWindowRect(hwnd, rect); } catch (_) {}
+                    rows.push({
+                        hwnd: hwndString(hwnd),
+                        cls: cls,
+                        text: windowTextW(hwnd),
+                        visible: IsWindowVisible(hwnd) !== 0,
+                        is_main: hwndString(hwnd) === aeHwnd,
+                        rect: {
+                            left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+                            w: rect.right - rect.left, h: rect.bottom - rect.top
+                        }
+                    });
+                    return 1;
+                }, koffi.pointer(EnumWindowsProc));
+                try { EnumWindows(cb, 0); }
+                finally { koffi.unregister(cb); }
+                return { ae_pid: aePid, ae_hwnd: aeHwnd, count: rows.length, rows: rows };
+            };
+
+            dismissAEScriptDialogs = function (baselineHandles) {
+                const aeWindow = findAEHwnd();
+                if (!aeWindow) return { ok: false, error: 'AE window not found', found: 0, dismissed: 0, dialogs: [] };
+                const aePid = windowPid(aeWindow.hwnd);
+                const baseline = baselineHandles || {};
+                const dialogs = [];
+                const cb = koffi.register(function (hwnd, lparam) {
+                    if (windowPid(hwnd) !== aePid || IsWindowVisible(hwnd) === 0) return 1;
+                    const handle = hwndString(hwnd);
+                    if (baseline[handle]) return 1;
+                    const classBuf = Buffer.alloc(256);
+                    let cls = '';
+                    try {
+                        const n = GetClassNameA(hwnd, classBuf, 255);
+                        cls = classBuf.toString('utf8', 0, Math.max(0, n));
+                    } catch (_) {}
+                    if (cls !== '#32770') return 1;
+                    const rect = { left: 0, top: 0, right: 0, bottom: 0 };
+                    try { GetWindowRect(hwnd, rect); } catch (_) {}
+                    dialogs.push({
+                        hwnd: handle,
+                        cls: cls,
+                        text: windowTextW(hwnd),
+                        rect: {
+                            left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+                            w: rect.right - rect.left, h: rect.bottom - rect.top
+                        },
+                        _hwnd: hwnd
+                    });
+                    return 1;
+                }, koffi.pointer(EnumWindowsProc));
+                try { EnumWindows(cb, 0); }
+                finally { koffi.unregister(cb); }
+
+                const WM_COMMAND = 0x0111, WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101;
+                const IDOK = 1, VK_RETURN = 0x0D;
+                let dismissed = 0;
+                dialogs.forEach(function (row) {
+                    try {
+                        PostMessageW(row._hwnd, WM_COMMAND, IDOK, 0);
+                        PostMessageW(row._hwnd, WM_KEYDOWN, VK_RETURN, 0);
+                        PostMessageW(row._hwnd, WM_KEYUP, VK_RETURN, 0);
+                        dismissed += 1;
+                    } catch (err) { row.dismiss_error = String(err); }
+                    delete row._hwnd;
+                });
+                return { ok: true, found: dialogs.length, dismissed: dismissed, dialogs: dialogs };
+            };
 
             // --- Enumerate every descendant HWND of AE main window with class/text/rect/visibility.
             enumerateAEWindows = function () {
@@ -483,6 +588,15 @@
 
     // Session snapshot state
     let session = null;
+    let scriptDialogWatchdogTimer = null;
+    let scriptDialogWatchdog = {
+        armed: false,
+        request_id: null,
+        found: 0,
+        dismissed: 0,
+        dialogs: [],
+        elapsed_ms: null
+    };
 
     async function handleHealth() {
         const v = await aeVersion();
@@ -497,7 +611,8 @@
             keyboard_ready: !!sendKeySequence,
             focus_ready: !!focusAEWindow,
             mouse_error: mouseLoadError,
-            session_active: !!session
+            session_active: !!session,
+            script_dialog_watchdog: scriptDialogWatchdog
         };
     }
 
@@ -747,6 +862,70 @@
         initMouse();
         if (!enumerateAEWindows) throw new Error('enum_unavailable:' + mouseLoadError);
         return enumerateAEWindows();
+    }
+
+    async function handleEnumAETop() {
+        initMouse();
+        if (!enumerateAETopWindows) throw new Error('enum_top_unavailable:' + mouseLoadError);
+        return enumerateAETopWindows();
+    }
+
+    function stopScriptDialogWatchdog() {
+        if (scriptDialogWatchdogTimer) clearInterval(scriptDialogWatchdogTimer);
+        scriptDialogWatchdogTimer = null;
+        scriptDialogWatchdog.armed = false;
+    }
+
+    async function handleArmScriptDialogWatchdog(body) {
+        initMouse();
+        if (!enumerateAETopWindows || !dismissAEScriptDialogs) {
+            throw new Error('script_dialog_watchdog_unavailable:' + mouseLoadError);
+        }
+        stopScriptDialogWatchdog();
+        const timeoutMs = Math.max(1000, Math.min(120000, Number(body && body.timeout_ms) || 30000));
+        const requestId = body && body.request_id ? String(body.request_id) : String(Date.now());
+        const snapshot = enumerateAETopWindows();
+        const baseline = {};
+        (snapshot.rows || []).forEach(function (row) {
+            if (row.visible) baseline[row.hwnd] = true;
+        });
+        const started = Date.now();
+        scriptDialogWatchdog = {
+            armed: true,
+            request_id: requestId,
+            found: 0,
+            dismissed: 0,
+            dialogs: [],
+            elapsed_ms: 0,
+            timeout_ms: timeoutMs
+        };
+        scriptDialogWatchdogTimer = setInterval(function () {
+            const elapsed = Date.now() - started;
+            const result = dismissAEScriptDialogs(baseline);
+            scriptDialogWatchdog.elapsed_ms = elapsed;
+            if (result.found > 0) {
+                scriptDialogWatchdog.found = result.found;
+                scriptDialogWatchdog.dismissed = result.dismissed;
+                scriptDialogWatchdog.dialogs = result.dialogs;
+                scriptDialogWatchdog.armed = false;
+                clearInterval(scriptDialogWatchdogTimer);
+                scriptDialogWatchdogTimer = null;
+            } else if (elapsed >= timeoutMs) {
+                stopScriptDialogWatchdog();
+            }
+        }, 50);
+        return scriptDialogWatchdog;
+    }
+
+    async function handleScriptDialogWatchdogStatus() {
+        return scriptDialogWatchdog;
+    }
+
+    async function handleDismissScriptDialog(body) {
+        if (!body || body.confirm !== true) throw new Error('confirm=true required');
+        initMouse();
+        if (!dismissAEScriptDialogs) throw new Error('dismiss_script_dialog_unavailable:' + mouseLoadError);
+        return dismissAEScriptDialogs({});
     }
 
     async function handleAERect() {
@@ -1110,6 +1289,10 @@
         'POST /focus-ae':     function () { return handleFocusAE(); },
         'GET /ae-rect':       function () { return handleAERect(); },
         'GET /enum-ae-windows': function () { return handleEnumAE(); },
+        'GET /enum-ae-top-windows': function () { return handleEnumAETop(); },
+        'POST /arm-script-dialog-watchdog': function (req, body) { return handleArmScriptDialogWatchdog(body); },
+        'GET /script-dialog-watchdog-status': function () { return handleScriptDialogWatchdogStatus(); },
+        'POST /dismiss-script-dialog': function (req, body) { return handleDismissScriptDialog(body); },
         'POST /ensure-viewer':function (req, body) { return handleEnsureViewer(body); },
         'POST /ensure-puppet-position-tool': function (req, body) { return handleEnsurePuppetPositionTool(body); },
         'POST /place-pin':    function (req, body) { return handlePlacePin(body); },

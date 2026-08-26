@@ -52,6 +52,17 @@ class ProjectGovernanceTests(unittest.TestCase):
         self.assertIn("request_queue_size = 64", server)
         self.assertNotIn("ThreadingHTTPServer", server)
 
+    def test_jsx_errors_are_guarded_and_modal_recovery_is_out_of_process(self) -> None:
+        server = (ROOT / "ae2claude_server.py").read_text(encoding="utf-8")
+        bridge = (ROOT / "ae_bridge.py").read_text(encoding="utf-8")
+        pin = (ROOT / "extensions" / "pin-clicker" / "client" / "main.js").read_text(encoding="utf-8")
+        self.assertIn("_wrap_jsx_for_structured_errors(script)", server)
+        self.assertIn("class JSXExecutionError", bridge)
+        self.assertIn("/arm-script-dialog-watchdog", bridge)
+        self.assertIn("POST /dismiss-script-dialog", pin)
+        self.assertIn("cls !== '#32770'", pin)
+        self.assertIn("setInterval(function ()", pin)
+
     def test_main_thread_wait_supports_bounded_heavy_operations(self) -> None:
         queue = (
             ROOT / "src" / "PyShiftAE" / "CoreSDK" / "MessageQueue.h"

@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ae_bridge import AEBridge
+
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, ImageContent, TextContent
 
@@ -51,6 +53,14 @@ def _connection_status() -> dict[str, Any]:
         }
     except Exception as exc:  # diagnostic boundary
         return {"connected": False, "error": str(exc)}
+
+
+@mcp.tool()
+def ae_recover_script_dialog(confirm: bool = False) -> dict[str, Any]:
+    """Close a blocking AE script-error dialog without foreground UI automation."""
+    require_enabled()
+    authorize("write", confirm=confirm)
+    return AEBridge.dismiss_blocking_script_dialog(confirm=confirm)
 
 
 @mcp.tool()
