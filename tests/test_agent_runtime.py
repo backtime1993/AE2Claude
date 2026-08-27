@@ -173,7 +173,11 @@ class BatchRuntimeTests(unittest.TestCase):
             while task["status"] == "working" and time.time() < deadline:
                 time.sleep(0.01)
                 task = manager.get(task["taskId"])
-        event_names = [call.args[0] for call in emit.call_args_list]
+        event_names = [
+            call.args[0]
+            for call in emit.call_args_list
+            if call.kwargs.get("taskId") == task["taskId"]
+        ]
         self.assertLess(event_names.index("task.created"), event_names.index("task.completed"))
 
 
