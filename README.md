@@ -3,7 +3,7 @@
 让 AI 操控 After Effects 的原生插件。通过 MCP、终端命令或 Python
 代码直接创建图层、设关键帧、加效果、预览和渲染。
 
-当前兼容基线：AE2Claude 4.3.0、After Effects Beta 27.0、Python 3.12。
+当前兼容基线：AE2Claude 4.3.1、After Effects Beta 27.0、Python 3.12。
 
 ## 它能做什么
 

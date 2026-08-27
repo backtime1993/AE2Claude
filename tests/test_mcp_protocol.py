@@ -56,7 +56,7 @@ class MCPProtocolTests(unittest.IsolatedAsyncioTestCase):
                 response = await session.call_tool("ae_ping")
         payload = response.structuredContent
         self.assertIsNotNone(payload)
-        self.assertEqual(payload["serverVersion"], "4.3.0")
+        self.assertEqual(payload["serverVersion"], "4.3.1")
         self.assertTrue(payload["bridge"]["connected"], payload["bridge"])
         self.assertTrue(str(payload["bridge"]["aeVersion"]).startswith("27."))
 

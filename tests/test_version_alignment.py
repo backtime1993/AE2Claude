@@ -24,7 +24,7 @@ class VersionAlignmentTests(unittest.TestCase):
     def test_all_python_surfaces_share_one_version(self) -> None:
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         expected = project["project"]["version"]
-        self.assertEqual(expected, "4.3.0")
+        self.assertEqual(expected, "4.3.1")
         self.assertEqual(mcp_version, expected)
         self.assertEqual(bridge_version, expected)
         self.assertEqual(_constant(ROOT / "ae2claude", "CLI_VERSION"), expected)

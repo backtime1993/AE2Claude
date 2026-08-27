@@ -5,7 +5,7 @@ description: "After Effects Beta workbench for Codex. Use for AE, AE Beta, After
 
 # After Effects Beta Workbench
 
-Use this entry for After Effects work. It combines the preview MCP bundled with After Effects Beta 27 and AE2Claude 4.3. Prefer structured MCP tools; use raw JSX only when neither structured surface covers the operation.
+Use this entry for After Effects work. It combines the preview MCP bundled with After Effects Beta 27 and AE2Claude 4.3.1. Prefer structured MCP tools; use raw JSX only when neither structured surface covers the operation.
 
 ## Primary Route
 

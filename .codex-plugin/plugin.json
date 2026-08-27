@@ -1,6 +1,6 @@
 {
   "name": "ae-workbench",
-  "version": "4.3.0",
+  "version": "4.3.1",
   "description": "在 Codex 中通过 AE2Claude 与 After Effects Beta 内置预览 MCP 双通道控制工程、合成、图层、效果、动画、3D、MOGRT 和渲染。",
   "author": {
     "name": "AE2Claude Project",

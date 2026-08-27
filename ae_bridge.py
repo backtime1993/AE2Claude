@@ -28,7 +28,7 @@ import urllib.request
 import urllib.error
 from typing import Optional, List, Dict, Any, Tuple, Union
 
-__version__ = "4.3.0"
+__version__ = "4.3.1"
 
 _JSX_ERROR_KEY = "__ae2claude_error__"
 
@@ -393,7 +393,7 @@ TRACK_MATTE_TYPES = {
 
 class AEBridge:
     """
-    AE2Claude Bridge v4.3.0 - Agent-native API for After Effects.
+    AE2Claude Bridge v4.3.1 - Agent-native API for After Effects.
 
     Design principles:
     - One method = one AE logical action (no fat methods)
