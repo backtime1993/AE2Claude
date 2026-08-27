@@ -3,7 +3,7 @@ name: ae2claude-bridge
 description: "Use for any After Effects automation via AE2Claude bridge. Trigger on: AE, AE Beta, After Effects, 打开AE, 合成, 图层, 关键帧, 蒙版, 特效, 渲染, 表达式, 偏移, AE2Claude, PyShiftAE, ExtendScript, JSX."
 ---
 
-# AE2Claude Bridge v4.2.0 - After Effects 自动化
+# AE2Claude Bridge v4.3.0 - After Effects 自动化
 
 ## 规则
 

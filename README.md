@@ -29,6 +29,17 @@
 pwsh -File tools\sync-installation.ps1 -Mode Verify -AllSupported
 ```
 
+### Codex 插件（双 MCP）
+
+仓库根目录同时是一个可安装的 Codex 插件。插件会接入两个互补通道：
+
+- AE2Claude MCP：稳定 ID、属性批处理、检查点、后台任务、安全 JSX 与故障恢复
+- After Effects Beta 内置预览 MCP：原生工程检查、合成编辑、动画、3D、MOGRT 与渲染
+
+Codex 插件清单位于 [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json)，
+双通道配置位于 [`.mcp.json`](.mcp.json)。Adobe 内置接口属于 Beta 27
+随应用提供但尚未公开文档化的预览能力；不可用时会继续使用 AE2Claude。
+
 ### MCP 接入（推荐）
 
 在仓库目录安装锁定依赖：
@@ -45,6 +56,7 @@ AEGP 原生桥的 `8089` 端口，不需要额外 CEP 面板。
 MCP 暴露以下核心能力：
 
 - `ae_ping` / `ae_status` / `ae_diagnose`：连接与故障定位
+- `ae_recover_script_dialog`：后台关闭阻塞桥接的 AE 脚本错误框，并返回结构化恢复结果
 - `ae_overview` / `ae_layers` / `ae_methods`：渐进读取工程状态
 - `ae_effects` / `ae_describe_effect`：搜索 AE 实际安装的完整效果库并读取属性结构
 - `ae_add_effect` / `ae_set_effect_property` / `ae_get_effect_property`：按稳定 `matchName` 通用操控效果

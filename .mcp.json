@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "after-effects-preview": {
+      "type": "http",
+      "url": "http://localhost:3100/aftereffects/mcp"
+    },
+    "ae2claude": {
+      "command": "uv",
+      "args": [
+        "run",
+        "ae2claude-mcp"
+      ],
+      "cwd": ".",
+      "env": {
+        "AE2CLAUDE_PORT": "8089",
+        "AE2CLAUDE_APPROVAL_MODE": "auto"
+      }
+    }
+  }
+}

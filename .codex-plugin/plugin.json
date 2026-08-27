@@ -1,0 +1,45 @@
+{
+  "name": "ae-workbench",
+  "version": "4.3.0",
+  "description": "在 Codex 中通过 AE2Claude 与 After Effects Beta 内置预览 MCP 双通道控制工程、合成、图层、效果、动画、3D、MOGRT 和渲染。",
+  "author": {
+    "name": "AE2Claude Project",
+    "url": "https://github.com/backtime1993"
+  },
+  "homepage": "https://github.com/backtime1993/AE2Claude",
+  "repository": "https://github.com/backtime1993/AE2Claude",
+  "license": "AGPL-3.0-only",
+  "keywords": [
+    "after-effects",
+    "after-effects-beta",
+    "ae2claude",
+    "animation",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "After Effects (Beta)",
+    "shortDescription": "通过 AE2Claude 与 AE Beta 内置预览 MCP 双通道控制当前工程。",
+    "longDescription": "将 AE2Claude 的稳定 ID、结构化属性控制、检查点、后台任务、安全 JSX 与故障恢复，同 After Effects Beta 内置预览 MCP 的原生编辑、动画、3D、MOGRT 和渲染能力整合为一个 Codex 插件。",
+    "developerName": "AE2Claude Project",
+    "category": "Creativity",
+    "capabilities": [
+      "工程、合成与图层读取和编辑",
+      "稳定 ID 与 matchName 属性控制",
+      "批处理、后台任务与事件流",
+      "检查点、恢复与结构化 JSX 错误",
+      "原生动画、3D、MOGRT 与渲染"
+    ],
+    "websiteURL": "https://github.com/backtime1993/AE2Claude",
+    "defaultPrompt": [
+      "读取当前 After Effects Beta 工程和活动合成，概括图层结构但不要修改。",
+      "先创建 AEP 检查点，再按我的要求修改合成并预览结果。",
+      "诊断两个 MCP 与 AE Beta 的连接状态，并给出可执行的恢复结果。"
+    ],
+    "brandColor": "#3E64FF",
+    "composerIcon": "./assets/after-effects-beta.png",
+    "logo": "./assets/after-effects-beta.png",
+    "logoDark": "./assets/after-effects-beta.png"
+  }
+}
