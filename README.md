@@ -72,6 +72,26 @@ MCP 暴露以下核心能力：
 - `ae_batch`：跨能力工作流，支持 `$0.field` 结果链；撤销边界遵循各底层方法
 - `ae_submit` / `ae_task` / `ae_cancel` / `ae_events`：后台任务、协作式取消和增量事件流
 
+### MCP 运行边界（2026-09-05 修复）
+
+- `ae_ping` / `ae_status` 的 `ok` 表示已启用、AE 已连接且工程可读取；
+  `serviceReady`、`bridgeReady`、`projectReadable` 分别报告各层状态。
+  AE 关闭时返回 `state=offline`，不会把 MCP 服务启动成功当作工程可用。
+- 批次执行前检查所有步骤的参数名称、必填参数、重复传参及引用顺序。
+  引用只能指向此前步骤；结果字段、数组范围及 AE 对象是否存在仍需运行时确认。
+- 急停开关在每一步执行前检查，关闭后剩余步骤不再执行，即使 `fail_fast=false`。
+  已经进入 AE 的单步操作无法强制中断；返回 `stopReason=disabled` 说明停止原因。
+- `ae_exec` / `ae_run_script` 同步执行最多 120 秒，为连接器默认 180 秒超时留出余量。
+  超过上限的请求在脚本执行和检查点写入之前拒绝；长脚本改用 `ae_submit`：
+
+```json
+{"operations":[{"method":"run_jsx","kwargs":{"code":"/* your script */","timeout":600000}}],"confirm":true}
+```
+
+使用返回的 `taskId` 调用 `ae_task`，建议每 30 秒查询一次。
+后台任务仅在当前 MCP 服务进程内保留，运行期间不要刷新连接器或停止轮询超过其空闲回收时间。
+需要检查点时先单独调用 `ae_checkpoint`。超时不能证明操作未生效，先回读结果再决定是否重试。
+
 安全模式通过 `AE2CLAUDE_APPROVAL_MODE` 控制：
 
 | 模式 | 行为 |

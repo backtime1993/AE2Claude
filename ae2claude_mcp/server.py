@@ -41,18 +41,52 @@ mcp = FastMCP(
 )
 
 
+# Leave headroom below the broker's 180-second default tool deadline.
+# Longer scripts must use ae_submit, which returns a task ID immediately.
+MAX_SYNC_SCRIPT_TIMEOUT_MS = 120_000
+
+
+def _sync_script_timeout(timeout_ms: int) -> int:
+    if timeout_ms > MAX_SYNC_SCRIPT_TIMEOUT_MS:
+        raise ValueError(
+            "Synchronous scripts are limited to 120000 ms. Use ae_submit with "
+            "run_jsx (kwargs: code, timeout) for longer scripts, "
+            "then poll ae_task. Create any checkpoint separately before submitting."
+        )
+    return max(5_000, timeout_ms)
+
+
 def _connection_status() -> dict[str, Any]:
+    status: dict[str, Any] = {"connected": False, "projectReadable": False}
     try:
         with bridge() as ae:
-            version = ae.run_jsx("app.version")
-            project = ae.project_info()
-        return {
-            "connected": True,
-            "aeVersion": version,
-            "project": project,
-        }
-    except Exception as exc:  # diagnostic boundary
-        return {"connected": False, "error": str(exc)}
+            status["aeVersion"] = ae.run_jsx("app.version", timeout=5_000)
+            status["connected"] = True
+            status["project"] = ae.project_info()
+            status["projectReadable"] = True
+    except Exception as exc:  # Keep a live bridge distinct from project read failures.
+        status["error"] = str(exc)
+    return status
+
+
+def _health_status() -> dict[str, Any]:
+    enabled = is_enabled()
+    connection = _connection_status()
+    connected = connection["connected"]
+    readable = connection["projectReadable"]
+    state = ("disabled" if not enabled else "offline" if not connected
+             else "project-unavailable" if not readable else "ready")
+    return {
+        "ok": enabled and connected and readable,
+        "serviceReady": True,
+        "bridgeReady": connected,
+        "projectReadable": readable,
+        "state": state,
+        "serverVersion": __version__,
+        "enabled": enabled,
+        "approvalMode": approval_mode(),
+        "bridge": connection,
+    }
 
 
 @mcp.tool()
@@ -66,26 +100,16 @@ def ae_recover_script_dialog(confirm: bool = False) -> dict[str, Any]:
 @mcp.tool()
 def ae_ping() -> dict[str, Any]:
     """Check MCP safety state and the live native AE bridge connection."""
-    return {
-        "ok": True,
-        "serverVersion": __version__,
-        "enabled": is_enabled(),
-        "approvalMode": approval_mode(),
-        "bridge": _connection_status(),
-    }
+    return _health_status()
 
 
 @mcp.tool()
 def ae_status() -> dict[str, Any]:
     """Return concise MCP, bridge, and checkpoint configuration status."""
     return {
-        "ok": True,
-        "serverVersion": __version__,
-        "enabled": is_enabled(),
-        "approvalMode": approval_mode(),
+        **_health_status(),
         "killSwitchFile": str(kill_switch_path()),
         "methodCount": len(public_bridge_methods()),
-        "bridge": _connection_status(),
     }
 
 
@@ -251,12 +275,12 @@ def ae_run_script(
     timeout_ms: int = 60_000,
     confirm: bool = False,
 ) -> dict[str, Any]:
-    """Run one path-confined registered JSX script under its declared safety level."""
+    """Run a registered JSX script synchronously (max 120 s); use ae_submit for longer work."""
     require_enabled()
     entry = resolve_script(script)
     authorize(entry["risk"], confirm=confirm)
     code = prepare_script(entry, mode)
-    timeout_ms = max(5_000, min(timeout_ms, 600_000))
+    timeout_ms = _sync_script_timeout(timeout_ms)
     with bridge() as ae:
         raw_result = ae.run_jsx(code, timeout=timeout_ms)
     try:
@@ -452,10 +476,10 @@ def ae_exec(
     timeout_ms: int = 60_000,
     confirm: bool = False,
 ) -> dict[str, Any]:
-    """Execute raw ExtendScript. Always treated as destructive and confirm-gated."""
+    """Execute raw ExtendScript synchronously (max 120 s). For longer work use ae_submit with run_jsx. Always confirm-gated."""
     require_enabled()
     authorize("destructive", confirm=confirm)
-    timeout_ms = max(5_000, min(timeout_ms, 600_000))
+    timeout_ms = _sync_script_timeout(timeout_ms)
     with bridge() as ae:
         checkpoint = (
             create_checkpoint(ae, checkpoint_label)

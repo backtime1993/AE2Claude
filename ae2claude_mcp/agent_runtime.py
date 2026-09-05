@@ -14,6 +14,7 @@ from typing import Any
 
 from .capabilities import AGENT_PROTOCOL
 from .runtime import (
+    SafetyError,
     authorize,
     bridge,
     classify_bridge_method,
@@ -102,6 +103,22 @@ def resolve_references(value: Any, results: list[Any]) -> Any:
     return value
 
 
+def _validate_references(value: Any, operation_index: int) -> None:
+    # Field names and array bounds depend on runtime results; ordering does not.
+    if isinstance(value, str):
+        match = _REFERENCE.fullmatch(value)
+        if match and int(match.group(1)) >= operation_index:
+            raise ValueError(
+                f"operation {operation_index} reference {value} must target an earlier operation"
+            )
+    elif isinstance(value, list):
+        for item in value:
+            _validate_references(item, operation_index)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _validate_references(item, operation_index)
+
+
 def _validate_operations(operations: list[dict[str, Any]], confirm: bool) -> list[dict[str, Any]]:
     if not isinstance(operations, list) or not 1 <= len(operations) <= 256:
         raise ValueError("batch must contain 1..256 operations")
@@ -117,6 +134,13 @@ def _validate_operations(operations: list[dict[str, Any]], confirm: bool) -> lis
         kwargs = source.get("kwargs", {})
         if not isinstance(args, list) or not isinstance(kwargs, dict):
             raise ValueError(f"operation {index} args/kwargs have invalid types")
+        member = getattr(__import__("ae_bridge").AEBridge, method)
+        try:
+            inspect.signature(member).bind(None, *args, **kwargs)
+        except TypeError as exc:
+            raise ValueError(f"operation {index} ({method}) has invalid arguments: {exc}") from exc
+        _validate_references(args, index)
+        _validate_references(kwargs, index)
         risk = classify_bridge_method(method)
         authorize(risk, confirm=confirm)
         normalized.append({"method": method, "args": args, "kwargs": kwargs, "risk": risk})
@@ -162,11 +186,19 @@ def execute_batch(
     entries: list[dict[str, Any]] = []
     has_writes = any(item["risk"] != "read" for item in normalized)
     cancelled = False
+    stop_reason = None
 
     with bridge() as ae:
         for index, item in enumerate(normalized):
             if cancel_event and cancel_event.is_set():
                 cancelled = True
+                stop_reason = "cancel-requested"
+                break
+            try:
+                require_enabled()
+            except SafetyError:
+                cancelled = True
+                stop_reason = "disabled"
                 break
             try:
                 args = resolve_references(item["args"], raw_results)
@@ -202,6 +234,7 @@ def execute_batch(
         "requestId": request_id,
         "dryRun": False,
         "cancelled": cancelled,
+        "stopReason": stop_reason,
         "operationCount": len(normalized),
         "completedCount": len(entries),
         "undoMode": "per-operation" if has_writes else "none",
