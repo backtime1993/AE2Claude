@@ -16,18 +16,40 @@ BRIDGE_VERSION = "4.3.1"
 _JSX_ERROR_KEY = "__ae2claude_error__"
 
 
-def _wrap_jsx_for_structured_errors(code):
+def _wrap_jsx_for_structured_errors(code: str) -> str:
+    """Catch parse/runtime errors without relying on ExtendScript's optional JSON."""
     source = json.dumps(str(code), ensure_ascii=True)
-    return (
-        '(function(){try{return eval(' + source + ');}'
-        'catch(__ae2e){return JSON.stringify({'
-        '__ae2claude_error__:String(__ae2e),'
-        'name:(__ae2e&&__ae2e.name)?String(__ae2e.name):null,'
-        'line:(__ae2e&&__ae2e.line)?Number(__ae2e.line):null,'
-        'fileName:(__ae2e&&__ae2e.fileName)?String(__ae2e.fileName):null,'
-        'stack:(__ae2e&&__ae2e.stack)?String(__ae2e.stack):null'
-        '});}})();'
-    )
+    # ES3 only. Keep helpers local and restore dialog handling on every exit.
+    prefix = r'''(function(){
+function __ae2q(v){
+ if(v===null || typeof v==="undefined")return "null";
+ var s=String(v),r='"',i,c,n;
+ for(i=0;i<s.length;i++){
+  c=s.charAt(i);n=s.charCodeAt(i);
+  if(c==='"'||c==='\\')r+='\\'+c;
+  else if(n<32||n===8232||n===8233)r+='\\u'+('0000'+n.toString(16)).slice(-4);
+  else r+=c;
+ }
+ return r+'"';
+}
+function __ae2field(e,k){try{return e && e[k]!=null?String(e[k]):null;}catch(_){return null;}}
+function __ae2line(e){var n=Number(__ae2field(e,"line"));return n>0 && isFinite(n)?String(n):"null";}
+var __ae2quiet=false;
+try{
+ if(typeof app!=="undefined" && app.beginSuppressDialogs){app.beginSuppressDialogs();__ae2quiet=true;}
+'''
+    suffix = r'''
+}catch(__ae2e){
+ var message;try{message=String(__ae2e);}catch(_){message="Unprintable ExtendScript error";}
+ return '{"__ae2claude_error__":'+__ae2q(message)+
+ ',"name":'+__ae2q(__ae2field(__ae2e,"name"))+
+ ',"line":'+__ae2line(__ae2e)+
+ ',"fileName":'+__ae2q(__ae2field(__ae2e,"fileName"))+
+ ',"stack":'+__ae2q(__ae2field(__ae2e,"stack"))+'}';
+}finally{if(__ae2quiet)app.endSuppressDialogs(false);}
+})();'''
+    return prefix + 'return eval(' + source + ');' + suffix
+
 
 try:
     import PyShiftCore as psc
