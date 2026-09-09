@@ -40,7 +40,7 @@ console.log(JSON.stringify({result,events}));"""
             def read(self): return json.dumps({'ok':True,'result':json.dumps({'__ae2claude_error__':'original','name':'Error'})}).encode()
         ae = AEBridge.__new__(AEBridge)
         ae._base_url = 'http://127.0.0.1:8089'
-        with patch.object(ae,'_arm_script_dialog_watchdog',return_value=None), patch('ae_bridge.urllib.request.urlopen',return_value=Response()) as request:
+        with patch.object(ae,'_arm_script_dialog_watchdog',return_value=None), patch('ae_bridge._local_urlopen',return_value=Response()) as request:
             with self.assertRaises(JSXExecutionError) as caught: ae.run_jsx('throw new Error("original")')
             self.assertEqual(caught.exception.payload['error'],'original')
             self.assertIn(b'beginSuppressDialogs',request.call_args.args[0].data)

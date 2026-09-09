@@ -79,8 +79,7 @@ class HealthTests(unittest.TestCase):
     def test_project_failure_does_not_erase_live_connection(self):
         context = Mock()
         ae = Mock()
-        ae.run_jsx.return_value = "27.0"
-        ae.project_info.side_effect = RuntimeError("project unavailable")
+        ae.get_connection_info.return_value = {"connected": True, "aeVersion": "27.0", "projectReadable": False, "error": "project unavailable"}
         context.__enter__ = Mock(return_value=ae)
         context.__exit__ = Mock(return_value=False)
         with patch.object(server, "bridge", return_value=context):

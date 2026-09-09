@@ -26,11 +26,40 @@ import threading
 import subprocess
 import urllib.request
 import urllib.error
+import urllib.parse
+import http.client
 from typing import Optional, List, Dict, Any, Tuple, Union
 
 __version__ = "4.3.1"
 
 _JSX_ERROR_KEY = "__ae2claude_error__"
+
+
+class _NoBridgeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, "Bridge redirect refused", headers, fp)
+
+
+_LOCAL_HTTP = threading.local()
+
+
+def _local_urlopen(request, timeout):
+    """Loopback only, no proxy discovery, redirects, or request replay."""
+    url = urllib.parse.urlsplit(request.full_url)
+    if url.scheme != 'http' or url.hostname != '127.0.0.1':
+        raise ValueError('AE bridge requests must use HTTP loopback')
+    opener = getattr(_LOCAL_HTTP, 'opener', None)
+    if opener is None:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoBridgeRedirect())
+        _LOCAL_HTTP.opener = opener
+    return opener.open(request, timeout=timeout)
+
+
+def _read_bridge_response(response):
+    value = json.loads(response.read())
+    if not isinstance(value, dict):
+        raise ValueError('AE bridge returned a non-object response')
+    return value
 
 
 def _wrap_jsx_for_structured_errors(code: str) -> str:
@@ -467,8 +496,8 @@ class AEBridge:
         """验证 PyShiftAE HTTP 服务器可达"""
         try:
             req = urllib.request.Request(f'{self._base_url}/health')
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read())
+            with _local_urlopen(req, timeout=5) as resp:
+                data = _read_bridge_response(resp)
                 if data.get('status') != 'ok':
                     raise ConnectionError("PyShiftAE health check failed")
                 self.health = data
@@ -478,7 +507,7 @@ class AEBridge:
                         f"AE2Claude major version mismatch: client={__version__}, "
                         f"server={server_version}"
                     )
-        except (urllib.error.URLError, OSError) as e:
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
             raise ConnectionError(
                 f"Cannot connect to PyShiftAE on port {self.port}. "
                 f"Make sure AE is running with PyShiftAE plugin loaded. "
@@ -505,8 +534,8 @@ class AEBridge:
         req = urllib.request.Request(
             f'http://127.0.0.1:8891{path}', data=data, headers=headers
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
+        with _local_urlopen(req, timeout=timeout) as resp:
+            return _read_bridge_response(resp)
 
     def _arm_script_dialog_watchdog(self, timeout_ms: int) -> Optional[str]:
         request_id = f'{threading.get_ident()}-{time.time_ns()}'
@@ -555,6 +584,7 @@ class AEBridge:
             RuntimeError: 脚本执行出错
             ConnectionError: PyShiftAE 服务器不可达
         """
+        started = time.monotonic()
         request_id = self._arm_script_dialog_watchdog(timeout)
         data = _wrap_jsx_for_structured_errors(code).encode('utf-8')
         req = urllib.request.Request(
@@ -563,14 +593,20 @@ class AEBridge:
             headers={'Content-Type': 'text/plain; charset=utf-8'}
         )
         try:
-            with urllib.request.urlopen(req, timeout=max(timeout / 1000, 5)) as resp:
-                r = json.loads(resp.read())
-        except (urllib.error.URLError, OSError) as e:
+            with _local_urlopen(req, timeout=max(timeout / 1000, 5)) as resp:
+                r = _read_bridge_response(resp)
+                if not isinstance(r.get('ok'), bool):
+                    raise ValueError('AE bridge response is missing a boolean ok field')
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
             recovery = self._script_dialog_watchdog_status(request_id)
             payload = {
                 'ok': False,
-                'kind': 'connection',
+                'kind': 'protocol' if isinstance(e, ValueError) else 'connection',
                 'error': f'PyShiftAE request failed: {e}',
+                'outcome': 'unknown',
+                'retrySafe': False,
+                'elapsedMs': round((time.monotonic() - started) * 1000),
+                'hint': 'Read the current project state before retrying; the script may have executed.',
             }
             if recovery and recovery.get('dismissed'):
                 payload['modal_recovery'] = recovery
@@ -731,6 +767,34 @@ class AEBridge:
             return json.loads(r)
         except json.JSONDecodeError:
             return {"raw": r}
+
+    def get_connection_info(self) -> dict:
+        """Read version and project in one bounded, JSON-independent AE call."""
+        started = time.monotonic()
+        raw = self.run_jsx(r"""(function(){
+var lines=[encodeURIComponent(String(app.version)),"0"];
+try {
+ var p=app.project;
+ if(!p)throw new Error("No project available");
+ lines=[lines[0],"1",String(p.numItems),
+        encodeURIComponent(p.file?p.file.fsName:"unsaved"),String(p.dirty)];
+} catch(e) { lines.push(encodeURIComponent(String(e))); }
+return lines.join("\n");
+})();""", timeout=5_000)
+        lines = raw.split("\n")
+        if len(lines) < 2 or lines[1] not in ("0", "1"):
+            raise ValueError("Invalid AE connection snapshot")
+        result = {"connected": True, "aeVersion": urllib.parse.unquote(lines[0]),
+                  "projectReadable": lines[1] == "1", "transport": "http-loopback-direct",
+                  "elapsedMs": round((time.monotonic() - started) * 1000)}
+        if result["projectReadable"]:
+            if len(lines) != 5:
+                raise ValueError("Incomplete AE project snapshot")
+            result["project"] = {"numItems": int(lines[2]), "file": urllib.parse.unquote(lines[3])}
+            result["projectDirty"] = {"true": True, "false": False}.get(lines[4])
+        else:
+            result["error"] = urllib.parse.unquote(lines[2]) if len(lines) > 2 else "Project unavailable"
+        return result
 
     def project_info(self) -> dict:
         """获取项目信息"""
@@ -4214,8 +4278,8 @@ class AEBridge:
             data=data,
             headers={'Content-Type': 'text/plain; charset=utf-8'}
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            r = json.loads(resp.read())
+        with _local_urlopen(req, timeout=timeout) as resp:
+            r = _read_bridge_response(resp)
         if r.get("ok"):
             val = r.get("result", "")
             if isinstance(val, str):

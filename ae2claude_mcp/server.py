@@ -60,10 +60,7 @@ def _connection_status() -> dict[str, Any]:
     status: dict[str, Any] = {"connected": False, "projectReadable": False}
     try:
         with bridge() as ae:
-            status["aeVersion"] = ae.run_jsx("app.version", timeout=5_000)
-            status["connected"] = True
-            status["project"] = ae.project_info()
-            status["projectReadable"] = True
+            status.update(ae.get_connection_info())
     except Exception as exc:  # Keep a live bridge distinct from project read failures.
         status["error"] = str(exc)
     return status
