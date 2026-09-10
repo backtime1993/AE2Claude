@@ -17,6 +17,8 @@ from .agent_runtime import EVENTS, JOBS, execute_batch
 from .capabilities import capabilities
 from .checkpoints import create_checkpoint, list_checkpoints, revert_checkpoint
 from .previews import render_preview
+from .frame_review import capture_frames, compare_frames, inline_png
+from . import script_library
 from .runtime import (
     approval_mode,
     authorize,
@@ -35,7 +37,11 @@ mcp = FastMCP(
     instructions=(
         "Drive the currently running Adobe After Effects instance through the "
         "native AE2Claude bridge. Inspect before mutating, preview visual work, "
-        "and create a checkpoint before risky multi-step edits."
+        "and create a checkpoint before risky multi-step edits. Use ae_preview_frames "
+        "for timeline contact sheets and ae_compare_frames for stored before/after "
+        "pixel differences. Successful explicit JSX calls leave unverified candidates; "
+        "use ae_script_library to inspect/promote them, and ae_replay_script to replay "
+        "exact code after checking project-specific assumptions."
     ),
     json_response=True,
 )
@@ -291,6 +297,7 @@ def ae_run_script(
         "risk": entry["risk"],
         "mode": mode,
         "result": result,
+        "capture": script_library.capture_success(code, result, "ae_run_script"),
     }
 
 
@@ -458,12 +465,16 @@ def ae_call(
 ) -> dict[str, Any]:
     """Call any public AEBridge method; destructive calls require confirmation."""
     result = call_bridge_method(method, args, kwargs, confirm=confirm)
-    return {
+    response = {
         "ok": True,
         "method": method,
         "risk": classify_bridge_method(method),
         "result": result,
     }
+    captured = script_library.capture_method(method, args or [], kwargs or {}, result)
+    if captured is not None:
+        response["capture"] = captured
+    return response
 
 
 @mcp.tool()
@@ -484,7 +495,75 @@ def ae_exec(
             else None
         )
         result = ae.run_jsx(code, timeout=timeout_ms)
-    return {"ok": True, "checkpoint": checkpoint, "result": result}
+    return {"ok": True, "checkpoint": checkpoint, "result": result,
+            "capture": script_library.capture_success(code, result)}
+
+
+def _review_result(metadata: dict[str, Any], paths: list[str]) -> CallToolResult:
+    content = [TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False))]
+    for path in paths:
+        content.append(ImageContent(type="image", data=base64.b64encode(inline_png(path)).decode("ascii"), mimeType="image/png"))
+    return CallToolResult(content=content, structuredContent=metadata)
+
+
+@mcp.tool(structured_output=False)
+def ae_preview_frames(
+    times: list[float] | None = None, start: float | None = None,
+    end: float | None = None, count: int = 6,
+    max_width: int = 1600, grid_max_side: int = 1600,
+) -> CallToolResult:
+    """Capture 1-16 active-comp frames, or sample start/end/count; return labeled grid and persistent capture ID. Heavy comps: request fewer frames per call."""
+    require_enabled()
+    with bridge() as ae:
+        result = capture_frames(ae, times=times, start=start, end=end, count=count,
+                                max_width=max_width, grid_max_side=grid_max_side)
+    return _review_result(result, [result["grid"]["path"]])
+
+
+@mcp.tool(structured_output=False)
+def ae_compare_frames(capture_a: str, index_a: int, capture_b: str, index_b: int,
+                      threshold: int = 8) -> CallToolResult:
+    """Compare two captured frames (zero-based indices). Return A/B, red difference map and 8-bit preview-pixel metrics; refuse changed files or mismatched dimensions."""
+    require_enabled()
+    result = compare_frames(capture_a, index_a, capture_b, index_b, threshold)
+    return _review_result(result, [result["sideBySide"]["path"], result["diff"]["path"]])
+
+
+@mcp.tool()
+def ae_script_library(action: str = "search", query: str = "", status: str = "saved",
+                      artifact_id: str = "", name: str = "", description: str = "",
+                      tags: list[str] | None = None, verified: bool = False,
+                      limit: int = 50, confirm: bool = False) -> dict[str, Any]:
+    """Search/inspect/save/archive captured JSX. Candidates are execution-success only; mark verified only after independent result validation. Saved scripts persist; candidates expire in 7 days (max 200). No execution here."""
+    require_enabled()
+    if action == "search":
+        return script_library.search(query, status, limit)
+    if action == "inspect":
+        return {"ok": True, "script": script_library.get_script(artifact_id)}
+    if action in {"save", "archive"}:
+        authorize("write", confirm=confirm)
+        if action == "save":
+            return script_library.save(artifact_id, name, description, tags, verified)
+        return script_library.archive(artifact_id)
+    raise ValueError("action must be search, inspect, save or archive")
+
+
+@mcp.tool()
+def ae_replay_script(artifact_id: str, checkpoint_label: str | None = None,
+                     timeout_ms: int = 60_000, confirm: bool = False) -> dict[str, Any]:
+    """Replay exact hash-checked JSX, always confirm-gated. Inspect code and validate current project assumptions first; never auto-retry uncertain failures."""
+    require_enabled()
+    authorize("destructive", confirm=confirm)
+    record = script_library.get_script(artifact_id)
+    if record["status"] == "archived":
+        raise ValueError("Archived scripts cannot be replayed; save to restore first")
+    result = ae_exec(record["code"], checkpoint_label, timeout_ms, confirm=confirm)
+    if result["capture"].get("reason") != "script_reported_failure":
+        try:
+            script_library.record_use(artifact_id)
+        except Exception:
+            result["usageWarning"] = "Execution completed but usage counter was not updated; do not replay to repair metadata"
+    return {**result, "artifactId": artifact_id}
 
 
 @mcp.tool(structured_output=False)

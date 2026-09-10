@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 import os
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +16,7 @@ from PIL import Image
 
 
 def preview_root() -> Path:
-    root = Path(tempfile.gettempdir()) / "ae2claude_previews"
+    root = Path(os.environ.get("AE2CLAUDE_PREVIEW_ROOT", str(Path(tempfile.gettempdir()) / "ae2claude_previews")))
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -21,7 +24,7 @@ def preview_root() -> Path:
 def prune_previews(*, max_age_hours: int = 24) -> int:
     cutoff = time.time() - max_age_hours * 3600
     removed = 0
-    for path in preview_root().glob("*.png"):
+    for path in list(preview_root().glob("*.png")) + list(preview_root().glob("capture-*.json")):
         try:
             if path.stat().st_mtime < cutoff:
                 path.unlink()
@@ -73,10 +76,12 @@ def render_preview(
     ae: AEBridge,
     time_seconds: float | None = None,
     max_width: int = 1600,
+    timeout_ms: int = 120_000,
 ) -> dict[str, Any]:
     prune_previews()
-    stamp = int(time.time() * 1000)
-    output = preview_root() / f"frame-{stamp}.png"
+    if time_seconds is not None and (not math.isfinite(time_seconds) or time_seconds < 0):
+        raise ValueError("time_seconds must be finite and nonnegative")
+    output = preview_root() / f"frame-{uuid.uuid4().hex}.png"
     requested = "null" if time_seconds is None else repr(float(time_seconds))
     output_json = json.dumps(str(output), ensure_ascii=False)
     code = f"""
@@ -102,7 +107,7 @@ def render_preview(
     }});
 }})();
 """
-    raw = ae.run_jsx(code, timeout=120_000)
+    raw = ae.run_jsx(code, timeout=timeout_ms)
     try:
         result = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -115,4 +120,5 @@ def render_preview(
     result["sizeBytes"] = size_bytes
     result["previewWidth"] = preview_width
     result["previewHeight"] = preview_height
+    result["sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
     return result

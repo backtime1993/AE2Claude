@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .capabilities import AGENT_PROTOCOL
+from .script_library import capture_method
 from .runtime import (
     SafetyError,
     authorize,
@@ -205,7 +206,11 @@ def execute_batch(
                 kwargs = resolve_references(item["kwargs"], raw_results)
                 value = getattr(ae, item["method"])(*args, **kwargs)
                 raw_results.append(value)
-                entries.append({"index": index, "ok": True, "result": value})
+                entry = {"index": index, "ok": True, "result": value}
+                captured = capture_method(item["method"], args, kwargs, value)
+                if captured is not None:
+                    entry["capture"] = captured
+                entries.append(entry)
                 EVENTS.emit(
                     "batch.operation.completed",
                     requestId=request_id,
