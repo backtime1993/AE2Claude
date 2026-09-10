@@ -1,4 +1,3 @@
-// MessageQueue.h
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -10,20 +9,31 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
-/*
- * File: MessageQueue.h
- * Description: Manages asynchronous message processing within the After Effects plugin environment.
- *
- * Guidelines for Contributors:
- * 1. Understand the Flow: Grasp how messages are enqueued, processed, and dequeued.
- * 2. Thread Safety: Ensure that any modifications or additions respect the thread-safe nature of the queue.
- * 3. Interoperability: New messages or modifications should integrate seamlessly with existing asynchronous tasks.
- * 4. No Alteration: This file should not be changed. Understanding its functionality is key for effective contributions elsewhere.
- */
+namespace MessageQueueConfig {
+    constexpr auto kWaitTimeout = std::chrono::seconds(120);
+    constexpr std::size_t kMaxPendingMessages = 128;
+    constexpr auto kIdleBudget = std::chrono::milliseconds(4);
+    constexpr std::size_t kMaxMessagesPerIdle = 32;
+    // AEGP_IdleHook uses 1/60-second ticks, NOT milliseconds.
+    constexpr long kPendingSleepTicks = 1;
+    constexpr long kEmptySleepTicks = 15;
+}
 
+struct QueueMetrics {
+    std::atomic<unsigned long long> submitted{0}, completed{0}, cancelled{0}, rejected{0};
+    std::atomic<unsigned long long> lastWaitUs{0}, lastExecutionUs{0}, overruns{0};
+    std::atomic<unsigned long long> idleCalls{0}, lastIdleNs{0};
+    std::atomic<unsigned int> running{0};
+    static QueueMetrics& get() { static QueueMetrics metrics; return metrics; }
+    static unsigned long long nowNs() {
+        return static_cast<unsigned long long>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+};
 
 class IAsyncMessage {
 public:
@@ -34,138 +44,133 @@ public:
     virtual bool isCancelled() const = 0;
 };
 
-namespace MessageQueueConfig {
-    // ExtendScript mutations can legitimately occupy AE's main thread for
-    // longer than the old five-second guard. Keep the wait bounded, but give
-    // heavy project operations enough time to finish and clean up safely.
-    constexpr auto kWaitTimeout = std::chrono::seconds(120);
-    constexpr std::size_t kMaxPendingMessages = 128;
-}
-
 template<typename T>
 class AESyncMessage : public IAsyncMessage {
+    enum class State { Pending, Running, Completed, Cancelled };
     std::function<T()> task;
     std::promise<T> finished;
-    std::atomic<bool> cancelled{ false };
-
+    std::atomic<State> state{State::Pending};
+    const unsigned long long enqueuedNs = QueueMetrics::nowNs();
 public:
     std::future<T> resultFuture;
-
-    AESyncMessage(std::function<T()> taskFunc) : task(std::move(taskFunc)) {
-        resultFuture = finished.get_future();
-    }
-
+    explicit AESyncMessage(std::function<T()> taskFunc) : task(std::move(taskFunc)), resultFuture(finished.get_future()) {}
     void execute() override {
-        if (cancelled.load(std::memory_order_acquire) || !task) {
-            return;
-        }
-
+        State expected = State::Pending;
+        if (!state.compare_exchange_strong(expected, State::Running)) return;
+        auto& metrics = QueueMetrics::get();
+        const auto start = QueueMetrics::nowNs();
+        metrics.lastWaitUs = (start - enqueuedNs) / 1000;
+        ++metrics.running;
         try {
-            if constexpr (std::is_void_v<T>) {
-                task();
-                finished.set_value();
-            } else {
-                finished.set_value(task());
-            }
+            if constexpr (std::is_void_v<T>) { task(); finished.set_value(); }
+            else { finished.set_value(task()); }
+        } catch (...) {
+            finished.set_exception(std::current_exception());
         }
-        catch (...) {
-            try {
-                finished.set_exception(std::current_exception());
-            }
-            catch (...) {
-                // Promise may already be satisfied by timeout cancellation.
-            }
-        }
+        metrics.lastExecutionUs = (QueueMetrics::nowNs() - start) / 1000;
+        --metrics.running;
+        ++metrics.completed;
+        state.store(State::Completed);
     }
-
-    T getResult() {
-        return resultFuture.get();
+    T getResult() { return resultFuture.get(); }
+    void wait() override { waitFor(MessageQueueConfig::kWaitTimeout); }
+    void waitFor(std::chrono::milliseconds timeout) {
+        if (resultFuture.wait_for(timeout) != std::future_status::timeout) return;
+        cancel();
+        if (isCancelled()) throw std::runtime_error("AE task deadline expired before execution; outcome=not_started");
+        // Running SDK calls cannot be interrupted safely. Some wrappers capture
+        // caller-owned references, so keep the caller alive until completion.
+        // The independent HTTP deadline still reports outcome=unknown to clients.
+        ++QueueMetrics::get().overruns;
+        resultFuture.wait();
     }
-
-    void wait() override {
-        auto status = resultFuture.wait_for(MessageQueueConfig::kWaitTimeout);
-        if (status == std::future_status::timeout) {
-            cancel();
-            throw std::runtime_error("AE IdleHook timeout (120s) - main thread not responding");
-        }
-    }
-
     void cancel() override {
-        bool expected = false;
-        if (cancelled.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-            try {
-                finished.set_exception(std::make_exception_ptr(
-                    std::runtime_error("AE task cancelled after timeout")));
-            }
-            catch (...) {
-                // Promise was already satisfied by execute().
-            }
+        State expected = State::Pending;
+        if (state.compare_exchange_strong(expected, State::Cancelled)) {
+            ++QueueMetrics::get().cancelled;
+            finished.set_exception(std::make_exception_ptr(
+                std::runtime_error("AE task cancelled before execution; outcome=not_started")));
         }
     }
-
-    bool isCancelled() const override {
-        return cancelled.load(std::memory_order_acquire);
-    }
+    bool isCancelled() const override { return state.load() == State::Cancelled; }
 };
 
-
 class MessageQueue {
-private:
     std::deque<std::shared_ptr<IAsyncMessage>> queue;
     std::mutex queueMutex;
-
-    // Private constructor
-    MessageQueue() {}
-
-    // Deleted copy constructor and assignment operator
+    std::function<void()> wake;
+    std::thread::id mainThread;
+    bool stopped = false;
+    MessageQueue() = default;
     MessageQueue(const MessageQueue&) = delete;
     MessageQueue& operator=(const MessageQueue&) = delete;
-
     void dropCancelledLocked() {
-        queue.erase(
-            std::remove_if(queue.begin(), queue.end(),
-                [](const std::shared_ptr<IAsyncMessage>& message) {
-                    return !message || message->isCancelled();
-                }),
-            queue.end());
+        queue.erase(std::remove_if(queue.begin(), queue.end(), [](const auto& m) {
+            return !m || m->isCancelled();
+        }), queue.end());
     }
-
 public:
-    // Static method for accessing the singleton instance
-    static MessageQueue& getInstance() {
-        static MessageQueue instance;
-        return instance;
-    }
-
-    void enqueue(std::shared_ptr<IAsyncMessage> message) {
+    static MessageQueue& getInstance() { static MessageQueue instance; return instance; }
+    // Initialize on AE's main thread before any producer is started.
+    void initialize(std::function<void()> callback) {
         std::lock_guard<std::mutex> lock(queueMutex);
-        dropCancelledLocked();
-        if (queue.size() >= MessageQueueConfig::kMaxPendingMessages) {
-            throw std::runtime_error("AE task queue overloaded - main thread is not draining tasks");
-        }
-        queue.push_back(message);
+        mainThread = std::this_thread::get_id();
+        wake = std::move(callback);
+        stopped = false;
     }
-
+    void enqueue(std::shared_ptr<IAsyncMessage> message) {
+        if (!message) throw std::invalid_argument("Null AE task");
+        std::function<void()> notify;
+        bool inlineExecution;
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            if (stopped) { ++QueueMetrics::get().rejected; throw std::runtime_error("AE dispatcher is shutting down; outcome=not_started"); }
+            inlineExecution = mainThread == std::this_thread::get_id();
+            if (!inlineExecution) {
+                dropCancelledLocked();
+                if (queue.size() >= MessageQueueConfig::kMaxPendingMessages) {
+                    ++QueueMetrics::get().rejected;
+                    throw std::runtime_error("AE task queue overloaded; outcome=not_started");
+                }
+                const bool wasEmpty = queue.empty();
+                queue.push_back(message);
+                if (wasEmpty) notify = wake;
+            }
+            ++QueueMetrics::get().submitted;
+        }
+        if (inlineExecution) message->execute();
+        else if (notify) notify();
+    }
     std::shared_ptr<IAsyncMessage> dequeue() {
         std::lock_guard<std::mutex> lock(queueMutex);
         dropCancelledLocked();
-        if (!queue.empty()) {
-            auto message = queue.front();
-            queue.pop_front();
-            return message;
-        }
-        return nullptr;
+        if (queue.empty()) return nullptr;
+        auto message = queue.front(); queue.pop_front(); return message;
     }
-
-    bool hasPending() {
-        std::lock_guard<std::mutex> lock(queueMutex);
-        dropCancelledLocked();
-        return !queue.empty();
-    }
-
     std::size_t size() {
         std::lock_guard<std::mutex> lock(queueMutex);
-        dropCancelledLocked();
-        return queue.size();
+        dropCancelledLocked(); return queue.size();
+    }
+    bool hasPending() { return size() != 0; }
+    std::size_t drain(std::chrono::milliseconds budget = MessageQueueConfig::kIdleBudget,
+                      std::size_t maximum = MessageQueueConfig::kMaxMessagesPerIdle) {
+        ++QueueMetrics::get().idleCalls;
+        QueueMetrics::get().lastIdleNs = QueueMetrics::nowNs();
+        auto started = std::chrono::steady_clock::now();
+        std::size_t processed = 0;
+        while (processed < maximum) {
+            auto message = dequeue();
+            if (!message) break;
+            message->execute();
+            ++processed;
+            if (std::chrono::steady_clock::now() - started >= budget) break;
+        }
+        return processed;
+    }
+    void shutdown() {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        stopped = true;
+        for (auto& message : queue) if (message) message->cancel();
+        queue.clear();
     }
 };

@@ -17,7 +17,6 @@ from .agent_runtime import EVENTS, JOBS, execute_batch
 from .capabilities import capabilities
 from .checkpoints import create_checkpoint, list_checkpoints, revert_checkpoint
 from .previews import render_preview
-from .frame_review import capture_frames, compare_frames, inline_png
 from . import script_library
 from .runtime import (
     approval_mode,
@@ -114,6 +113,22 @@ def ae_status() -> dict[str, Any]:
         "killSwitchFile": str(kill_switch_path()),
         "methodCount": len(public_bridge_methods()),
     }
+
+
+@mcp.tool()
+def ae_native_status() -> dict[str, Any]:
+    """Read native queue, running work and idle-hook timing via health only, even while AE is busy. Does not prove project readability or forcibly cancel running work."""
+    with bridge() as ae:
+        return ae.get_native_diagnostics()
+
+
+@mcp.tool()
+def ae_validate_expressions(max_properties: int = 5000, time_seconds: float | None = None,
+                            max_errors: int = 50) -> dict[str, Any]:
+    """Evaluate enabled expressions in the active comp and report errors with stable layer IDs/matchName paths. Read-only; bounded traversal, no saved changes."""
+    require_enabled()
+    with bridge() as ae:
+        return ae.validate_expressions(max_properties, time_seconds, max_errors)
 
 
 @mcp.tool()
@@ -500,6 +515,7 @@ def ae_exec(
 
 
 def _review_result(metadata: dict[str, Any], paths: list[str]) -> CallToolResult:
+    from .frame_review import inline_png
     content = [TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False))]
     for path in paths:
         content.append(ImageContent(type="image", data=base64.b64encode(inline_png(path)).decode("ascii"), mimeType="image/png"))
@@ -513,6 +529,7 @@ def ae_preview_frames(
     max_width: int = 1600, grid_max_side: int = 1600,
 ) -> CallToolResult:
     """Capture 1-16 active-comp frames, or sample start/end/count; return labeled grid and persistent capture ID. Heavy comps: request fewer frames per call."""
+    from .frame_review import capture_frames
     require_enabled()
     with bridge() as ae:
         result = capture_frames(ae, times=times, start=start, end=end, count=count,
@@ -524,6 +541,7 @@ def ae_preview_frames(
 def ae_compare_frames(capture_a: str, index_a: int, capture_b: str, index_b: int,
                       threshold: int = 8) -> CallToolResult:
     """Compare two captured frames (zero-based indices). Return A/B, red difference map and 8-bit preview-pixel metrics; refuse changed files or mismatched dimensions."""
+    from .frame_review import compare_frames
     require_enabled()
     result = compare_frames(capture_a, index_a, capture_b, index_b, threshold)
     return _review_result(result, [result["sideBySide"]["path"], result["diff"]["path"]])

@@ -59,10 +59,11 @@ std::string App::pluginPaths()
 	return resultString;
 }
 
-std::string App::executeScript(const std::string& script)
+std::string App::executeScript(const std::string& script, int timeoutMs)
 {
+	if (timeoutMs < 1 || timeoutMs > 600000) throw std::invalid_argument("timeoutMs must be 1-600000");
 	auto& message = enqueueSyncTaskQuiet(ExecuteScript, script);
-	message->wait();
+	message->waitFor(std::chrono::milliseconds(timeoutMs));
 
 	Result<std::string> result = message->getResult();
 	return result.value;

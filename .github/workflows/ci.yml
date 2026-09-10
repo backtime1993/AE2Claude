@@ -9,6 +9,13 @@ permissions:
   contents: read
 
 jobs:
+  native-dispatcher:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: g++ -std=c++17 -pthread -Wall -Wextra -Werror tests/native_queue_test.cpp -o /tmp/ae-native-queue-test
+      - run: /tmp/ae-native-queue-test
+
   python:
     runs-on: windows-latest
     steps:

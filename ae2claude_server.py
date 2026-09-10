@@ -5,6 +5,9 @@ import hashlib
 import json
 import sys
 import threading
+import time
+from functools import wraps
+from socketserver import ThreadingMixIn
 import traceback
 from multiprocessing.connection import Listener
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -14,6 +17,26 @@ _AE_PORT = 8089
 _AE_PIPE = r"\\.\pipe\PyShiftAEBridge"
 BRIDGE_VERSION = "4.3.1"
 _JSX_ERROR_KEY = "__ae2claude_error__"
+_EXECUTION_LOCK = threading.Lock()
+_EXECUTION_STATE = {"startedAt": None, "completed": 0, "busyRejected": 0}
+_MAX_REQUEST_BYTES = 2 * 1024 * 1024
+
+
+def _serialized(operation):
+    @wraps(operation)
+    def guarded(*args, **kwargs):
+        if not _EXECUTION_LOCK.acquire(blocking=False):
+            _EXECUTION_STATE["busyRejected"] += 1
+            return {"ok": False, "kind": "busy", "error": "AE bridge is executing another operation",
+                    "outcome": "not_started", "retrySafe": True}
+        _EXECUTION_STATE["startedAt"] = time.monotonic()
+        try:
+            return operation(*args, **kwargs)
+        finally:
+            _EXECUTION_STATE["completed"] += 1
+            _EXECUTION_STATE["startedAt"] = None
+            _EXECUTION_LOCK.release()
+    return guarded
 
 
 def _wrap_jsx_for_structured_errors(code: str) -> str:
@@ -92,6 +115,8 @@ _PLUGIN_ARTIFACT = _plugin_artifact_payload()
 
 
 def _health_payload():
+    native = psc.bridgeDiagnostics() if psc is not None and hasattr(psc, "bridgeDiagnostics") else None
+    started = _EXECUTION_STATE["startedAt"]
     return {
         "status": "ok",
         "bridge_version": BRIDGE_VERSION,
@@ -107,9 +132,15 @@ def _health_payload():
             "pipe": _TRANSPORT_STATE["pipe"],
         },
         "transport_errors": dict(_TRANSPORT_ERRORS),
+        "native": native,
+        "execution": {"busy": _EXECUTION_LOCK.locked(), "elapsedMs": round((time.monotonic() - started) * 1000) if started else 0,
+                      "completed": _EXECUTION_STATE["completed"], "busyRejected": _EXECUTION_STATE["busyRejected"]},
+        "features": {"wrapsJsxErrors": True, "nativeDeadline": native is not None,
+                     "healthWhileBusy": True, "maxRequestBytes": _MAX_REQUEST_BYTES},
     }
 
 
+@_serialized
 def _execute_code(source, prefer_exec=False):
     old_stdout = sys.stdout
     capture = io.StringIO()
@@ -187,12 +218,18 @@ def _serve_pipe(listener):
             conn.close()
 
 
-def _execute_jsx(script):
+@_serialized
+def _execute_jsx(script, timeout_ms=120000):
     """Execute ExtendScript via AEGP_ExecuteScript and return result."""
     try:
         if not app or not hasattr(app, "executeScript"):
             return {"ok": False, "error": "executeScript not available"}
-        result = app.executeScript(_wrap_jsx_for_structured_errors(script))
+        if not 1 <= timeout_ms <= 600000:
+            return {"ok": False, "kind": "validation", "error": "timeout_ms must be 1-600000", "outcome": "not_started", "retrySafe": True}
+        if psc is not None and hasattr(psc, "bridgeDiagnostics"):
+            result = app.executeScript(_wrap_jsx_for_structured_errors(script), timeout_ms)
+        else:
+            result = app.executeScript(_wrap_jsx_for_structured_errors(script))
         if isinstance(result, str) and result.startswith("{"):
             try:
                 err_obj = json.loads(result)
@@ -215,66 +252,100 @@ def _execute_jsx(script):
                     "error": err_obj.get("__jsx_error__", result),
                 }
         return {"ok": True, "result": result}
-    except Exception:
-        return {"ok": False, "error": traceback.format_exc()}
+    except Exception as exc:
+        not_started = str(exc).startswith(("AE task deadline expired before execution;", "AE task cancelled before execution;", "AE task queue overloaded;", "AE dispatcher is shutting down;"))
+        return {"ok": False, "error": str(exc), "kind": "native",
+                "outcome": "not_started" if not_started else "unknown", "retrySafe": not_started}
 
 
 class _AEHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(5)
+
+    def _respond(self, payload, status=200):
+        data = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         try:
-            n = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(n).decode("utf-8")
-
-            path = self.path.rstrip("/")
-            if path == "/jsx":
-                resp = _execute_jsx(body)
-            else:
-                resp = _execute_code(body)
-
-            b = json.dumps(resp, ensure_ascii=False, default=str).encode("utf-8")
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(b)))
+            self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(b)
-        except Exception as e:
-            err_b = str(e).encode("utf-8")
-            self.send_response(500)
-            self.send_header("Content-Length", str(len(err_b)))
-            self.end_headers()
-            self.wfile.write(err_b)
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionError, OSError):
+            pass  # Client deadline does not cancel or replay the AE operation.
+
+    def do_POST(self):
+        path = self.path.rstrip("/")
+        if path not in {"", "/exec", "/jsx"}:
+            self._respond({"ok": False, "error": "unknown_endpoint", "outcome": "not_started"}, 404)
+            return
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+            if not 0 < n <= _MAX_REQUEST_BYTES:
+                self._respond({"ok": False, "error": "invalid_body_size", "outcome": "not_started"}, 413)
+                return
+            raw = self.rfile.read(n)
+            if len(raw) != n:
+                raise ValueError("incomplete_body")
+            body = raw.decode("utf-8")
+            timeout_ms = int(self.headers.get("X-AE-Timeout-Ms", "120000"))
+            response = _execute_jsx(body, timeout_ms) if path == "/jsx" else _execute_code(body)
+            self._respond(response)
+        except (ValueError, UnicodeError, OSError) as exc:
+            self._respond({"ok": False, "error": str(exc), "outcome": "not_started"}, 400)
 
     def do_GET(self):
-        b = json.dumps(_health_payload()).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(b)))
-        self.end_headers()
-        self.wfile.write(b)
+        if self.path.rstrip("/") not in {"", "/health"}:
+            self._respond({"ok": False, "error": "unknown_endpoint"}, 404)
+            return
+        self._respond(_health_payload())
 
-    def log_message(self, *a):
+    def log_message(self, *args):
         pass
 
 
-class _AEHTTPServer(HTTPServer):
-    """Serialize AE calls while allowing a bounded concurrent connection burst."""
-
+class _AEHTTPServer(ThreadingMixIn, HTTPServer):
+    """Bounded transport concurrency; AE/Python execution is still serialized."""
     allow_reuse_address = True
     request_queue_size = 64
+    daemon_threads = True
+    block_on_close = False
+
+    def __init__(self, *args, **kwargs):
+        self._slots = threading.BoundedSemaphore(16)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
-try:
-    _srv = _AEHTTPServer(("127.0.0.1", _AE_PORT), _AEHandler)
-except Exception:
-    _TRANSPORT_ERRORS["http"] = traceback.format_exc()
-else:
-    _TRANSPORT_STATE["http"] = True
-    threading.Thread(target=_srv.serve_forever, daemon=True).start()
+# Importing this module in tests/CLI must never occupy the live AE ports.
+if psc is not None:
+    try:
+        _srv = _AEHTTPServer(("127.0.0.1", _AE_PORT), _AEHandler)
+    except Exception:
+        _TRANSPORT_ERRORS["http"] = traceback.format_exc()
+    else:
+        _TRANSPORT_STATE["http"] = True
+        threading.Thread(target=_srv.serve_forever, daemon=True).start()
 
-try:
-    _pipe_listener = Listener(_AE_PIPE, family="AF_PIPE")
-except Exception:
-    _TRANSPORT_ERRORS["pipe"] = traceback.format_exc()
-else:
-    _TRANSPORT_STATE["pipe"] = True
-    threading.Thread(target=_serve_pipe, args=(_pipe_listener,), daemon=True).start()
+    try:
+        _pipe_listener = Listener(_AE_PIPE, family="AF_PIPE")
+    except Exception:
+        _TRANSPORT_ERRORS["pipe"] = traceback.format_exc()
+    else:
+        _TRANSPORT_STATE["pipe"] = True
+        threading.Thread(target=_serve_pipe, args=(_pipe_listener,), daemon=True).start()

@@ -913,7 +913,7 @@ void bindApp(py::module_& m)
         std::string infoStr = py::str(info); // Convert any Python object to a string
         self.reportInfo(infoStr);
             }, py::arg("info"))
-        .def("executeScript", &App::executeScript, py::arg("script"),
+        .def("executeScript", &App::executeScript, py::arg("script"), py::arg("timeout_ms") = 120000,
             py::call_guard<py::gil_scoped_release>());
     // Create an instance of App and set it as an attribute of the module
     auto appInstance = std::make_shared<App>();

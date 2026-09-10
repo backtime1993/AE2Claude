@@ -23,7 +23,7 @@ public:
     void executeCommand(int commandId);
     void reportInfo(std::string info);
     std::string pluginPaths();
-    std::string executeScript(const std::string& script);
+    std::string executeScript(const std::string& script, int timeoutMs = 120000);
 
 };
 

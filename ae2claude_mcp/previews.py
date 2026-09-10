@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from ae_bridge import AEBridge
-from PIL import Image
 
 
 def preview_root() -> Path:
@@ -56,6 +55,7 @@ def _wait_for_complete_file(path: Path, timeout_seconds: float = 30.0) -> int:
 
 
 def _optimize_preview(path: Path, max_width: int) -> tuple[int, int, int]:
+    from PIL import Image
     max_width = max(320, min(max_width, 4096))
     optimized = path.with_name(f"{path.stem}-optimized.png")
     with Image.open(path) as image:

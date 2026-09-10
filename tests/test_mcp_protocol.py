@@ -33,6 +33,8 @@ class MCPProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "ae_compare_frames",
                 "ae_script_library",
                 "ae_replay_script",
+                "ae_native_status",
+                "ae_validate_expressions",
                 "ae_checkpoint",
                 "ae_revert",
                 "ae_capabilities",

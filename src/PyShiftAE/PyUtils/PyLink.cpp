@@ -4,6 +4,31 @@
 using namespace pybind11::literals;
 
 PYBIND11_EMBEDDED_MODULE(PyShiftCore, m) {
+    m.def("bridgeDiagnostics", []() {
+        const auto& metrics = QueueMetrics::get();
+        py::dict result;
+        result["revision"] = "dispatcher-20260910";
+        result["pending"] = MessageQueue::getInstance().size();
+        result["running"] = metrics.running.load();
+        result["submitted"] = metrics.submitted.load();
+        result["completed"] = metrics.completed.load();
+        result["cancelledBeforeStart"] = metrics.cancelled.load();
+        result["rejected"] = metrics.rejected.load();
+        result["lastQueueWaitUs"] = metrics.lastWaitUs.load();
+        result["lastExecutionUs"] = metrics.lastExecutionUs.load();
+        result["runningDeadlineOverruns"] = metrics.overruns.load();
+        result["idleCalls"] = metrics.idleCalls.load();
+        const auto lastIdle = metrics.lastIdleNs.load();
+        result["lastIdleAgoMs"] = lastIdle ? (QueueMetrics::nowNs() - lastIdle) / 1000000 : 0;
+        result["idleSeen"] = lastIdle != 0;
+        result["idleBudgetMs"] = MessageQueueConfig::kIdleBudget.count();
+        result["maxPending"] = MessageQueueConfig::kMaxPendingMessages;
+        result["pendingSleepTicks"] = MessageQueueConfig::kPendingSleepTicks;
+        result["emptySleepTicks"] = MessageQueueConfig::kEmptySleepTicks;
+        result["wakeMode"] = "cached-sdk-callback";
+        result["forcedInterruption"] = false;
+        return result;
+    });
     bindLayer(m);
     bindItem(m);
     bindCompItem(m);

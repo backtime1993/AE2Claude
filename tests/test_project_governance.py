@@ -48,9 +48,11 @@ class ProjectGovernanceTests(unittest.TestCase):
 
     def test_native_http_server_has_burst_backlog_without_parallel_ae_calls(self) -> None:
         server = (ROOT / "ae2claude_server.py").read_text(encoding="utf-8")
-        self.assertIn("class _AEHTTPServer(HTTPServer)", server)
+        self.assertIn("class _AEHTTPServer(ThreadingMixIn, HTTPServer)", server)
         self.assertIn("request_queue_size = 64", server)
         self.assertNotIn("ThreadingHTTPServer", server)
+        self.assertIn("@_serialized\ndef _execute_jsx", server)
+        self.assertIn("@_serialized\ndef _execute_code", server)
 
     def test_jsx_errors_are_guarded_and_modal_recovery_is_out_of_process(self) -> None:
         server = (ROOT / "ae2claude_server.py").read_text(encoding="utf-8")

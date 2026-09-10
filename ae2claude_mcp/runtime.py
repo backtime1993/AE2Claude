@@ -29,6 +29,8 @@ READ_PREFIXES = (
     "sample_",
     "approximate_",
     "detect_",
+    "inspect_",
+    "validate_",
 )
 DESTRUCTIVE_METHODS = {
     "clear_render_queue",

@@ -44,14 +44,16 @@ def _json_type(annotation: Any) -> dict[str, Any]:
 
 def _category(name: str) -> str:
     for prefix, category in (
-        (("get_", "list_", "describe_", "search_", "inspect_"), "inspect"),
+        (("property_", "get_property", "set_property", "inspect_properties"), "property"),
+        (("get_native_diagnostics",), "diagnostics"),
+        (("validate_expressions",), "validation"),
         (("render_", "start_render", "add_to_render"), "render"),
         (("add_effect", "set_effect", "enumerate_effect"), "effects"),
         (("add_puppet", "set_puppet", "list_puppet", "auto_place_puppet"), "puppet"),
         (("add_text", "set_text", "animate_text"), "text"),
         (("add_shape",), "shape"),
         (("add_mask", "set_mask", "remove_mask", "animate_mask"), "mask"),
-        (("property_", "get_property", "set_property", "inspect_properties"), "property"),
+        (("get_", "list_", "describe_", "search_", "inspect_"), "inspect"),
         (("create_", "add_", "set_", "remove_", "duplicate_", "rename_"), "edit"),
     ):
         if name.startswith(prefix):
@@ -120,6 +122,14 @@ def capabilities(query: str = "", category: str = "") -> dict[str, Any]:
             "cooperativeCancellation": True,
             "eventCursor": True,
             "maxBatchOperations": 256,
+            "timelineContactSheets": True,
+            "pixelComparison": True,
+            "persistentScriptLibrary": True,
+            "expressionValidation": True,
+            "nativeQueueDiagnostics": "requires dispatcher-20260910 native build",
+            "forcedMainThreadInterruption": False,
+            "maxSyncScriptMs": 120000,
+            "maxNativeScriptMs": 600000,
         },
         "propertyBackends": {
             "native": {

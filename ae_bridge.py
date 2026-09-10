@@ -586,11 +586,12 @@ class AEBridge:
         """
         started = time.monotonic()
         request_id = self._arm_script_dialog_watchdog(timeout)
-        data = _wrap_jsx_for_structured_errors(code).encode('utf-8')
+        server_wraps = getattr(self, 'health', {}).get('features', {}).get('wrapsJsxErrors', False)
+        data = (code if server_wraps else _wrap_jsx_for_structured_errors(code)).encode('utf-8')
         req = urllib.request.Request(
             f'{self._base_url}/jsx',
             data=data,
-            headers={'Content-Type': 'text/plain; charset=utf-8'}
+            headers={'Content-Type': 'text/plain; charset=utf-8', 'X-AE-Timeout-Ms': str(timeout)}
         )
         try:
             with _local_urlopen(req, timeout=max(timeout / 1000, 5)) as resp:
@@ -629,7 +630,7 @@ class AEBridge:
             'kind': r.get('kind', 'jsx'),
             'error': r.get('error', 'Unknown JSX error'),
         }
-        for key in ('name', 'line', 'fileName', 'stack'):
+        for key in ('name', 'line', 'fileName', 'stack', 'outcome', 'retrySafe'):
             if r.get(key) is not None:
                 payload[key] = r[key]
         recovery = self._script_dialog_watchdog_status(request_id)
@@ -752,6 +753,46 @@ class AEBridge:
     # ╚══════════════════════════════════════════════════════╝
 
     # ── Comp Info ──────────────────────────────────────────
+
+    def get_native_diagnostics(self) -> dict:
+        """Read native queue/idle telemetry without scheduling work on AE's main thread."""
+        return {"ok": bool(self.health.get('native')), "native": self.health.get('native'),
+                "execution": self.health.get('execution'), "features": self.health.get('features', {}),
+                "hint": None if self.health.get('native') else 'Native telemetry requires the updated AEX.'}
+
+    def validate_expressions(self, max_properties: int = 5000, time_seconds: float = None,
+                             max_errors: int = 50) -> dict:
+        """Bounded read-only evaluation of enabled expressions in the active composition."""
+        import math
+        if not 1 <= max_properties <= 20000 or not 1 <= max_errors <= 200:
+            raise ValueError('max_properties must be 1-20000 and max_errors 1-200')
+        if time_seconds is not None and (not math.isfinite(time_seconds) or time_seconds < 0):
+            raise ValueError('time_seconds must be finite and nonnegative')
+        settings = json.dumps({'limit': max_properties, 'time': time_seconds, 'maxErrors': max_errors})
+        code = '''(function(){
+var settings=SETTINGS, comp=app.project.activeItem;
+if(!(comp instanceof CompItem)) return JSON.stringify({ok:false,error:"no_active_comp"});
+var t=settings.time===null?comp.time:settings.time;
+if(t>comp.duration) return JSON.stringify({ok:false,error:"time_out_of_range"});
+var stack=[],errors=[],visited=0,evaluated=0,truncated=false;
+for(var i=comp.numLayers;i>=1;i--) stack.push({p:comp.layer(i),layerId:String(comp.layer(i).id),path:[]});
+while(stack.length){
+ if(visited>=settings.limit || errors.length>=settings.maxErrors){truncated=true;break;}
+ var entry=stack.pop(),p=entry.p;visited++;
+ try {
+  if(p.canSetExpression && p.expression){
+   var failure="";
+   if(p.expressionEnabled){evaluated++;try{p.valueAtTime(t,false);}catch(e){failure=String(e);}}
+   if(p.expressionError) failure=String(p.expressionError);
+   if(failure) errors.push({layerId:entry.layerId,path:entry.path,error:failure,enabled:p.expressionEnabled});
+  }
+  for(var j=p.numProperties||0;j>=1;j--){var child=p.property(j);if(child)stack.push({p:child,layerId:entry.layerId,path:entry.path.concat([child.matchName||child.name])});}
+ }catch(e){errors.push({layerId:entry.layerId,path:entry.path,error:String(e)});}
+}
+return JSON.stringify({ok:true,compId:String(comp.id),time:t,visited:visited,evaluated:evaluated,
+errors:errors,errorCount:errors.length,truncated:truncated});
+})();'''.replace('SETTINGS', settings)
+        return json.loads(self.run_jsx(code, timeout=60000))
 
     def comp_info(self) -> dict:
         """获取当前活动合成信息"""

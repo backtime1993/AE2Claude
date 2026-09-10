@@ -59,6 +59,8 @@ Result<void> EndUndoGroup()
 
 }
 
+#include "ScriptJson.h"
+
 Result<std::string> ExecuteScript(const std::string& script)
 {
 	A_Err err = A_Err_NONE;
@@ -105,7 +107,7 @@ Result<std::string> ExecuteScript(const std::string& script)
 			if (resultMH) {
 				suites.MemorySuite1()->AEGP_FreeMemHandle(resultMH);
 			}
-			return Result<std::string>("{\"__jsx_error__\":\"" + errorStr + "\"}", err);
+			return Result<std::string>("{\"__jsx_error__\":" + ScriptJsonQuote(errorStr) + "}", err);
 		}
 		// errorMH existed but was empty — not a real error, fall through to result
 	}

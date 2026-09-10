@@ -9,11 +9,12 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+if TYPE_CHECKING:
+    import sqlite3
 
 MAX_CODE_BYTES = 1_000_000
 CANDIDATE_TTL = 7 * 24 * 3600
@@ -34,6 +35,7 @@ def _root() -> Path:
 
 @contextmanager
 def _database():
+    import sqlite3
     root = _root()
     root.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(root / "library.sqlite3", timeout=5)

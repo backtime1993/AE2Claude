@@ -30,8 +30,7 @@ auto enqueueSyncTask(Func&& func, Args&&... args) {
     // Ensure that `queue` is accessible and properly declared
     MessageQueue::getInstance().enqueue(message);
 
-    AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
-    suites.UtilitySuite6()->AEGP_CauseIdleRoutinesToBeCalled();
+    // The dispatcher wakes AE through an SDK pointer cached on the main thread.
     return message;
 }
 

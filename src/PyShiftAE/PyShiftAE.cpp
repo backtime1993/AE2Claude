@@ -17,29 +17,7 @@
 #include "CoreLib/Json.h"
 #include "MessageManager.h"
 
-// ---- DllMain debug: catch load-time crashes ----
-#ifdef AE_OS_WIN
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
-{
-	if (reason == DLL_PROCESS_ATTACH) {
-		// Write a marker file as early as possible
-		wchar_t tempDir[MAX_PATH];
-		GetTempPathW(MAX_PATH, tempDir);
-		std::wstring markerPath = std::wstring(tempDir) + L"AE2Claude\\dllmain_attach.txt";
-		CreateDirectoryW((std::wstring(tempDir) + L"AE2Claude").c_str(), NULL);
-		HANDLE hFile = CreateFileW(
-			markerPath.c_str(),
-			GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		if (hFile != INVALID_HANDLE_VALUE) {
-			const char msg[] = "DllMain DLL_PROCESS_ATTACH reached\r\n";
-			DWORD written;
-			WriteFile(hFile, msg, sizeof(msg) - 1, &written, NULL);
-			CloseHandle(hFile);
-		}
-	}
-	return TRUE;
-}
-#endif
+// Load diagnostics run in EntryPointFunc, outside the Windows loader lock.
 
 static AEGP_PluginID		PyShiftAE			=	6969L;
 static AEGP_Command			PyShift				=	6769L;
@@ -367,6 +345,7 @@ DeathHook(
 	A_Err	err			= A_Err_NONE;
 
 	// Signal the Python thread to exit
+	MessageQueue::getInstance().shutdown();
 	pythonThreadRunning = false;
 	shouldExitPythonThread = true;
 	scriptAddedCond.notify_all();  // Wake up the thread if it's waiting
@@ -410,20 +389,12 @@ UpdateMenuHook(
 static A_Err IdleHook(AEGP_GlobalRefcon plugin_refconP, AEGP_IdleRefcon refconP, A_long* max_sleepPL) {
 	A_Err err = A_Err_NONE;
 
-	// Keep each idle slice bounded so stale backlogs cannot monopolize AE.
-	constexpr int kMaxMessagesPerIdle = 32;
-	int processed = 0;
-	for (; processed < kMaxMessagesPerIdle; ++processed) {
-		auto message = MessageQueue::getInstance().dequeue();
-		if (message == nullptr) {
-			break;
-		}
-		message->execute();
-	}
+	MessageQueue::getInstance().drain();
 
 	if (max_sleepPL) {
-		// PostMessage wakes AE when work arrives; idle polling can stay slow when empty.
-		*max_sleepPL = MessageQueue::getInstance().hasPending() ? 10 : 250;
+		// SDK units are ticks of 1/60 s, not milliseconds.
+		*max_sleepPL = MessageQueue::getInstance().hasPending()
+			? MessageQueueConfig::kPendingSleepTicks : MessageQueueConfig::kEmptySleepTicks;
 	}
 
 	return err;
@@ -543,6 +514,8 @@ EntryPointFunc(
 	SuiteManager::GetInstance().InitializePanelSuiteHandler(sP);
 
 	SuiteManager::GetInstance().SetPluginID(&PyShiftAE); // Set the plugin ID
+	const auto wakeIdle = suites.UtilitySuite6()->AEGP_CauseIdleRoutinesToBeCalled;
+	MessageQueue::getInstance().initialize([wakeIdle]() { wakeIdle(); });
 
 	shouldExitPythonThread = false;
 	pythonThreadRunning = true;
