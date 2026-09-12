@@ -14,6 +14,12 @@ Revision `dispatcher-20260910`, AE SDK header verified locally on 2026-09-10.
 
 ## Validation
 
+Revision `native-automation-20260912` additionally exposes bounded single-dispatch
+snapshot, property sampling, keyframe read/bulk-write and layer-to-world matrix
+operations through `/native`. See [Native automation](NATIVE_AUTOMATION.md) for
+limits, SDK ownership, dry-run and post-restart acceptance. Existing dispatcher
+revision and script contracts remain unchanged.
+
 `python -m unittest discover -s tests -v` covers HTTP health under a blocked task, shared execution rejection, limits, deadline negotiation, no double guard, lazy imports, existing workflows and library behavior.
 
 `tests/native_queue_test.cpp` needs C++17 and no Adobe SDK. Build with MSVC `/std:c++17 /EHsc /W4 /WX`, or GCC `-std=c++17 -pthread -Wall -Wextra -Werror`. It covers queued cancellation, running lifetime, 500 execution/cancellation races, inline dispatch, overload, shutdown, idle budget and JSON escaping. Linux CI runs it without distributing Adobe headers.

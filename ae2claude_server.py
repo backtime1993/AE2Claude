@@ -136,8 +136,34 @@ def _health_payload():
         "execution": {"busy": _EXECUTION_LOCK.locked(), "elapsedMs": round((time.monotonic() - started) * 1000) if started else 0,
                       "completed": _EXECUTION_STATE["completed"], "busyRejected": _EXECUTION_STATE["busyRejected"]},
         "features": {"wrapsJsxErrors": True, "nativeDeadline": native is not None,
-                     "healthWhileBusy": True, "maxRequestBytes": _MAX_REQUEST_BYTES},
+                     "healthWhileBusy": True, "maxRequestBytes": _MAX_REQUEST_BYTES,
+                     "nativeAutomation": getattr(psc, "native_snapshot", None) is not None},
     }
+
+
+@_serialized
+def _execute_native(request):
+    """Allowlisted JSON requests share the same busy gate as Python and JSX."""
+    from ae_native_protocol import OPERATIONS, normalize_request
+    try:
+        if not isinstance(request, dict) or set(request) != {"operation", "arguments"}:
+            raise ValueError("native request requires operation and arguments")
+        operation = request["operation"]
+        arguments = normalize_request(operation, request["arguments"])
+        function = getattr(psc, OPERATIONS[operation], None)
+        if function is None:
+            return {"ok": False, "kind": "native_unavailable", "error": "Install and load native-automation-20260912 or newer",
+                    "outcome": "not_started", "retrySafe": True}
+    except (ValueError, TypeError, OverflowError) as exc:
+        return {"ok": False, "kind": "native_validation", "error": str(exc),
+                "outcome": "not_started", "retrySafe": True}
+    try:
+        return {"ok": True, "result": function(**arguments)}
+    except Exception as exc:
+        # A timeout or commit failure is not proof that a write did not happen.
+        not_started = "outcome=not_started" in str(exc)
+        return {"ok": False, "kind": "native", "error": str(exc),
+                "outcome": "not_started" if not_started else "unknown", "retrySafe": not_started}
 
 
 @_serialized
@@ -276,7 +302,7 @@ class _AEHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.rstrip("/")
-        if path not in {"", "/exec", "/jsx"}:
+        if path not in {"", "/exec", "/jsx", "/native"}:
             self._respond({"ok": False, "error": "unknown_endpoint", "outcome": "not_started"}, 404)
             return
         try:
@@ -289,7 +315,10 @@ class _AEHandler(BaseHTTPRequestHandler):
                 raise ValueError("incomplete_body")
             body = raw.decode("utf-8")
             timeout_ms = int(self.headers.get("X-AE-Timeout-Ms", "120000"))
-            response = _execute_jsx(body, timeout_ms) if path == "/jsx" else _execute_code(body)
+            if path == "/native":
+                response = _execute_native(json.loads(body))
+            else:
+                response = _execute_jsx(body, timeout_ms) if path == "/jsx" else _execute_code(body)
             self._respond(response)
         except (ValueError, UnicodeError, OSError) as exc:
             self._respond({"ok": False, "error": str(exc), "outcome": "not_started"}, 400)

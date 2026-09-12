@@ -20,7 +20,7 @@ ae2claude = "ae2claude_mcp.cli:main"
 ae2claude-mcp = "ae2claude_mcp.server:main"
 
 [tool.setuptools]
-py-modules = ["ae_bridge", "pin_cmd"]
+py-modules = ["ae_bridge", "ae_native_protocol", "pin_cmd"]
 
 [tool.setuptools.packages.find]
 include = ["ae2claude_mcp*"]

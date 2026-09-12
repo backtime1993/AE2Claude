@@ -1,5 +1,7 @@
 // Include the header file for linking with Python.
 #include "PyLink.h"
+#include "../CoreSDK/NativeAutomation.h"
+#include "../CoreSDK/NativeAutomationValidation.h"
 
 using namespace pybind11::literals;
 
@@ -8,6 +10,7 @@ PYBIND11_EMBEDDED_MODULE(PyShiftCore, m) {
         const auto& metrics = QueueMetrics::get();
         py::dict result;
         result["revision"] = "dispatcher-20260910";
+        result["automationRevision"] = NativeAutomation::kRevision;
         result["pending"] = MessageQueue::getInstance().size();
         result["running"] = metrics.running.load();
         result["submitted"] = metrics.submitted.load();
@@ -45,6 +48,7 @@ PYBIND11_EMBEDDED_MODULE(PyShiftCore, m) {
     bindSolidItem(m);
     bindManifest(m);
     bindStreamUtils(m);
+    bindNativeAutomation(m);
 
 }
 

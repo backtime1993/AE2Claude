@@ -44,6 +44,7 @@ def _json_type(annotation: Any) -> dict[str, Any]:
 
 def _category(name: str) -> str:
     for prefix, category in (
+        (("get_native_snapshot", "sample_native_property", "get_native_keyframes", "set_native_keyframes", "get_native_layer_transforms"), "native-automation"),
         (("property_", "get_property", "set_property", "inspect_properties"), "property"),
         (("get_native_diagnostics",), "diagnostics"),
         (("validate_expressions",), "validation"),
@@ -127,6 +128,7 @@ def capabilities(query: str = "", category: str = "") -> dict[str, Any]:
             "persistentScriptLibrary": True,
             "expressionValidation": True,
             "nativeQueueDiagnostics": "requires dispatcher-20260910 native build",
+            "nativeAutomation": "requires native-automation-20260912 AEX and bridge server; verify health features.nativeAutomation",
             "forcedMainThreadInterruption": False,
             "maxSyncScriptMs": 120000,
             "maxNativeScriptMs": 600000,

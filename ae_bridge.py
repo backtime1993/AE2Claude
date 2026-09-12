@@ -756,6 +756,7 @@ class AEBridge:
 
     def get_native_diagnostics(self) -> dict:
         """Read native queue/idle telemetry without scheduling work on AE's main thread."""
+        self._check_connection()
         return {"ok": bool(self.health.get('native')), "native": self.health.get('native'),
                 "execution": self.health.get('execution'), "features": self.health.get('features', {}),
                 "hint": None if self.health.get('native') else 'Native telemetry requires the updated AEX.'}
@@ -4223,6 +4224,59 @@ return lines.join("\n");
                 pass
 
         return outline
+
+    # ── Single-dispatch SDK automation (no Python/JSX source evaluation) ──
+
+    def _native_request(self, operation: str, arguments: dict) -> dict:
+        from ae_native_protocol import normalize_request
+
+        payload = {"operation": operation, "arguments": normalize_request(operation, arguments)}
+        req = urllib.request.Request(
+            f"{self._base_url}/native",
+            data=json.dumps(payload, ensure_ascii=True, allow_nan=False).encode("utf-8"),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+        try:
+            with _local_urlopen(req, timeout=max(self.timeout, 120)) as response:
+                envelope = _read_bridge_response(response)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise RuntimeError("native_unavailable: load the new AEX and bridge server; outcome=not_started") from exc
+            raise
+        # Never silently replay a native operation using JSX or a different transport.
+        if not envelope.get("ok"):
+            return envelope
+        result = envelope.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
+            raise RuntimeError("invalid_native_response; outcome=unknown; retrySafe=false")
+        return result
+
+    def get_native_snapshot(self, comp_id: int = 0, max_items: int = 500, max_layers: int = 500) -> dict:
+        """Read project items and a comp's layer graph in one SDK dispatch, without changing focus."""
+        return self._native_request("snapshot", {"comp_id": comp_id, "max_items": max_items, "max_layers": max_layers})
+
+    def sample_native_property(self, layer_id: int, path: List[Union[str, int]],
+                               times: List[float], comp_id: int = 0, pre_expression: bool = False) -> dict:
+        """Sample 1..2048 times after resolving the property once; comp_id=0 uses the most recent comp."""
+        return self._native_request("sample_property", {"comp_id": comp_id, "layer_id": layer_id,
+                                    "path": path, "times": times, "pre_expression": pre_expression})
+
+    def get_native_keyframes(self, layer_id: int, path: List[Union[str, int]], comp_id: int = 0,
+                             start_index: int = 0, max_keys: int = 1000) -> dict:
+        """Read key values, rational times, interpolation, flags and temporal ease; indices are zero-based."""
+        return self._native_request("get_keyframes", {"comp_id": comp_id, "layer_id": layer_id,
+                                    "path": path, "start_index": start_index, "max_keys": max_keys})
+
+    def set_native_keyframes(self, layer_id: int, path: List[Union[str, int]], keyframes: List[dict],
+                             comp_id: int = 0, dry_run: bool = True,
+                             undo_name: str = "AE2Claude Native Keyframes") -> dict:
+        """Add/update 1..4096 sorted time/value keys with SDK bulk insertion and one undo group; default is dry-run."""
+        return self._native_request("set_keyframes", {"comp_id": comp_id, "layer_id": layer_id, "path": path,
+                                    "keyframes": keyframes, "dry_run": dry_run, "undo_name": undo_name})
+
+    def get_native_layer_transforms(self, layer_ids: List[int], times: List[float], comp_id: int = 0) -> dict:
+        """Read up to 1024 layer-to-world matrices, including parent transforms, without moving the playhead."""
+        return self._native_request("layer_transforms", {"comp_id": comp_id, "layer_ids": layer_ids, "times": times})
 
     # ── Agent Property Graph ──────────────────────────────
 

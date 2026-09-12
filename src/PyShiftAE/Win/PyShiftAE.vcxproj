@@ -424,6 +424,7 @@ cl /D "MSWindows" /EP $(IntDir)%(Filename).rrc &gt;               "$(ProjectDir)
     <ClCompile Include="..\CoreLib\Project.cpp" />
     <ClCompile Include="..\CoreLib\PyCore.cpp" />
     <ClCompile Include="..\CoreSDK\CollectionSuites.cpp" />
+    <ClCompile Include="..\CoreSDK\NativeAutomation.cpp" />
     <ClCompile Include="..\CoreSDK\CompSuites.cpp" />
     <ClCompile Include="..\CoreSDK\Core.cpp" />
     <ClCompile Include="..\CoreSDK\EffectSuites.cpp" />

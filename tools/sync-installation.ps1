@@ -97,6 +97,7 @@ function Get-DeploymentMap {
         [pscustomobject]@{ source = $sourceAex; destination = (Join-Path $PluginDirectory 'AE2Claude.aex'); label = 'AE2Claude.aex' },
         [pscustomobject]@{ source = (Join-Path $ProjectRoot 'ae2claude_server.py'); destination = (Join-Path $PluginDirectory 'ae2claude_server.py'); label = 'ae2claude_server.py' },
         [pscustomobject]@{ source = (Join-Path $ProjectRoot 'ae_bridge.py'); destination = (Join-Path $PluginDirectory 'ae_bridge.py'); label = 'ae_bridge.py' },
+        [pscustomobject]@{ source = (Join-Path $ProjectRoot 'ae_native_protocol.py'); destination = (Join-Path $PluginDirectory 'ae_native_protocol.py'); label = 'ae_native_protocol.py' },
         [pscustomobject]@{ source = (Join-Path $ProjectRoot 'ae2claude'); destination = (Join-Path $PluginDirectory 'ae2claude'); label = 'ae2claude' }
     )
     foreach ($directoryName in @('scripts', 'presets')) {

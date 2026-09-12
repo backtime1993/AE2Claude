@@ -41,6 +41,11 @@ mcp = FastMCP(
         "pixel differences. Successful explicit JSX calls leave unverified candidates; "
         "use ae_script_library to inspect/promote them, and ae_replay_script to replay "
         "exact code after checking project-specific assumptions."
+        " Prefer ae_native_snapshot, ae_sample_property, ae_native_keyframes, "
+        "ae_set_native_keyframes and ae_layer_transforms for bounded numeric "
+        "automation when health features.nativeAutomation is true. They use stable "
+        "IDs and one SDK dispatch without changing focus. A native failure never "
+        "authorizes replay through JSX."
     ),
     json_response=True,
 )
@@ -120,6 +125,52 @@ def ae_native_status() -> dict[str, Any]:
     """Read native queue, running work and idle-hook timing via health only, even while AE is busy. Does not prove project readability or forcibly cancel running work."""
     with bridge() as ae:
         return ae.get_native_diagnostics()
+
+
+@mcp.tool()
+def ae_native_snapshot(comp_id: int = 0, max_items: int = 500, max_layers: int = 500) -> dict[str, Any]:
+    """One SDK dispatch for project/comp/layer structure. Uses stable IDs; comp_id=0 means most recent comp. No focus changes."""
+    require_enabled()
+    with bridge() as ae:
+        return ae.get_native_snapshot(comp_id, max_items, max_layers)
+
+
+@mcp.tool()
+def ae_sample_property(layer_id: int, path: list[str | int], times: list[float],
+                       comp_id: int = 0, pre_expression: bool = False) -> dict[str, Any]:
+    """Sample a numeric/vector/color property at 1..2048 comp times in one SDK dispatch. Resolves matchName/zero-based path once."""
+    require_enabled()
+    with bridge() as ae:
+        return ae.sample_native_property(layer_id, path, times, comp_id, pre_expression)
+
+
+@mcp.tool()
+def ae_native_keyframes(layer_id: int, path: list[str | int], comp_id: int = 0,
+                         start_index: int = 0, max_keys: int = 1000) -> dict[str, Any]:
+    """Read raw keyframe values, exact SDK rational times, interpolation enums, flags and temporal ease; zero-based paging."""
+    require_enabled()
+    with bridge() as ae:
+        return ae.get_native_keyframes(layer_id, path, comp_id, start_index, max_keys)
+
+
+@mcp.tool()
+def ae_set_native_keyframes(layer_id: int, path: list[str | int], keyframes: list[dict[str, Any]],
+                             comp_id: int = 0, dry_run: bool = True,
+                             undo_name: str = "AE2Claude Native Keyframes", confirm: bool = False) -> dict[str, Any]:
+    """Bulk add/update 1..4096 sorted {time,value} keys with one SDK undo group. Defaults to dry-run. Existing keys at supplied times are updated; colors require RGBA. Does not change dimension separation or existing interpolation."""
+    require_enabled()
+    if not dry_run:
+        authorize("write", confirm=confirm)
+    with bridge() as ae:
+        return ae.set_native_keyframes(layer_id, path, keyframes, comp_id, dry_run, undo_name)
+
+
+@mcp.tool()
+def ae_layer_transforms(layer_ids: list[int], times: list[float], comp_id: int = 0) -> dict[str, Any]:
+    """Read layer-to-world matrices including parents through AEGP. At most 64 layers/64 times and 1024 matrices; no focus/playhead changes."""
+    require_enabled()
+    with bridge() as ae:
+        return ae.get_native_layer_transforms(layer_ids, times, comp_id)
 
 
 @mcp.tool()
