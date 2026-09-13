@@ -12,7 +12,7 @@ class ErrorHookTests(unittest.TestCase):
 const context={JSON:undefined,app:{beginSuppressDialogs(){events.push('begin')},endSuppressDialogs(v){events.push(v)}}};
 let result=vm.runInNewContext(JSON.parse(process.argv[1]),context);
 console.log(JSON.stringify({result,events}));"""
-        r = subprocess.run(['node', '-e', js, json.dumps(_wrap_jsx_for_structured_errors(code))], capture_output=True, text=True, check=True)
+        r = subprocess.run(['node', '-e', js, json.dumps(_wrap_jsx_for_structured_errors(code))], capture_output=True, text=True, encoding="utf-8", check=True)
         return json.loads(r.stdout)
 
     def test_missing_json_runtime_error_preserves_original(self):
