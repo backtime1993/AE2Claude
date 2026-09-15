@@ -4,6 +4,7 @@ import sys
 import os
 import unittest
 
+from ae2claude_mcp import __version__
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -67,7 +68,7 @@ class MCPProtocolTests(unittest.IsolatedAsyncioTestCase):
                 response = await session.call_tool("ae_ping")
         payload = response.structuredContent
         self.assertIsNotNone(payload)
-        self.assertEqual(payload["serverVersion"], "4.3.1")
+        self.assertEqual(payload["serverVersion"], __version__)
         self.assertTrue(payload["bridge"]["connected"], payload["bridge"])
         self.assertTrue(str(payload["bridge"]["aeVersion"]).startswith("27."))
 

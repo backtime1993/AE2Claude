@@ -11,12 +11,49 @@ permissions:
 jobs:
   native-dispatcher:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
+      - run: mkdir -p artifacts/tests
       - run: g++ -std=c++17 -pthread -Wall -Wextra -Werror tests/native_queue_test.cpp -o /tmp/ae-native-queue-test
-      - run: /tmp/ae-native-queue-test
+      - run: /tmp/ae-native-queue-test | tee artifacts/tests/native-queue.txt
       - run: g++ -std=c++17 -Wall -Wextra -Werror tests/native_automation_test.cpp -o /tmp/ae-native-automation-test
-      - run: /tmp/ae-native-automation-test
+      - run: /tmp/ae-native-automation-test | tee artifacts/tests/native-automation.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-gcc-${{ github.sha }}
+          path: artifacts/tests/*.txt
+          retention-days: 30
+
+  native-msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run SDK-independent tests with MSVC
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/tests | Out-Null
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'MSVC installation not found' }
+          & "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:artifacts/tests/native-queue-test.exe /Fo:artifacts/tests/native-queue-test.obj tests/native_queue_test.cpp 2>&1 | Tee-Object artifacts/tests/native-queue-build.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./artifacts/tests/native-queue-test.exe 2>&1 | Tee-Object artifacts/tests/native-queue.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cl /nologo /std:c++17 /EHsc /W4 /WX /Fe:artifacts/tests/native-automation-test.exe /Fo:artifacts/tests/native-automation-test.obj tests/native_automation_test.cpp 2>&1 | Tee-Object artifacts/tests/native-automation-build.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./artifacts/tests/native-automation-test.exe 2>&1 | Tee-Object artifacts/tests/native-automation.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-msvc-${{ github.sha }}
+          path: artifacts/tests/*.txt
+          retention-days: 30
 
   python:
     runs-on: windows-latest
@@ -28,7 +65,50 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked
       - run: uv run python -m compileall -q ae2claude_mcp ae_bridge.py ae2claude_server.py tests
-      - run: uv run python -m unittest discover -s tests -v
+      - name: Run tests and retain pass/skip/failure evidence
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/tests | Out-Null
+          @{ testedCommit = (git rev-parse HEAD); headCommit = '${{ github.event.pull_request.head.sha }}'; runner = '${{ runner.os }}'; liveAE = $false } | ConvertTo-Json | Set-Content artifacts/tests/context.json -Encoding utf8
+          uv run python -m unittest discover -s tests -v 2>&1 | Tee-Object artifacts/tests/python.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-tests-${{ github.sha }}
+          path: artifacts/tests/
+          retention-days: 30
+
+  python-distribution:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - name: Build sdist and wheel, then test the installed wheel outside the checkout
+        shell: pwsh
+        run: |
+          uv build --no-sources
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $wheels = @(Get-ChildItem dist/*.whl)
+          if ($wheels.Count -ne 1) { throw 'Expected one freshly built wheel' }
+          uv pip install --python .venv/Scripts/python.exe --no-deps --reinstall $wheels[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./.venv/Scripts/python.exe tools/check_distribution.py $wheels[0].FullName --report artifacts/distribution/smoke.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @{ testedCommit = (git rev-parse HEAD); headCommit = '${{ github.event.pull_request.head.sha }}'; includesAex = $false } | ConvertTo-Json | Set-Content artifacts/distribution/context.json -Encoding utf8
+          Get-ChildItem dist -File | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content artifacts/distribution/SHA256SUMS -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-distributions-${{ github.sha }}
+          path: |
+            dist/
+            artifacts/distribution/
+          retention-days: 30
 
   pinclicker:
     runs-on: windows-latest

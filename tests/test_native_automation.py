@@ -182,6 +182,21 @@ class NativeEndpointTests(unittest.TestCase):
                 self.ae.set_native_keyframes(1,PATH,[{"time":0,"value":True}],dry_run=False)
             send.assert_not_called()
 
+    def test_failed_native_write_releases_gate_without_replay(self):
+        write = Mock(side_effect=RuntimeError("commit outcome unknown"))
+        read = Mock(return_value={"ok": True, "project": {"items": []}})
+        with patch.object(native_server, "psc", SimpleNamespace(
+                native_set_keyframes=write, native_snapshot=read)):
+            failed = self.ae.set_native_keyframes(1, PATH, [FRAME], dry_run=False)
+            self.assertEqual(failed["outcome"], "unknown")
+            self.assertFalse(failed["retrySafe"])
+            self.assertFalse(self.request("GET", "/health")[1]["execution"]["busy"])
+            self.assertTrue(self.ae.get_native_snapshot()["ok"])
+        write.assert_called_once()
+        read.assert_called_once()
+        self.ae.run_jsx.assert_not_called()
+        self.ae._run_py.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
