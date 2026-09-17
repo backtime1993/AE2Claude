@@ -15,7 +15,7 @@ from pathlib import Path
 
 _AE_PORT = 8089
 _AE_PIPE = r"\\.\pipe\PyShiftAEBridge"
-BRIDGE_VERSION = "4.3.1"
+BRIDGE_VERSION = "4.4.0rc1"
 _JSX_ERROR_KEY = "__ae2claude_error__"
 _EXECUTION_LOCK = threading.Lock()
 _EXECUTION_STATE = {"startedAt": None, "completed": 0, "busyRejected": 0}

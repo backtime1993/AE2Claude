@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,3 +105,38 @@ class FrameReviewTests(unittest.TestCase):
         data = review.inline_png(frame['path'], max_bytes=200_000)
         self.assertLessEqual(len(data), 200_000)
         self.assertEqual(hashlib.sha256(Path(frame['path']).read_bytes()).hexdigest(), frame['sha256'])
+
+    def test_capture_survives_a_fresh_python_process(self):
+        result = self.capture([self.frame(Image.new('RGBA', (10, 10), 'red'))])
+        output = subprocess.check_output(
+            [sys.executable, '-c',
+             'import json,sys; from ae2claude_mcp.frame_review import stored_frame; '
+             'print(json.dumps(stored_frame(sys.argv[1], 0)))', result['captureId']],
+            encoding='utf-8', timeout=15,
+        )
+        self.assertEqual(json.loads(output)['sha256'], result['frames'][0]['sha256'])
+
+    def test_kill_switch_between_frames_prevents_further_capture(self):
+        frame = self.frame(Image.new('RGB', (10, 10)))
+        def first_frame(*args, **kwargs):
+            (self.root / 'disabled').touch()
+            return frame
+        with patch.object(review, 'render_preview', side_effect=first_frame) as render:
+            with self.assertRaises(PermissionError):
+                review.capture_frames(Mock(), times=[0, 1, 2])
+        self.assertEqual(render.call_count, 1)
+        self.assertEqual(list(self.root.glob('capture-*.json')), [])
+
+    def test_expiry_removes_old_frames_and_manifests_only(self):
+        from ae2claude_mcp.previews import prune_previews
+        old = self.capture([self.frame(Image.new('RGB', (10, 10)))])
+        old_paths = [Path(old['frames'][0]['path']), Path(old['grid']['path']),
+                     self.root / f"capture-{old['captureId']}.json"]
+        for path in old_paths:
+            os.utime(path, (1, 1))
+        fresh = self.capture([self.frame(Image.new('RGB', (10, 10)))])
+        self.assertEqual(prune_previews(), len(old_paths))
+        with self.assertRaises(FileNotFoundError):
+            review.stored_frame(old['captureId'], 0)
+        self.assertEqual(review.stored_frame(fresh['captureId'], 0)['sha256'],
+                         fresh['frames'][0]['sha256'])

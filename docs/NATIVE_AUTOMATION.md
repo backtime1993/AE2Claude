@@ -2,7 +2,8 @@
 
 Native revision: `native-automation-20260912`. This is an additive extension of
 the existing AE2Claude bridge, queue and busy gate. It adds no service or dependency.
-The Python package version remains 4.3.1; loaded native capability is identified by
+This feature first landed after v4.3.1 and is included in the planned v4.4.0 release.
+Loaded native capability is identified by
 `/health` → `native.automationRevision` and `features.nativeAutomation`.
 
 ## Entry points
