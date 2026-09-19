@@ -178,13 +178,10 @@ S_CreatePanelHook(
 		std::cout << e.what() << std::endl;
 		std::string error = e.what();
 	}
-	catch (std::filesystem::filesystem_error& e) {
-		std::cout << e.what() << std::endl;
-		std::string error = e.what();
-	}
 	catch (...) {
 		std::cout << "Unknown error occurred" << std::endl;
 	}
+    return A_Err_GENERIC;
 }
 
 

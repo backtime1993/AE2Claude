@@ -37,3 +37,22 @@ uv run python tools\stress_test.py --requests 200 --workers 8 --write-cycles 12 
 - AE 版本、主桥、MCP、PinClicker 版本一致；
 - 写入压力结束后工程条目数恢复为零；
 - 安装目录与 Release AEX 的 SHA-256 一致。
+
+
+## Windows acceptance fixes
+
+The concurrent read stress client handles server backpressure with at most 100
+attempts within a five-second retry budget. It retries only explicit
+`kind=busy, outcome=not_started, retrySafe=true` responses; transport errors and
+unknown write outcomes are never replayed. The report retains `backpressure`
+rejection counts alongside successful logical requests. Passing requires every
+logical read and write to succeed within its budget, not zero admission rejections.
+
+`tests/test_release_repairs.py` exercises real Windows file locks, successful
+installation, and a failure after both a replacement and a new-file creation.
+`tests/test_release_live.py` verifies 2D Position, dry run, single undo, 3D
+validation, and unchanged keys after rejection against the loaded AEX.
+
+Preview deadlines include the bridge call, asynchronous PNG stabilization and
+image processing. A timed-out preview is not replayed; an AE render already in
+progress may still complete. Confirm host recovery before another operation.

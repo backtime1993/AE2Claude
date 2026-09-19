@@ -1,6 +1,6 @@
 # Native automation
 
-Native revision: `native-automation-20260912`. This is an additive extension of
+Native revision: `native-automation-20260919`. This is an additive extension of
 the existing AE2Claude bridge, queue and busy gate. It adds no service or dependency.
 This feature first landed after v4.3.1 and is included in the planned v4.4.0 release.
 Loaded native capability is identified by
@@ -25,7 +25,11 @@ composition, selection or playhead. No AE handle is retained between requests.
 
 Paths use matchNames for named groups and zero-based integer indices for indexed
 groups (for example repeated effects). Names and layer indices are not accepted
-as substitutes for stable layer IDs. Numeric streams support scalar, 2D/3D and
+as substitutes for stable layer IDs. On a 2D layer, the exact matchName path
+`["ADBE Transform Group", "ADBE Position"]` accepts `[x,y]` and writes `[x,y,0]`.
+Raw SDK reads retain the existing three-component representation. Three-dimensional
+layers still require `[x,y,z]`. Dimension validation fails before an undo group is
+opened, with `outcome=not_started` and `retrySafe=true`. Numeric streams support scalar, 2D/3D and
 spatial variants, and RGBA color. Text, mask, arbitrary-data and marker streams
 continue to use the existing structured/script interfaces.
 

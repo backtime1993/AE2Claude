@@ -10,7 +10,7 @@ Many types of items may be simultaneously selected in After Effects; AEGP_Collec
 
 First acquire the current collection, then iterate across its members to ensure that whatever your AEGP does is applicable to each.
 
-We’ve added AEGP_Collection2H and AEGP_CollectionItemV2 so that selected dynamic streams can be handled with the AEGP_CollectionSuite.
+Weâ€™ve added AEGP_Collection2H and AEGP_CollectionItemV2 so that selected dynamic streams can be handled with the AEGP_CollectionSuite.
 
 AEGP_CollectionSuite2
 Function
@@ -19,7 +19,7 @@ Purpose
 
 AEGP_NewCollection
 
-Creates and returns a new, empty collection. To obtain the current composition’s selection as a collection, use AEGP_GetNewCollectionFromCompSelection.
+Creates and returns a new, empty collection. To obtain the current compositionâ€™s selection as a collection, use AEGP_GetNewCollectionFromCompSelection.
 
 AEGP_NewCollection(
   AEGP_PluginID      plugin_id,
@@ -39,7 +39,7 @@ AEGP_GetCollectionNumItems(
   A_u_long           *num_itemsPL);
 AEGP_GetCollectionItemByIndex
 
-Retrieves (creates and populates) the index’d collection item.
+Retrieves (creates and populates) the indexâ€™d collection item.
 
 AEGP_GetCollectionItemByIndex(
   AEGP_Collection2H      collectionH,
@@ -54,7 +54,7 @@ AEGP_CollectionPushBack(
   const AEGP_CollectionItemV2  *itemP);
 AEGP_CollectionErase
 
-Removes an index’d item (or items) from a given collection. NOTE: this range is exclusive, like STL iterators. To erase the first item, you would pass 0 and 1, respectively.
+Removes an indexâ€™d item (or items) from a given collection. NOTE: this range is exclusive, like STL iterators. To erase the first item, you would pass 0 and 1, respectively.
 
 AEGP_CollectionErase(
   AEGP_Collection2H  collectionH,

@@ -139,6 +139,8 @@ std::string Item::getType()
 		return "Footage";
 	case AEGP_ItemType_FOLDER:
 		return "Folder";
+    default:
+        throw std::runtime_error("Unknown item type or failed item query");
 	}
 }
 

@@ -9,6 +9,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'installation-transaction.ps1')
 
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
 $sourceAex = Join-Path $ProjectRoot 'build\Release\AE2Claude.aex'
@@ -152,22 +153,13 @@ foreach ($targetInfo in $targets) {
             if (-not (Test-Path -LiteralPath (Join-Path $targetInfo.support 'python312.dll') -PathType Leaf)) {
                 throw "python312.dll is missing from $($targetInfo.support)"
             }
-            $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+            Assert-DeploymentAdministrator
+            $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-' + [guid]::NewGuid().ToString('N')
             $safeTarget = $targetInfo.name -replace '[^A-Za-z0-9._-]', '_'
             $backupPath = Join-Path $ProjectRoot "state\backups\$stamp\$safeTarget"
-            foreach ($difference in $differences) {
-                if (Test-Path -LiteralPath $difference.destination -PathType Leaf) {
-                    $relative = $difference.destination.Substring($pluginDirectory.Length).TrimStart('\')
-                    $backupFile = Join-Path $backupPath $relative
-                    New-Item -ItemType Directory -Path (Split-Path -Parent $backupFile) -Force | Out-Null
-                    Copy-Item -LiteralPath $difference.destination -Destination $backupFile -Force
-                }
-            }
             $changedLabels = @($differences | ForEach-Object { $_.label })
-            foreach ($entry in $map | Where-Object { $changedLabels -contains $_.label }) {
-                New-Item -ItemType Directory -Path (Split-Path -Parent $entry.destination) -Force | Out-Null
-                Copy-Item -LiteralPath $entry.source -Destination $entry.destination -Force
-            }
+            $changedEntries = @($map | Where-Object { $changedLabels -contains $_.label })
+            Invoke-DeploymentTransaction -Entries $changedEntries -PluginDirectory $pluginDirectory -BackupPath $backupPath
             $remaining = @()
             foreach ($entry in $map) {
                 $difference = Get-FileDifference -Source $entry.source -Destination $entry.destination -Label $entry.label

@@ -90,7 +90,7 @@ public:
                             HWND targetHwnd = hwnds[0]; // Target the second HWND
                             hwndMap[panelID] = targetHwnd;
                             std::cout << "Target HWND found and stored for panelID: " << panelID << std::endl;
-                            int intHWND = reinterpret_cast<int>(targetHwnd);
+                            const auto intHWND = reinterpret_cast<UINT_PTR>(targetHwnd);
                             std::cout << "HWND: " << intHWND << std::endl;
                             targetHwndFound = true;
                             break; // Exit the inner loop once the target HWND is found

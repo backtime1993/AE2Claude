@@ -6,7 +6,7 @@
 #include <vector>
 
 namespace NativeAutomation {
-constexpr const char* kRevision = "native-automation-20260912";
+constexpr const char* kRevision = "native-automation-20260919";
 constexpr int kMaxSamples = 2048;
 constexpr int kMaxKeys = 4096;
 constexpr int kMaxSnapshotRows = 2000;

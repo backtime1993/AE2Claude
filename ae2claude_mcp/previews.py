@@ -51,7 +51,7 @@ def _wait_for_complete_file(path: Path, timeout_seconds: float = 30.0) -> int:
             stable_samples = 0
             last_size = size
         time.sleep(0.1)
-    raise RuntimeError("AE preview PNG did not finish writing before timeout")
+    raise TimeoutError("AE preview PNG did not finish writing before timeout; render was not replayed")
 
 
 def _optimize_preview(path: Path, max_width: int) -> tuple[int, int, int]:
@@ -78,6 +78,9 @@ def render_preview(
     max_width: int = 1600,
     timeout_ms: int = 120_000,
 ) -> dict[str, Any]:
+    if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or not 1 <= timeout_ms <= 120_000:
+        raise ValueError("timeout_ms must be an integer from 1 to 120000")
+    deadline = time.monotonic() + timeout_ms / 1000
     prune_previews()
     if time_seconds is not None and (not math.isfinite(time_seconds) or time_seconds < 0):
         raise ValueError("time_seconds must be finite and nonnegative")
@@ -114,8 +117,13 @@ def render_preview(
         raise RuntimeError(f"Invalid preview response: {raw}") from exc
     if not result.get("ok"):
         raise RuntimeError(result.get("error", "preview_failed"))
-    _wait_for_complete_file(output)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Preview time budget exhausted; render was not replayed")
+    _wait_for_complete_file(output, timeout_seconds=remaining)
     preview_width, preview_height, size_bytes = _optimize_preview(output, max_width)
+    if time.monotonic() > deadline:
+        raise TimeoutError("Preview time budget exhausted; render was not replayed")
     result["path"] = str(output)
     result["sizeBytes"] = size_bytes
     result["previewWidth"] = preview_width
