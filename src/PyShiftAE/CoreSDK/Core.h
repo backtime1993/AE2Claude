@@ -59,7 +59,7 @@ struct Result {
     A_Err error; // The error code returned by the AE functions
 
     // Constructor for error-only results
-    Result(A_Err err) : error(err) {}
+    Result(A_Err err) : value{}, error(err) {}
 
     // Constructor for results with a value and an error code
     Result(T val, A_Err err) : value(val), error(err) {}

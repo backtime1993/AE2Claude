@@ -49,6 +49,7 @@ Result<std::string> GetProjectName(Result<AEGP_ProjectH> projH) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_ProjectH proj = projH.value;
 	if (proj == nullptr) {
+		err = A_Err_PARAMETER;
 		Result<std::string> result;
 		result.value = "";
 		result.error = err;
@@ -74,6 +75,7 @@ Result<std::string> GetProjectPath(Result<AEGP_ProjectH> projH) {
 	std::string path;
 	AEGP_ProjectH proj = projH.value;
 	if (proj == nullptr) {
+		err = A_Err_PARAMETER;
 		Result<std::string> result;
 		result.value = "";
 		result.error = err;
@@ -98,6 +100,7 @@ Result<void> SaveProjectToPath(Result<AEGP_ProjectH> projH, const std::string& p
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_ProjectH proj = projH.value;
 if (proj == nullptr) {
+		err = A_Err_PARAMETER;
 		Result<void> result;
 		result.error = err;
 		return result;
@@ -111,10 +114,11 @@ if (proj == nullptr) {
 
 Result<AEGP_TimeDisplay3> GetProjectTimeDisplay(Result<AEGP_ProjectH> projH) {
 	A_Err err = A_Err_NONE;
-	AEGP_TimeDisplay3 time_display;
+	AEGP_TimeDisplay3 time_display{};
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_ProjectH proj = projH.value;
 	if (proj == nullptr) {
+		err = A_Err_PARAMETER;
 Result<AEGP_TimeDisplay3> result;
 		result.value = time_display;
 		result.error = err;
@@ -133,7 +137,7 @@ Result<void> SetProjectTimeDisplay2(Result<AEGP_ProjectH> projH,
 	int framesPerFoot,
 	int startingFrame,
 	bool autoTimecodeBase) {
-	AEGP_TimeDisplay2 timeDisplay;
+	AEGP_TimeDisplay2 timeDisplay{};
 	// Set display type
 	if (displayType == "TIMECODE") timeDisplay.time_display_type = AEGP_TimeDisplayType_TIMECODE;
 	else if (displayType == "FRAMES") timeDisplay.time_display_type = AEGP_TimeDisplayType_FRAMES;
@@ -152,6 +156,7 @@ Result<void> SetProjectTimeDisplay2(Result<AEGP_ProjectH> projH,
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_ProjectH proj = projH.value;
 	if (proj == nullptr) {
+		err = A_Err_PARAMETER;
 		Result<void> result;
 		result.error = err;
 		return result;
@@ -169,6 +174,7 @@ Result<bool> IsProjectDirty(Result<AEGP_ProjectH> projH) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_ProjectH proj = projH.value;
 	if (proj == nullptr) {
+		err = A_Err_PARAMETER;
 Result<bool> result;
 		result.value = false;
 		result.error = err;
@@ -185,6 +191,7 @@ Result<void> SaveProjectAs(Result<AEGP_ProjectH> projH, const std::string& path)
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_ProjectH proj = projH.value;
 	if (proj == nullptr) {
+		err = A_Err_PARAMETER;
 		Result<void> result;
 		result.error = err;
 		return result;
@@ -221,10 +228,11 @@ Result<AEGP_ProjectH> OpenProjectFromPath(const std::string& path) {
 
 Result<std::string> GetProjectBitDepth(Result<AEGP_ProjectH> projH) {
 	A_Err err = A_Err_NONE;
-	AEGP_ProjBitDepth bit_depth;
+	AEGP_ProjBitDepth bit_depth{};
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_ProjectH proj = projH.value;
 	if (proj == nullptr) {
+		err = A_Err_PARAMETER;
 		Result<std::string> result;
 		result.value = "";
 		result.error = err;
@@ -249,6 +257,7 @@ Result<void> SetProjectBitDepth(Result<AEGP_ProjectH> projH, std::string bit_dep
 	AEGP_ProjBitDepth bitDepth = ConvertToProjBitDepth(bit_depth);
 	AEGP_ProjectH proj = projH.value;
 if (proj == nullptr) {
+		err = A_Err_PARAMETER;
 		Result<void> result;
 		result.error = err;
 		return result;
@@ -263,8 +272,8 @@ Result<AEGP_ItemH> getProjectRootFolder()
 {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	A_Err err = A_Err_NONE;
-	AEGP_ItemH root_folderH;
-	AEGP_ProjectH projH;
+	AEGP_ItemH root_folderH{};
+	AEGP_ProjectH projH{};
 	ERR(suites.ProjSuite6()->AEGP_GetProjectByIndex(0, &projH));
 	ERR(suites.ProjSuite6()->AEGP_GetProjectRootFolder(projH, &root_folderH));
 

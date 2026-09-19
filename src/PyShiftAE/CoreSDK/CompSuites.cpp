@@ -8,7 +8,7 @@ Result<AEGP_CompH> Addcomp(std::string name, float width,
 
 	A_Err err = A_Err_NONE;
 
-	AEGP_CompH new_compH;
+	AEGP_CompH new_compH{};
 	const A_char* nameZ = const_cast<A_char*>(name.c_str());
 
 	// Create pixel aspect ratio
@@ -45,7 +45,7 @@ Result<AEGP_CompH> getCompFromItem(Result<AEGP_ItemH> itemH)
 {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	A_Err err = A_Err_NONE;
-	AEGP_CompH compH;
+	AEGP_CompH compH{};
 	AEGP_ItemH item = itemH.value;
 	ERR(suites.CompSuite4()->AEGP_GetCompFromItem(item, &compH));
 
@@ -58,10 +58,11 @@ Result<AEGP_CompH> getCompFromItem(Result<AEGP_ItemH> itemH)
 
 Result<AEGP_ItemH> GetItemFromComp(Result<AEGP_CompH> compH) {
 	A_Err err = A_Err_NONE;
-	AEGP_ItemH itemH;
+	AEGP_ItemH itemH{};
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_ItemH>(itemH, err);
 	}
 	err = suites.CompSuite11()->AEGP_GetItemFromComp(comp, &itemH);
@@ -72,10 +73,11 @@ Result<AEGP_ItemH> GetItemFromComp(Result<AEGP_CompH> compH) {
 
 Result<AEGP_DownsampleFactor> GetCompDownsampleFactor(Result<AEGP_CompH> compH) {
 	A_Err err = A_Err_NONE;
-	AEGP_DownsampleFactor dsf;
+	AEGP_DownsampleFactor dsf{};
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_DownsampleFactor>(dsf, err);
 	}
 	err = suites.CompSuite11()->AEGP_GetCompDownsampleFactor(comp, &dsf);
@@ -86,11 +88,12 @@ Result<AEGP_DownsampleFactor> GetCompDownsampleFactor(Result<AEGP_CompH> compH) 
 
 Result<void> SetCompDownsampleFactor(Result<AEGP_CompH> compH, int x, int y) {
 	A_Err err = A_Err_NONE;
-	AEGP_DownsampleFactor dsf;
+	AEGP_DownsampleFactor dsf{};
 	dsf.xS = x;
 	dsf.yS = y;
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
@@ -103,10 +106,11 @@ Result<void> SetCompDownsampleFactor(Result<AEGP_CompH> compH, int x, int y) {
 
 Result<AEGP_ColorVal> GetCompBGColor(Result<AEGP_CompH> compH) {
 	A_Err err = A_Err_NONE;
-	AEGP_ColorVal bgColor;
+	AEGP_ColorVal bgColor{};
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_ColorVal>(bgColor, err);
 	}
 
@@ -118,7 +122,7 @@ Result<AEGP_ColorVal> GetCompBGColor(Result<AEGP_CompH> compH) {
 
 Result<void> SetCompBGColor(Result<AEGP_CompH> compH, float red, float green, float blue, float alpha) {
 	A_Err err = A_Err_NONE;
-	AEGP_ColorVal bgColor;
+	AEGP_ColorVal bgColor{};
 	bgColor.alphaF = alpha;
 	bgColor.blueF = blue;
 	bgColor.greenF = green;
@@ -126,6 +130,7 @@ Result<void> SetCompBGColor(Result<AEGP_CompH> compH, float red, float green, fl
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_SetCompBGColor(comp, &bgColor);
@@ -136,10 +141,11 @@ Result<void> SetCompBGColor(Result<AEGP_CompH> compH, float red, float green, fl
 
 Result<AEGP_CompFlags> GetCompFlags(Result<AEGP_CompH> compH) {
 	A_Err err = A_Err_NONE;
-	AEGP_CompFlags compFlags;
+	AEGP_CompFlags compFlags{};
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_CompFlags>(compFlags, err);
 	}
 	err = suites.CompSuite11()->AEGP_GetCompFlags(comp, &compFlags);
@@ -154,6 +160,7 @@ Result<bool> GetShowLayerNameOrSourceName(Result<AEGP_CompH> compH) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<bool>(static_cast<bool>(layerNamesShown), err);
 	}
 	err = suites.CompSuite11()->AEGP_GetShowLayerNameOrSourceName(comp, &layerNamesShown);
@@ -167,6 +174,7 @@ Result<void> SetShowLayerNameOrSourceName(Result<AEGP_CompH> compH, bool showLay
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_SetShowLayerNameOrSourceName(comp, static_cast<A_Boolean>(showLayerNames));
@@ -181,6 +189,7 @@ Result<bool> GetShowBlendModes(Result<AEGP_CompH> compH) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<bool>(false, err);
 	}
 	err = suites.CompSuite11()->AEGP_GetShowBlendModes(comp, &blendModesShown);
@@ -194,6 +203,7 @@ Result<void> SetShowBlendModes(Result<AEGP_CompH> compH, bool showBlendModes) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_SetShowBlendModes(comp, static_cast<A_Boolean>(showBlendModes));
@@ -208,6 +218,7 @@ Result<float> GetCompFramerate(Result<AEGP_CompH> compH) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<float>(static_cast<float>(fps), err);
 	}
 	err = suites.CompSuite11()->AEGP_GetCompFramerate(comp, &fps);
@@ -221,6 +232,7 @@ Result<void> SetCompFramerate(Result<AEGP_CompH> compH, float fps) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	A_FpLong fpsFpLong = static_cast<A_FpLong>(fps);
@@ -236,6 +248,7 @@ Result<std::pair<A_Ratio, A_Ratio>> GetCompShutterAnglePhase(Result<AEGP_CompH> 
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		angle.den = 0;
 		angle.num = 0;
 		phase.den = 0;
@@ -253,6 +266,7 @@ Result<void> SetCompSuggestedMotionBlurSamples(Result<AEGP_CompH> compH, int sam
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_SetCompSuggestedMotionBlurSamples(comp, samples);
@@ -267,6 +281,7 @@ Result<float> GetCompWorkAreaStart(Result<AEGP_CompH> compH) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<float>(0.0, err);
 	}
 	err = suites.CompSuite11()->AEGP_GetCompWorkAreaStart(comp, &start);
@@ -284,6 +299,7 @@ Result<float> GetCompWorkAreaDuration(Result<AEGP_CompH> compH) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<float>(0.0, err);
 	}
 
@@ -307,6 +323,7 @@ Result<void> SetCompWorkAreaStartAndDuration(Result<AEGP_CompH> compH, float sta
 
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_SetCompWorkAreaStartAndDuration(comp, &startTime, &duration);
@@ -320,8 +337,9 @@ Result<AEGP_LayerH> CreateSolidInComp(const std::string& name, int width, int he
 	A_Err err = A_Err_NONE;
 	AEGP_LayerH newSolidLayerH = 0;
 	AEGP_CompH parentComp = parentCompH.value;
-	AEGP_ColorVal color;
+	AEGP_ColorVal color{};
 	if (parentComp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_LayerH>(newSolidLayerH, err);
 	}
 	color.alphaF = alpha;
@@ -344,11 +362,12 @@ Result<AEGP_LayerH> CreateSolidInComp(const std::string& name, int width, int he
 
 Result<AEGP_LayerH> CreateCameraInComp(const std::string& name, float x, float y, Result<AEGP_CompH> parentCompH) {
 	A_Err err = A_Err_NONE;
-	AEGP_LayerH newCameraLayerH;
+	AEGP_LayerH newCameraLayerH{};
 	A_FloatPoint centerPoint = { x, y };
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH parentComp = parentCompH.value;
 if (parentComp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_LayerH>(newCameraLayerH, err);
 	}
 	auto utf16Name = convertUTF8ToUTF16(name);
@@ -360,11 +379,12 @@ if (parentComp == NULL) {
 
 Result<AEGP_LayerH> CreateLightInComp(const std::string& name, float x, float y, Result<AEGP_CompH> parentCompH) {
 	A_Err err = A_Err_NONE;
-	AEGP_LayerH newLightLayerH;
+	AEGP_LayerH newLightLayerH{};
 	A_FloatPoint centerPoint = { x, y };
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH parentComp = parentCompH.value;
 	if (parentComp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_LayerH>(newLightLayerH, err);
 	}
 	auto utf16Name = convertUTF8ToUTF16(name);
@@ -375,53 +395,28 @@ Result<AEGP_LayerH> CreateLightInComp(const std::string& name, float x, float y,
 }
 
 Result<std::vector<Result<AEGP_LayerH>>> GetNewCollectionFromCompSelection(Result<AEGP_CompH> compH) {
-	A_Err err = A_Err_NONE;
-	AEGP_Collection2H collectionH;
-	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
-	AEGP_PluginID* pluginIDPtr = SuiteManager::GetInstance().GetPluginID();
-
-	if (pluginIDPtr != nullptr) {
-		AEGP_PluginID pluginID = *pluginIDPtr;
-		AEGP_CompH comp = compH.value;
-		if (comp == NULL) {
-			return Result<std::vector<Result<AEGP_LayerH>>>(std::vector<Result<AEGP_LayerH>>(), err);
-		}
-		err = suites.CompSuite11()->AEGP_GetNewCollectionFromCompSelection(pluginID, comp, &collectionH);
-		A_u_long numItems;
-		err = suites.CollectionSuite2()->AEGP_GetCollectionNumItems(collectionH, &numItems);
-		std::vector<Result<AEGP_LayerH>> layers;
-
-		for (int i = 0; i < numItems; i++) {
-			AEGP_CollectionItemV2 itemH;
-			err = suites.CollectionSuite2()->AEGP_GetCollectionItemByIndex(collectionH, i, &itemH);
-			AEGP_CollectionItemType type = itemH.type;
-
-			// Declare variables outside of switch
-			AEGP_LayerH layerH;
-			Result<AEGP_LayerH> result;
-
-			switch (type) {
-			case AEGP_CollectionItemType_LAYER:
-			{
-				AEGP_LayerCollectionItem layerItem = itemH.u.layer;
-				layerH = layerItem.layerH;
-				result = Result<AEGP_LayerH>(layerH, err);
-				layers.push_back(result);
-			}
-			break;
-			case AEGP_CollectionItemType_MASK:
-			{
-				AEGP_MaskCollectionItem maskItem = itemH.u.mask;
-				// handle mask item
-			}
-			break;
-			}
-		}
-
-		Result<std::vector<Result<AEGP_LayerH>>> finalResult(layers, err);
-		suites.CollectionSuite2()->AEGP_DisposeCollection(collectionH);
-		return finalResult;
-	}
+    using Layers = std::vector<Result<AEGP_LayerH>>;
+    auto* plugin = SuiteManager::GetInstance().GetPluginID();
+    if (!plugin || !compH.value) return Result<Layers>(A_Err_PARAMETER);
+    auto& suites = SuiteManager::GetInstance().GetSuiteHandler();
+    AEGP_Collection2H collection = nullptr;
+    A_Err err = suites.CompSuite11()->AEGP_GetNewCollectionFromCompSelection(*plugin, compH.value, &collection);
+    if (err || !collection) return Result<Layers>(err ? err : A_Err_PARAMETER);
+    struct CollectionGuard {
+        AEGP_SuiteHandler& suites;
+        AEGP_Collection2H handle;
+        ~CollectionGuard() { suites.CollectionSuite2()->AEGP_DisposeCollection(handle); }
+    } guard{suites, collection};
+    A_u_long count = 0;
+    Layers layers;
+    err = suites.CollectionSuite2()->AEGP_GetCollectionNumItems(collection, &count);
+    for (A_u_long i = 0; !err && i < count; ++i) {
+        AEGP_CollectionItemV2 item{};
+        err = suites.CollectionSuite2()->AEGP_GetCollectionItemByIndex(collection, i, &item);
+        if (!err && item.type == AEGP_CollectionItemType_LAYER)
+            layers.emplace_back(item.u.layer.layerH, A_Err_NONE);
+    }
+    return Result<Layers>(layers, err);
 }
 
 
@@ -430,6 +425,7 @@ Result<void> SetSelection(Result<AEGP_CompH> compH, AEGP_Collection2H collection
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_SetSelection(comp, collectionH);
@@ -444,6 +440,7 @@ Result<float> GetCompDisplayStartTime(Result<AEGP_CompH> compH) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<float>(0.0, err);
 	}
 	A_FpLong frameRate;
@@ -464,6 +461,7 @@ ERR(suites.CompSuite11()->AEGP_GetCompFramerate(compH.value, &frameRate));
 
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_SetCompDisplayStartTime(comp, &startTime);
@@ -480,6 +478,7 @@ Result<void> SetCompDuration(Result<AEGP_CompH> compH, float durationInSeconds) 
 	A_Time duration = ConvertFloatToATime(durationInSeconds, frameRate);  // Assuming a function to convert float to A_Time
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_SetCompDuration(comp, &duration);
@@ -490,7 +489,7 @@ Result<void> SetCompDuration(Result<AEGP_CompH> compH, float durationInSeconds) 
 
 Result<AEGP_LayerH> CreateNullInComp(const std::string& name, Result<AEGP_CompH> parentCompH, float dur) {
 	A_Err err = A_Err_NONE;
-	AEGP_LayerH newNullLayerH;
+	AEGP_LayerH newNullLayerH{};
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	A_FpLong frameRate;
 	ERR(suites.CompSuite11()->AEGP_GetCompFramerate(parentCompH.value, &frameRate));
@@ -498,6 +497,7 @@ Result<AEGP_LayerH> CreateNullInComp(const std::string& name, Result<AEGP_CompH>
 
 	AEGP_CompH parentComp = parentCompH.value;
 if (parentComp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_LayerH>(newNullLayerH, err);
 	}
 
@@ -514,6 +514,7 @@ Result<void> SetCompPixelAspectRatio(Result<AEGP_CompH> compH, float pixelAspect
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_SetCompPixelAspectRatio(comp, &par);
@@ -528,6 +529,7 @@ Result<AEGP_LayerH> CreateTextLayerInComp(Result<AEGP_CompH> parentCompH, bool s
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH parentComp = parentCompH.value;
 if (parentComp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_LayerH>(newTextLayerH, err);
 	}
 	err = suites.CompSuite11()->AEGP_CreateTextLayerInComp(parentComp, static_cast<A_Boolean>(selectNewLayer), &newTextLayerH);
@@ -538,11 +540,12 @@ if (parentComp == NULL) {
 
 Result<AEGP_LayerH> CreateBoxTextLayerInComp(Result<AEGP_CompH> parentCompH, bool selectNewLayer, float x, float y) {
 	A_Err err = A_Err_NONE;
-	AEGP_LayerH newBoxTextLayerH;
+	AEGP_LayerH newBoxTextLayerH{};
 	A_FloatPoint boxDimensions = { x, y };
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH parentComp = parentCompH.value;
 	if (parentComp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_LayerH>(newBoxTextLayerH, err);
 	}
 	err = suites.CompSuite11()->AEGP_CreateBoxTextLayerInComp(parentComp, static_cast<A_Boolean>(selectNewLayer), boxDimensions, &newBoxTextLayerH);
@@ -556,6 +559,7 @@ Result<void> SetCompDimensions(Result<AEGP_CompH> compH, int width, int height) 
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_SetCompDimensions(comp, width, height);
@@ -566,10 +570,11 @@ Result<void> SetCompDimensions(Result<AEGP_CompH> compH, int width, int height) 
 
 Result<AEGP_CompH> DuplicateComp(Result<AEGP_CompH> compH) {
 	A_Err err = A_Err_NONE;
-	AEGP_CompH newCompH;
+	AEGP_CompH newCompH{};
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_CompH>(newCompH, err);
 	}
 	err = suites.CompSuite11()->AEGP_DuplicateComp(comp, &newCompH);
@@ -584,6 +589,7 @@ Result<float> GetCompFrameDuration(Result<AEGP_CompH> compH) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<float>(0.0, err);
 	}
 	err = suites.CompSuite11()->AEGP_GetCompFrameDuration(comp, &frameDuration);
@@ -597,7 +603,7 @@ if (comp == NULL) {
 
 Result<AEGP_CompH> GetMostRecentlyUsedComp() {
 	A_Err err = A_Err_NONE;
-	AEGP_CompH compH;
+	AEGP_CompH compH{};
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 
 	err = suites.CompSuite11()->AEGP_GetMostRecentlyUsedComp(&compH);
@@ -608,10 +614,11 @@ Result<AEGP_CompH> GetMostRecentlyUsedComp() {
 
 Result<AEGP_LayerH> CreateVectorLayerInComp(Result<AEGP_CompH> parentCompH) {
 	A_Err err = A_Err_NONE;
-	AEGP_LayerH newVectorLayerH;
+	AEGP_LayerH newVectorLayerH{};
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH parentComp = parentCompH.value;
 if (parentComp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<AEGP_LayerH>(newVectorLayerH, err);
 	}
 	err = suites.CompSuite11()->AEGP_CreateVectorLayerInComp(parentComp, &newVectorLayerH);
@@ -622,7 +629,7 @@ if (parentComp == NULL) {
 
 Result<AEGP_StreamRefH> GetNewCompMarkerStream(Result<AEGP_CompH> parentCompH) {
 	A_Err err = A_Err_NONE;
-	AEGP_StreamRefH markerStreamH;
+	AEGP_StreamRefH markerStreamH{};
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_PluginID* pluginIDPtr = SuiteManager::GetInstance().GetPluginID();
 
@@ -631,6 +638,7 @@ Result<AEGP_StreamRefH> GetNewCompMarkerStream(Result<AEGP_CompH> parentCompH) {
 		AEGP_PluginID pluginID = *pluginIDPtr;
 		AEGP_CompH parentComp = parentCompH.value;
 		if (parentComp == NULL) {
+		err = A_Err_PARAMETER;
 			return Result<AEGP_StreamRefH>(markerStreamH, err);
 		}
 
@@ -639,6 +647,7 @@ Result<AEGP_StreamRefH> GetNewCompMarkerStream(Result<AEGP_CompH> parentCompH) {
 		Result<AEGP_StreamRefH> result(markerStreamH, err);
 		return result;
 	}
+	return Result<AEGP_StreamRefH>(A_Err_PARAMETER);
 }
 
 Result<bool> GetCompDisplayDropFrame(Result<AEGP_CompH> compH) {
@@ -647,6 +656,7 @@ Result<bool> GetCompDisplayDropFrame(Result<AEGP_CompH> compH) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 	return Result<bool>(static_cast<bool>(dropFrame), err);
 	}
 	err = suites.CompSuite11()->AEGP_GetCompDisplayDropFrame(comp, &dropFrame);
@@ -660,6 +670,7 @@ Result<void> SetCompDisplayDropFrame(Result<AEGP_CompH> compH, bool dropFrame) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_SetCompDisplayDropFrame(comp, static_cast<A_Boolean>(dropFrame));
@@ -673,6 +684,7 @@ Result<void> ReorderCompSelection(Result<AEGP_CompH> compH, int index) {
 	AEGP_SuiteHandler& suites = SuiteManager::GetInstance().GetSuiteHandler();
 	AEGP_CompH comp = compH.value;
 	if (comp == NULL) {
+		err = A_Err_PARAMETER;
 		return Result<void>(err);
 	}
 	err = suites.CompSuite11()->AEGP_ReorderCompSelection(comp, index);

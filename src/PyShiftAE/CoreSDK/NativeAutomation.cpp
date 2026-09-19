@@ -381,9 +381,25 @@ WriteResult writeKeys(int compID,int layerID,const Path& path,const std::vector<
     if (!canVary) throw std::runtime_error("stream_cannot_vary; outcome=not_started");
     std::vector<AEGP_StreamValue2> values; values.reserve(frames.size());
     std::vector<A_Time> timeValues; timeValues.reserve(frames.size());
+    const bool twoDimensionalPosition = !(flags & AEGP_LayerFlag_LAYER_IS_3D)
+        && type == AEGP_StreamType_ThreeD_SPATIAL && path.size() == 2
+        && std::holds_alternative<std::string>(path[0])
+        && std::holds_alternative<std::string>(path[1])
+        && std::get<std::string>(path[0]) == "ADBE Transform Group"
+        && std::get<std::string>(path[1]) == "ADBE Position";
+    try {
     for (const auto& frame : frames) {
-        values.push_back(pack(stream.get(),type,frame.value));
+        Value value = frame.value;
+        if (twoDimensionalPosition && std::holds_alternative<std::vector<double>>(value)) {
+            auto& vector = std::get<std::vector<double>>(value);
+            if (vector.size() == 2) vector.push_back(0.0);
+        }
+        values.push_back(pack(stream.get(),type,value));
         timeValues.push_back(nativeTime(frame.time));
+    }
+    } catch (const std::exception& error) {
+        result.ok = false; result.error = error.what();
+        return result; // No undo group or keyframe mutation has begun.
     }
     if (dryRun) return result;
     check(sdk.suites.UtilitySuite6()->AEGP_StartUndoGroup(undoName.c_str()), "start_undo");

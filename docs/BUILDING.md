@@ -52,3 +52,19 @@ uv run ae2claude status
 Python 安装包构建：`uv build --no-sources`。完整原生发布包还需配套源码、
 脚本、预设、安装工具、依赖清单、第三方声明及 SHA-256，详见
 [发布清单](RELEASE_CHECKLIST.md)。
+
+
+### Windows installation failure safety
+
+Run `deploy.bat` from an elevated terminal. Apply rejects a non-administrator
+before any installed file changes. For each AE target, all changed files are
+preflighted, staged on the target volume, hashed, and backed up before commit.
+An in-process failure restores replaced files and removes only newly installed
+files; `state/backups/.../transaction.json` records committed, rolled-back or
+rollback-failed state. This is not crash-atomic across the entire file set: a
+power loss or a rollback permission failure requires recovery from the journal
+and backup before launching AE. Close AE before deployment.
+
+PiPL preprocessing uses UTF-8 MSBuild Exec tasks and relative intermediate names;
+space-containing and Chinese project paths are supported. C4700, C4715, C4302,
+C4311 and C4286 diagnostics are build errors instead of ignored warnings.

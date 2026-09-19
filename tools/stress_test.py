@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+import random
+import threading
 import subprocess
 import sys
 import time
@@ -24,6 +26,10 @@ if str(ROOT) not in sys.path:
 
 from ae_bridge import AEBridge  # noqa: E402
 from ae2claude_mcp.server import ae_ping  # noqa: E402
+
+
+_BUSY_COUNT_LOCK = threading.Lock()
+_BUSY_COUNTS = {"rejections": 0}
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -77,14 +83,31 @@ def get_json(url: str) -> dict[str, Any]:
         return json.loads(response.read())
 
 
-def post_jsx(source: str) -> dict[str, Any]:
+def post_jsx(source: str, *, retry_busy: bool = False, retry_seconds: float = 5.0) -> dict[str, Any]:
     request = urllib.request.Request(
         "http://127.0.0.1:8089/jsx",
         data=source.encode("utf-8"),
         headers={"Content-Type": "text/plain; charset=utf-8"},
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return json.loads(response.read())
+    deadline = time.monotonic() + retry_seconds
+    attempts = 0
+    while True:
+        if attempts and time.monotonic() >= deadline:
+            return payload
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read())
+        if not (retry_busy and payload.get("ok") is False
+                and payload.get("kind") == "busy"
+                and payload.get("outcome") == "not_started"
+                and payload.get("retrySafe") is True):
+            return payload
+        with _BUSY_COUNT_LOCK:
+            _BUSY_COUNTS["rejections"] += 1
+        attempts += 1
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or attempts >= 100:
+            return payload
+        time.sleep(min(remaining, 0.005 * 2 ** min(attempts, 4) + random.uniform(0, 0.005)))
 
 
 def process_snapshot() -> list[dict[str, Any]]:
@@ -321,7 +344,7 @@ def main() -> int:
             raise RuntimeError(f"bad PinClicker health: {payload}")
 
     def jsx_read() -> None:
-        payload = post_jsx("app.version")
+        payload = post_jsx("app.version", retry_busy=True)
         if not payload.get("ok") or not str(payload.get("result", "")).startswith("27."):
             raise RuntimeError(f"bad JSX response: {payload}")
 
@@ -363,6 +386,7 @@ def main() -> int:
         "processBefore": before,
         "processAfter": after,
         "suites": suites,
+        "backpressure": {"busyRejections": _BUSY_COUNTS["rejections"], "retryDeadlineSeconds": 5, "maxAttempts": 100, "policy": "retry only busy + not_started + retrySafe=true"},
         "writePressure": write_result,
         "agentPropertyPressure": agent_result,
     }
@@ -371,6 +395,7 @@ def main() -> int:
         "ok": report["ok"],
         "report": str(output),
         "suites": suites,
+        "backpressure": {"busyRejections": _BUSY_COUNTS["rejections"], "retryDeadlineSeconds": 5, "maxAttempts": 100, "policy": "retry only busy + not_started + retrySafe=true"},
         "writePressure": write_result,
         "agentPropertyPressure": agent_result,
     }, ensure_ascii=False, indent=2))
