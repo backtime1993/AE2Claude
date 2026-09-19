@@ -2,7 +2,7 @@
 
 Native revision: `native-automation-20260919`. This is an additive extension of
 the existing AE2Claude bridge, queue and busy gate. It adds no service or dependency.
-This feature first landed after v4.3.1 and is included in the planned v4.4.0 release.
+This feature first landed after v4.3.1 and is included in v4.4.0.
 Loaded native capability is identified by
 `/health` → `native.automationRevision` and `features.nativeAutomation`.
 

@@ -1,13 +1,9 @@
 # Changelog
 
-## v4.4.0-rc.1 — Unreleased
+## v4.4.0 — 2026-09-19
 
-Candidate preparation only; no tag, GitHub Release or production acceptance is
-implied. Python identifies this candidate as `4.4.0rc1` (PEP 440); the Codex
-plugin uses `4.4.0-rc.1` (SemVer). Target stable version: v4.4.0.
-
-Changes below include all seven commits after v4.3.1 through `f1e5f8a`, not only
-the September 9–13 work. See the [full comparison](https://github.com/backtime1993/AE2Claude/compare/v4.3.1...f1e5f8afd72cce4ee5cc808b22e7277f0b813017).
+Windows x64 release validated on After Effects Beta 27.0x22, Python 3.12.
+Includes the post-v4.3.1 native automation work and Windows acceptance fixes.
 
 ### Added
 
@@ -64,21 +60,37 @@ the September 9–13 work. See the [full comparison](https://github.com/backtime
 - Health can still be delayed by extension code holding the GIL; modal dialogs and
   rendering can block AE's main thread. Expression checks cover one time only.
 
-### Validation evidence and remaining gates
+### Windows acceptance fixes
 
-- Baseline `f1e5f8a` CI: 104 Python tests, 99 passed and 5 live-dependent tests
-  skipped; GCC queue/validation executables and PinClicker syntax check passed.
-- The [September 12 local record](docs/NATIVE_AUTOMATION.md#local-verification-2026-09-12)
-  reports 35 native live checks on AE Beta 27.0x22 and the loaded AEX SHA-256.
-  For the same 256-value fixture, key writes were 87.158 → 21.929 ms and sample
-  reads 27.002 → 4.612 ms. These are local observations, not universal speedups;
-  `dispatches=1` counts queue submissions, not an acceleration factor.
-- These are historical results, not a completed candidate release sign-off. Use
-  the candidate PR's CI reports for its current counts and exact tested commit.
-  Full AEX build, live integration, legacy regression, stress, installation and
-  rollback evidence remain required by the [release checklist](docs/RELEASE_CHECKLIST.md).
-- CI wheel/sdist artifacts contain the Python client, not an installable AEX bundle.
-  No package upload or GitHub Release is performed by CI.
+- Preserve server serialization while bounded read-stress retries handle explicit
+  `busy/not_started/retrySafe` backpressure. Never replay unknown write outcomes.
+- Preflight administrator access and file locks; stage, hash-check and replace the
+  complete installation, restoring originals on a normal commit failure.
+- Normalize 2D Position writes to the SDK's three-component representation while
+  retaining strict 3D validation and rejecting invalid values before mutation.
+- Build PiPL resources under paths containing spaces and Chinese characters.
+- Initialize SDK outputs, complete return paths, remove handle truncation and
+  unreachable catches; enforce selected high-risk compiler warnings as errors.
+- Apply one preview deadline across dispatch, PNG stabilization and processing.
+
+### Validation and release scope
+
+- Windows Release x64 AEX built; source, installed file and loaded-module hashes
+  verified. Native revision: `native-automation-20260919`.
+- Repaired candidate: 122/122 Python tests with live AE enabled, 73/73 legacy API
+  checks, 650/650 logical pressure requests; 207 raw busy rejections retained.
+- 360 temporary layers and 200 property operations verified and cleaned up;
+  4096-key, undo, fractional frame-rate, recovery and preview boundaries passed.
+- Clean mapped-file installation, upgrade, rollback to 4.3.1 and re-upgrade passed.
+  This uses an existing runtime, not a new Windows machine dependency bootstrap.
+- Stable-version checks and CI are recorded with the release assets. Tests on
+  other AE versions are not claimed. PinClicker remains independently versioned.
+- Wait for AE startup/modal initialization to complete before dispatching scripts;
+  an HTTP health response alone does not prove the main thread is ready.
+- Installation rollback covers handled failures, not cross-file atomic recovery
+  after power loss or forcibly terminating the installer; retain its backups.
+- Full native builds retain lower-risk conversion/deprecation warnings. Existing
+  render calls cannot be forcibly interrupted by a client timeout.
 
 ## v4.3.1 — 2026-08-27
 

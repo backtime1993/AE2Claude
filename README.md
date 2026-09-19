@@ -2,7 +2,8 @@
 
 让 AI 通过 MCP、命令行或 Python 操控 After Effects：读取工程、编辑图层与关键帧、运行 JSX、预览画面。
 
-**开发版本：AE2Claude 4.4.0rc1**（候选版准备中，尚未发布）。
+**当前版本：AE2Claude 4.4.0**。
+[下载 Windows x64 完整发布包](https://github.com/backtime1993/AE2Claude/releases/tag/v4.4.0)。
 当前实机验收基线：Windows x64 · After Effects Beta 27.0 · Python 3.12。
 
 ## 主要能力
@@ -15,7 +16,7 @@
 ## 安装与连接
 
 1. 获取仓库，在仓库目录运行 `uv sync --locked`。
-2. 按 [构建说明](docs/BUILDING.md) 生成 `build/Release/AE2Claude.aex`。目前的 Python 安装包不包含原生插件。
+2. 完整 Windows 发布包已含 `build/Release/AE2Claude.aex`；源码用户按 [构建说明](docs/BUILDING.md) 编译。单独的 Python wheel 不包含原生插件。
 3. 将 Python 3.12 的 `python312.dll` 放到 AE 的 `Support Files` 目录，关闭 AE，再运行 `deploy.bat`。默认目标为 Beta；其他安装可传完整产品名。
 4. 重启 AE，将 [MCP 配置模板](.mcp.json.template) 中的路径改成仓库绝对路径，添加到客户端。
 

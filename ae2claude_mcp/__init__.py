@@ -1,3 +1,3 @@
 """MCP integration for the native AE2Claude bridge."""
 
-__version__ = "4.4.0rc1"
+__version__ = "4.4.0"
