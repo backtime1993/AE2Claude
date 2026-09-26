@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — 2026-09-26
+
+- `start_render()` now calls AE's capability-checked `renderAsync()` and returns
+  `render_started` immediately. It no longer blocks the native idle hook until
+  export completes. Hosts without this API fail explicitly and require the UI;
+  there is no synchronous fallback. Callers must stop treating return as completion.
+- Added `get_render_status()` with named queue statuses. AE can defer JSX status
+  reads until rendering ends; use the visible queue for progress and pause/stop.
+  `render_started` is acceptance only. Never automatically replay an unknown result.
+- Windows AE 27 output paths now use `setSettings` / `Full Flat Path`; assigning
+  `OutputModule.file` corrupted Chinese directory names to `?` in live testing.
+  Apply templates before paths, and reacquire the output module afterwards.
+- Escape output paths and templates, reject invalid queue indexes and non-comp
+  selections, roll back newly added items when configuration fails, and propagate
+  malformed queue responses instead of reporting an empty queue.
+- Verified through the installed personal plugin: a 60-second 1280x720 H.264
+  export returned in 0.062 s instead of 29.187 s; Windows hung-window samples
+  dropped from 95/114 to 0/112. Both outputs contained 1,800 frames. A separate
+  Chinese-path export and failed-template rollback passed. No AEX replacement.
+
 ## v4.4.0 — 2026-09-19
 
 Windows x64 release validated on After Effects Beta 27.0x22, Python 3.12.
