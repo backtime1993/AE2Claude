@@ -6,6 +6,7 @@ import types
 from typing import Any, get_args, get_origin
 
 from ae_bridge import AEBridge
+from ae_native_protocol import operation_contracts
 
 from .runtime import classify_bridge_method, public_bridge_methods
 
@@ -44,7 +45,7 @@ def _json_type(annotation: Any) -> dict[str, Any]:
 
 def _category(name: str) -> str:
     for prefix, category in (
-        (("get_native_snapshot", "sample_native_property", "get_native_keyframes", "set_native_keyframes", "get_native_layer_transforms"), "native-automation"),
+        (("get_native_snapshot", "sample_native_propert", "get_native_keyframes", "set_native_keyframe", "set_native_layer_controls", "get_native_layer_transforms", "get_native_footage_inventory"), "native-automation"),
         (("property_", "get_property", "set_property", "inspect_properties"), "property"),
         (("get_native_diagnostics",), "diagnostics"),
         (("validate_expressions",), "validation"),
@@ -128,7 +129,7 @@ def capabilities(query: str = "", category: str = "") -> dict[str, Any]:
             "persistentScriptLibrary": True,
             "expressionValidation": True,
             "nativeQueueDiagnostics": "requires dispatcher-20260910 native build",
-            "nativeAutomation": "requires native-automation-20260912 AEX and bridge server; verify health features.nativeAutomation",
+            "nativeAutomation": "requires matching AEX/server; check ae_native_status health features.nativeOperations for loaded availability",
             "forcedMainThreadInterruption": False,
             "maxSyncScriptMs": 120000,
             "maxNativeScriptMs": 600000,
@@ -140,6 +141,7 @@ def capabilities(query: str = "", category: str = "") -> dict[str, Any]:
             },
             "fallback": {"name": "jsx-single-dispatch", "types": ["ae-scriptable"]},
         },
+        "nativeOperations": operation_contracts(),
         "methodCount": len(methods),
         "methods": methods,
     }

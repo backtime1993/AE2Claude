@@ -1,7 +1,7 @@
 {
   "name": "ae-workbench",
-  "version": "4.4.0",
-  "description": "在 Codex 中通过 AE2Claude 与 After Effects Beta 内置预览 MCP 双通道控制工程、合成、图层、效果、动画、3D、MOGRT 和渲染。",
+  "version": "4.5.0",
+  "description": "通过 AE2Claude 的原生 AEGP、MCP、CLI 与安全 JSX 控制 After Effects。",
   "author": {
     "name": "AE2Claude Project",
     "url": "https://github.com/backtime1993"
@@ -20,22 +20,22 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "After Effects (Beta)",
-    "shortDescription": "通过 AE2Claude 与 AE Beta 内置预览 MCP 双通道控制当前工程。",
-    "longDescription": "将 AE2Claude 的稳定 ID、结构化属性控制、检查点、后台任务、安全 JSX 与故障恢复，同 After Effects Beta 内置预览 MCP 的原生编辑、动画、3D、MOGRT 和渲染能力整合为一个 Codex 插件。",
+    "shortDescription": "原生 AEGP 批量读写、性能诊断与异步渲染。",
+    "longDescription": "以一个按需连接的 MCP 提供稳定 ID、原生批量属性采样、关键帧曲线、图层控制、素材代理清单、预览、检查点与异步渲染。",
     "developerName": "AE2Claude Project",
     "category": "Creativity",
     "capabilities": [
-      "工程、合成与图层读取和编辑",
-      "稳定 ID 与 matchName 属性控制",
-      "批处理、后台任务与事件流",
-      "检查点、恢复与结构化 JSX 错误",
-      "原生动画、3D、MOGRT 与渲染"
+      "原生 AEGP 属性采样与关键帧缓动",
+      "图层标志、混合模式与父级变换矩阵",
+      "素材代理清单与缺失状态",
+      "批处理、检查点与结构化错误",
+      "异步渲染与实时队列诊断"
     ],
     "websiteURL": "https://github.com/backtime1993/AE2Claude",
     "defaultPrompt": [
       "读取当前 After Effects Beta 工程和活动合成，概括图层结构但不要修改。",
       "先创建 AEP 检查点，再按我的要求修改合成并预览结果。",
-      "诊断两个 MCP 与 AE Beta 的连接状态，并给出可执行的恢复结果。"
+      "诊断 AE 与原生插件的连接及可用能力。"
     ],
     "brandColor": "#3E64FF",
     "composerIcon": "./assets/after-effects-beta.png",

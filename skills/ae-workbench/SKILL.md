@@ -1,30 +1,20 @@
 ---
 name: ae-workbench
-description: "After Effects Beta workbench for Codex. Use for AE, AE Beta, After Effects, Adobe's bundled preview MCP, AE2Claude, JSX, compositions, layers, properties, effects, keyframes, previews, checkpoints, 3D, MOGRT, rendering, and blocking script-dialog recovery."
+description: "Control or troubleshoot After Effects projects through AE2Claude: native properties, animation, previews, rendering and bridge recovery."
 ---
 
-# After Effects Beta Workbench
+# After Effects Workbench
 
-Use this entry for After Effects work. It combines the preview MCP bundled with After Effects Beta 27 and AE2Claude 4.3.1. Prefer structured MCP tools; use raw JSX only when neither structured surface covers the operation.
+Use this single entry for AE2Claude 4.5.0. The MCP starts without AE or network probes; install dependencies with `uv sync` before using the `uv run --no-sync` configuration.
 
-## Primary Route
+1. Check `ae_native_status` for queue state and `features.nativeOperations` for the loaded AEX's actual exports. Then use `ae_ping` or a small native read to prove a round trip. An open port alone is insufficient.
+2. Use stable composition/layer IDs and matchName paths. `ae_overview` and paginated `ae_layers` read only the requested rows in one JSX dispatch.
+3. Prefer structured operations: `ae_sample_properties` batches numeric sampling; `ae_footage_inventory` reads native main/proxy metadata; `ae_native_keyframes` includes spatial tangents. Read the [native contract](../../docs/native-automation-4.5.md) before using ease/layer writes.
+4. `ae_set_native_keyframe_ease` and `ae_set_native_layer_controls` default to dry-run. Inspect preflight, then write within existing authorization and read back. Each real call uses one undo group. A partial SDK failure is not automatically rolled back.
+5. Use checkpoints before risky multi-step edits. Use existing batch/jobs/script-library surfaces rather than starting another bridge. See the [bridge reference](references/bridge/bridge.md) for legacy CLI details; prefer `python -m ae2claude_mcp.cli capabilities --category native-automation` for current schemas.
+6. Start the visible queue through `start_render`: it uses `renderAsync()` and refuses synchronous fallback. If the host lacks that capability, use the AE UI. Native reads may wait during rendering; health is independent of the main-thread queue. Verify the output file and render status after completion.
+7. Use raw JSX only for API gaps. Send long scripts by file/stdin. Never retry a write with `outcome=unknown`; wait for idle and inspect the actual result. A timeout/cancel does not interrupt already running AE work.
 
-1. Inspect the running application and current project before making changes.
-2. Prefer the bundled preview MCP for native composition editing, animation, 3D, Essential Graphics, MOGRT, and rendering when its live schema supports the requested operation.
-3. Use AE2Claude for stable IDs, locale-independent `matchName` property paths, checkpoints, recovery, batch/background jobs, events, Puppet Pin work, pixel sampling, and controlled JSX.
-4. Before risky multi-step edits, create an AEP checkpoint. Destructive operations require explicit confirmation.
-5. If one channel is unavailable, diagnose it independently and continue only through a channel that has been verified live.
+Both loopback HTTP adapters reject browser-origin requests. Use the local MCP/CLI/Python client. The optional undocumented Adobe preview service is no longer enabled by default; discover and verify it separately if explicitly needed.
 
-The bundled preview server uses Streamable HTTP at `http://localhost:3100/aftereffects/mcp`. Keep `localhost` in the URL because the service may listen only on IPv6 `::1`. It is Adobe-shipped but undocumented preview functionality, so enumerate its current tools after After Effects Beta updates instead of assuming schemas are stable.
-
-## Blocking Errors
-
-- AE2Claude wraps ExtendScript failures so syntax and runtime errors return machine-readable fields instead of opening a modal dialog.
-- If a legacy or external script still opens a blocking AE script-error dialog, call `ae_recover_script_dialog(confirm=true)`. It uses the independent helper to close only an AE `#32770` script dialog and returns a structured recovery result.
-- Use visible desktop control only for other UI-only work. Do not replace native AE control with browser automation.
-
-## Verification Boundary
-
-- An MCP process starting is not proof that After Effects is connected. Verify both the MCP service and the live AE bridge.
-- If AE is closed, report the control service as available but the application bridge as offline.
-- After any write, read back the affected project, composition, layer, or property and preview visually when the result is appearance-sensitive.
+After upgrading the AEX, close AE normally, deploy with `tools/sync-installation.ps1`, verify hashes, then restart AE. Do not overwrite a loaded AEX. MCP process startup, loaded native version, and a real host operation are separate acceptance checks.

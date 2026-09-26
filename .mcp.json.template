@@ -6,6 +6,7 @@
         "--directory",
         "<ABSOLUTE_PATH_TO_AE2CLAUDE>",
         "run",
+        "--no-sync",
         "ae2claude-mcp"
       ],
       "env": {

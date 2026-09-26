@@ -15,7 +15,7 @@ from pathlib import Path
 
 _AE_PORT = 8089
 _AE_PIPE = r"\\.\pipe\PyShiftAEBridge"
-BRIDGE_VERSION = "4.4.0"
+BRIDGE_VERSION = "4.5.0"
 _JSX_ERROR_KEY = "__ae2claude_error__"
 _EXECUTION_LOCK = threading.Lock()
 _EXECUTION_STATE = {"startedAt": None, "completed": 0, "busyRejected": 0}
@@ -115,6 +115,7 @@ _PLUGIN_ARTIFACT = _plugin_artifact_payload()
 
 
 def _health_payload():
+    from ae_native_protocol import OPERATIONS
     native = psc.bridgeDiagnostics() if psc is not None and hasattr(psc, "bridgeDiagnostics") else None
     started = _EXECUTION_STATE["startedAt"]
     return {
@@ -137,7 +138,9 @@ def _health_payload():
                       "completed": _EXECUTION_STATE["completed"], "busyRejected": _EXECUTION_STATE["busyRejected"]},
         "features": {"wrapsJsxErrors": True, "nativeDeadline": native is not None,
                      "healthWhileBusy": True, "maxRequestBytes": _MAX_REQUEST_BYTES,
-                     "nativeAutomation": getattr(psc, "native_snapshot", None) is not None},
+                     "nativeAutomation": getattr(psc, "native_snapshot", None) is not None,
+                     "nativeOperations": [op for op, fn in OPERATIONS.items() if callable(getattr(psc, fn, None))],
+                     "browserRequestsRejected": True},
     }
 
 
@@ -152,7 +155,7 @@ def _execute_native(request):
         arguments = normalize_request(operation, request["arguments"])
         function = getattr(psc, OPERATIONS[operation], None)
         if function is None:
-            return {"ok": False, "kind": "native_unavailable", "error": "Install and load native-automation-20260912 or newer",
+            return {"ok": False, "kind": "native_unavailable", "error": f"Loaded AEX does not support {operation}; install the matching native build",
                     "outcome": "not_started", "retrySafe": True}
     except (ValueError, TypeError, OverflowError) as exc:
         return {"ok": False, "kind": "native_validation", "error": str(exc),
@@ -300,12 +303,29 @@ class _AEHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionError, OSError):
             pass  # Client deadline does not cancel or replay the AE operation.
 
+    def _trusted_local_request(self):
+        # This is a native-client execution API, never a browser API. Binding to
+        # loopback alone does not stop cross-origin text/plain POSTs or DNS rebinding.
+        hosts = self.headers.get_all('Host', [])
+        allowed = {f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'}
+        if (len(hosts) != 1 or hosts[0].lower() not in allowed
+                or self.headers.get('Origin') is not None
+                or self.headers.get('Sec-Fetch-Site') is not None):
+            self._respond({'ok': False, 'error': 'untrusted_request_origin',
+                           'outcome': 'not_started', 'retrySafe': False}, 403)
+            return False
+        return True
+
     def do_POST(self):
+        if not self._trusted_local_request():
+            return
         path = self.path.rstrip("/")
         if path not in {"", "/exec", "/jsx", "/native"}:
             self._respond({"ok": False, "error": "unknown_endpoint", "outcome": "not_started"}, 404)
             return
         try:
+            if self.headers.get('Transfer-Encoding') is not None or len(self.headers.get_all('Content-Length', [])) != 1:
+                raise ValueError('ambiguous_body_framing')
             n = int(self.headers.get("Content-Length", "0"))
             if not 0 < n <= _MAX_REQUEST_BYTES:
                 self._respond({"ok": False, "error": "invalid_body_size", "outcome": "not_started"}, 413)
@@ -324,6 +344,8 @@ class _AEHandler(BaseHTTPRequestHandler):
             self._respond({"ok": False, "error": str(exc), "outcome": "not_started"}, 400)
 
     def do_GET(self):
+        if not self._trusted_local_request():
+            return
         if self.path.rstrip("/") not in {"", "/health"}:
             self._respond({"ok": False, "error": "unknown_endpoint"}, 404)
             return
