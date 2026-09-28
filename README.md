@@ -51,6 +51,8 @@ uv run ae2claude --help
 | 原生批量关键帧与采样 | [原生自动化](docs/NATIVE_AUTOMATION.md) |
 | 拼图、差分与 JSX 脚本库 | [多帧预览与脚本库](docs/FRAME_REVIEW_AND_LIBRARY.md) |
 | 构建、安装与回退 | [构建说明](docs/BUILDING.md) |
+| 跳过主页、崩溃修复提示与回退 | [启动设置](docs/STARTUP.md) |
+| 9 月 29 日本机问题修复与验证 | [实机回归记录](docs/LIVE_REGRESSIONS_20260929.md) |
 | 测试及发布前验收 | [测试](docs/TESTING.md) · [发布清单](docs/RELEASE_CHECKLIST.md) |
 
 ## 致谢与许可
