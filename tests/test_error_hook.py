@@ -4,6 +4,8 @@ import unittest
 from unittest.mock import patch
 from ae_bridge import AEBridge, JSXExecutionError, _wrap_jsx_for_structured_errors
 from ae2claude_server import _wrap_jsx_for_structured_errors as server_wrap
+import ae2claude_server
+from types import SimpleNamespace
 
 
 class ErrorHookTests(unittest.TestCase):
@@ -29,6 +31,20 @@ console.log(JSON.stringify({result,events}));"""
     def test_success_preserves_result_and_restores_dialog_handling(self):
         r = self.evaluate('6*7')
         self.assertEqual(r, {'result': 42, 'events': ['begin', False]})
+
+    def test_json_query_without_optional_host_json(self):
+        result = self.evaluate('JSON.stringify({values:JSON.parse("[1,null,true]"),text:"中文"})')
+        self.assertEqual(json.loads(result['result']), {'values':[1,None,True],'text':'中文'})
+        self.assertEqual(result['events'], ['begin', False])
+
+    def test_native_modal_rejection_preserves_safe_retry_metadata(self):
+        stub = SimpleNamespace(executeScript=lambda code: json.dumps({'__jsx_error__':'host_modal_dialog','outcome':'not_started','retrySafe':True}))
+        with patch.object(ae2claude_server,'app',stub), patch.object(ae2claude_server,'psc',None):
+            result=ae2claude_server._execute_jsx('app.project.numItems')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['error'],'host_modal_dialog')
+        self.assertEqual(result['outcome'],'not_started')
+        self.assertTrue(result['retrySafe'])
 
     def test_client_server_guards_match(self):
         self.assertEqual(server_wrap('x'), _wrap_jsx_for_structured_errors('x'))

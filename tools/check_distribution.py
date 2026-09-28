@@ -27,6 +27,7 @@ import sysconfig
 from pathlib import Path
 import ae_bridge
 import ae_native_protocol
+assert "var JSON=" in ae_bridge._jsx_json_compat()
 from ae2claude_mcp import __version__
 from ae2claude_mcp.catalog import SCRIPT_ROOT, load_script_registry
 from mcp import ClientSession, StdioServerParameters

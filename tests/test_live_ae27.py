@@ -38,7 +38,8 @@ class LiveAE27Tests(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8891/health", timeout=5) as response:
             health = json.loads(response.read())
         self.assertTrue(health["ok"])
-        self.assertEqual(health["extension_version"], "0.6.0")
+        package = json.loads((ROOT / "extensions/pin-clicker/package.json").read_text(encoding="utf-8"))
+        self.assertEqual(health["extension_version"], package["version"])
         self.assertTrue(str(health["ae"]["version"]).startswith("27."))
         self.assertNotIn("error", health["window"])
         self.assertTrue(str(health["window"]["class"]).startswith("AE_CApplication"))

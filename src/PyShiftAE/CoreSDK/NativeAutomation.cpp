@@ -69,13 +69,49 @@ struct Stream {
         if (!h) throw std::runtime_error("layer_stream:null");
         handles.push_back(h);
         for (const auto& step : path) {
-            h = nullptr;
-            A_Err err = std::holds_alternative<int>(step)
-                ? sdk.dynamic->AEGP_GetNewStreamRefByIndex(sdk.plugin, get(), std::get<int>(step), &h)
-                : sdk.dynamic->AEGP_GetNewStreamRefByMatchname(sdk.plugin, get(), std::get<std::string>(step).c_str(), &h);
-            if (h) handles.push_back(h);
-            check(err, "property_path");
-            if (!h) throw std::runtime_error("property_path:not_found");
+            AEGP_StreamGroupingType grouping{};
+            check(sdk.dynamic->AEGP_GetStreamGroupingType(get(), &grouping), "property_grouping");
+            if (grouping != AEGP_StreamGroupingType_NAMED_GROUP &&
+                grouping != AEGP_StreamGroupingType_INDEXED_GROUP)
+                throw std::runtime_error("property_path:cannot_descend_into_leaf");
+            A_long count = 0;
+            check(sdk.dynamic->AEGP_GetNumStreamsInGroup(get(), &count), "property_child_count");
+            if (std::holds_alternative<int>(step)) {
+                const auto index = std::get<int>(step);
+                if (index >= count) throw std::runtime_error("property_path:index_out_of_range");
+                h = nullptr;
+                const auto error = sdk.dynamic->AEGP_GetNewStreamRefByIndex(sdk.plugin, get(), index, &h);
+                if (h) handles.push_back(h);
+                check(error, "property_path");
+                if (!h) throw std::runtime_error("property_path:not_found");
+            } else {
+                // ByMatchname is legal only for named groups. Passing an indexed
+                // effect/mask group to it raises a modal host assertion, even on reads.
+                // Enumerate both group kinds so missing/ambiguous names fail before
+                // any invalid SDK lookup. All temporary handles stay inside dispatch.
+                if (count > 10000) throw std::runtime_error("property_path:lookup_limit");
+                Stream selected(sdk);
+                const auto& wanted = std::get<std::string>(step);
+                for (A_long index = 0; index < count; ++index) {
+                    Stream candidate(sdk);
+                    h = nullptr;
+                    const auto error = sdk.dynamic->AEGP_GetNewStreamRefByIndex(sdk.plugin, get(), index, &h);
+                    if (h) candidate.handles.push_back(h);
+                    check(error, "property_child");
+                    if (!h) throw std::runtime_error("property_child:null");
+                    A_char match[AEGP_MAX_STREAM_MATCH_NAME_SIZE]{};
+                    check(sdk.dynamic->AEGP_GetMatchName(h, match), "property_match_name");
+                    if (wanted == match) {
+                        if (!selected.handles.empty())
+                            throw std::runtime_error("property_path:ambiguous_match_name; use_zero_based_index");
+                        selected.handles.push_back(h);
+                        candidate.handles.pop_back();
+                    }
+                }
+                if (selected.handles.empty()) throw std::runtime_error("property_path:not_found");
+                handles.push_back(selected.get());
+                selected.handles.pop_back();
+            }
         }
     }
 };
@@ -449,6 +485,10 @@ WriteResult writeEase(int compID,int layerID,const Path& path,const std::vector<
     if(flags & AEGP_LayerFlag_LOCKED) throw std::runtime_error("layer_is_locked; outcome=not_started");
     Stream stream(sdk);stream.resolve(layer,path);AEGP_StreamType type{};A_long count=0;A_short dims=0;
     check(sdk.streams->AEGP_GetStreamType(stream.get(),&type),"stream_type");dimensions(type);
+    AEGP_KeyInterpolationMask interpolation{};
+    check(sdk.streams->AEGP_GetValidInterpolations(stream.get(), &interpolation), "valid_interpolations");
+    if (!(interpolation & AEGP_KeyInterpMask_BEZIER))
+        throw std::runtime_error("bezier_interpolation_not_supported; outcome=not_started");
     check(sdk.keys->AEGP_GetStreamNumKFs(stream.get(),&count),"keyframe_count");
     check(sdk.keys->AEGP_GetStreamTemporalDimensionality(stream.get(),&dims),"temporal_dimensions");
     for(const auto& row:frames) {
@@ -539,12 +579,10 @@ WriteResult writeKeys(int compID,int layerID,const Path& path,const std::vector<
     if (!canVary) throw std::runtime_error("stream_cannot_vary; outcome=not_started");
     std::vector<AEGP_StreamValue2> values; values.reserve(frames.size());
     std::vector<A_Time> timeValues; timeValues.reserve(frames.size());
+    A_char match[AEGP_MAX_STREAM_MATCH_NAME_SIZE]{};
+    check(sdk.dynamic->AEGP_GetMatchName(stream.get(), match), "property_match_name");
     const bool twoDimensionalPosition = !(flags & AEGP_LayerFlag_LAYER_IS_3D)
-        && type == AEGP_StreamType_ThreeD_SPATIAL && path.size() == 2
-        && std::holds_alternative<std::string>(path[0])
-        && std::holds_alternative<std::string>(path[1])
-        && std::get<std::string>(path[0]) == "ADBE Transform Group"
-        && std::get<std::string>(path[1]) == "ADBE Position";
+        && type == AEGP_StreamType_ThreeD_SPATIAL && std::string(match) == "ADBE Position";
     try {
     for (const auto& frame : frames) {
         Value value = frame.value;

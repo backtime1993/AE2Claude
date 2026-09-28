@@ -340,7 +340,7 @@ def main() -> int:
 
     def pin_health() -> None:
         payload = get_json("http://127.0.0.1:8891/health")
-        if not payload.get("ok") or payload.get("extension_version") != "0.6.0":
+        if not payload.get("ok") or payload.get("extension_version") != json.loads((ROOT / "extensions/pin-clicker/package.json").read_text(encoding="utf-8"))["version"]:
             raise RuntimeError(f"bad PinClicker health: {payload}")
 
     def jsx_read() -> None:

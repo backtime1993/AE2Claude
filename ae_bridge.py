@@ -20,6 +20,8 @@ AE Bridge - Universal After Effects Automation via PyShiftAE
 依赖: 无外部依赖 (仅 Python 标准库)
 """
 import json
+from functools import lru_cache
+from pathlib import Path
 import sys
 import time
 import threading
@@ -62,6 +64,20 @@ def _read_bridge_response(response):
     return value
 
 
+@lru_cache(maxsize=1)
+def _jsx_json_compat() -> str:
+    """Vendored public-domain JSON2, also included in wheels and AE deployments."""
+    candidates = (Path(__file__).resolve().parent / 'scripts/json2.jsx',
+                  Path(sys.prefix) / 'share/ae2claude/scripts/json2.jsx')
+    for path in candidates:
+        if path.is_file():
+            polyfill = path.read_text(encoding='utf-8')
+            return ('var JSON=this.JSON;'
+                    'if(!JSON || typeof JSON.stringify!=="function" || typeof JSON.parse!=="function")'
+                    '{JSON={};eval(' + json.dumps(polyfill, ensure_ascii=True) + ');}')
+    raise RuntimeError('Bundled JSON compatibility script is missing; reinstall AE2Claude')
+
+
 def _wrap_jsx_for_structured_errors(code: str) -> str:
     """Catch parse/runtime errors without relying on ExtendScript's optional JSON."""
     source = json.dumps(str(code), ensure_ascii=True)
@@ -94,7 +110,7 @@ try{
  ',"stack":'+__ae2q(__ae2field(__ae2e,"stack"))+'}';
 }finally{if(__ae2quiet)app.endSuppressDialogs(false);}
 })();'''
-    return prefix + 'return eval(' + source + ');' + suffix
+    return prefix + _jsx_json_compat() + 'return eval(' + source + ');' + suffix
 
 
 class JSXExecutionError(RuntimeError):
@@ -439,6 +455,33 @@ TRACK_MATTE_TYPES = {
 # ╔══════════════════════════════════════════════════════════╗
 # ║                  AE BRIDGE CLASS                    ║
 # ╚══════════════════════════════════════════════════════════╝
+
+
+def _finite_number(value, label):
+    import math
+    if type(value) not in (int, float) or not math.isfinite(value):
+        raise ValueError(label + ' must be a finite number')
+    return float(value)
+
+
+def _shape_points(points, label):
+    if not isinstance(points, (list, tuple)) or not points:
+        raise ValueError(label + ' must contain 2D points')
+    result = []
+    for point in points:
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            raise ValueError(label + ' must contain 2D points')
+        result.append([_finite_number(v, label) for v in point])
+    return result
+
+
+def _layer_names(names, label):
+    if not isinstance(names, (list, tuple)) or not names:
+        raise ValueError(label + ' must be a nonempty list')
+    if any(not isinstance(n, str) or not n for n in names) or len(set(names)) != len(names):
+        raise ValueError(label + ' must contain unique nonempty layer names')
+    return list(names)
+
 
 class AEBridge:
     """
@@ -1715,37 +1758,18 @@ return lines.join("\n");
 
     # ── Property Read-back ─────────────────────────────────
 
-    def get_value(self, name: str, prop: str, at_time: float = None) -> Any:
-        """
-        Read a transform property value.
-
-        Args:
-            name: Layer name
-            prop: Semantic property name ("position", "opacity", "scale",
-                  "rotation", "anchor_point")
-            at_time: Time in seconds (None = current comp time)
-        """
+    def get_value(self, name: str, prop: str, at_time: float = None,
+                  pre_expression: bool = False) -> Any:
+        """Read a transform at comp time, evaluating expressions unless requested otherwise."""
+        if type(pre_expression) is not bool:
+            raise ValueError('pre_expression must be boolean')
+        sample_time = 'c.time' if at_time is None else repr(_finite_number(at_time, 'at_time'))
         path = _resolve_prop(prop)
-        if at_time is not None:
-            jsx = (
-                f'var c=app.project.activeItem;'
-                f'var tl=c.layer("{_esc(name)}");'
-                f'var p=tl.{path};'
-                f'var v=p.valueAtTime({at_time},true);'
-                f'JSON.stringify(v);'
-            )
-        else:
-            jsx = (
-                f'var c=app.project.activeItem;'
-                f'var tl=c.layer("{_esc(name)}");'
-                f'var p=tl.{path};'
-                f'JSON.stringify(p.value);'
-            )
-        r = self.run_jsx(jsx)
-        try:
-            return json.loads(r)
-        except json.JSONDecodeError:
-            return r
+        result = self.run_jsx(
+            f'var c=app.project.activeItem;var tl=c.layer("{_esc(name)}");'
+            f'var p=tl.{path};JSON.stringify(p.valueAtTime({sample_time},{str(pre_expression).lower()}));'
+        )
+        return json.loads(result)
 
     def get_keyframes(self, name: str, prop: str) -> List[Tuple[float, Any]]:
         """
@@ -1955,35 +1979,37 @@ return lines.join("\n");
 
     def precompose(self, layer_names: List[str], comp_name: str = "PreComp",
                     move_attrs: bool = True) -> str:
-        """将指定图层预合成。"""
-        select_jsx = (
-            'var c=app.project.activeItem;'
-            'for(var i=1;i<=c.numLayers;i++)c.layer(i).selected=false;'
+        """Precompose all named targets; a missing target leaves the composition unchanged."""
+        names = _layer_names(layer_names, 'layer_names')
+        return self._precompose_targets(names, comp_name, move_attrs)
+
+    def _precompose_targets(self, targets, comp_name, move_attrs):
+        if type(move_attrs) is not bool:
+            raise ValueError('move_attrs must be boolean')
+        if not move_attrs and len(targets) != 1:
+            raise ValueError('move_attrs=false requires exactly one layer')
+        code = (
+            '(function(){var c=app.project.activeItem;'
+            'if(!(c instanceof CompItem))throw new Error("no_active_comp");'
+            f'var targets={json.dumps(targets)},indices=[];'
+            'for(var i=0;i<targets.length;i++){'
+            'var l=c.layer(targets[i]);if(!l)throw new Error("layer_not_found:"+targets[i]);'
+            'if(l.locked)throw new Error("layer_is_locked");indices.push(l.index);}'
+            'indices.sort(function(a,b){return a-b;});'
+            'app.beginUndoGroup("AE2Claude Precompose");try{'
+            f'c.layers.precompose(indices,"{_esc(comp_name)}",{str(move_attrs).lower()});'
+            'return "ok";}finally{app.endUndoGroup();}})();'
         )
-        for ln in layer_names:
-            select_jsx += f'try{{c.layer("{_esc(ln)}").selected=true;}}catch(e){{}}'
-        select_jsx += (
-            'var idxs=[];for(var i=1;i<=c.numLayers;i++){'
-            'if(c.layer(i).selected)idxs.push(i);}'
-        )
-        move_flag = 1 if move_attrs else 2
-        select_jsx += (
-            f'if(idxs.length>0){{'
-            f'c.layers.precompose(idxs,"{_esc(comp_name)}",{move_flag});"ok"}}'
-            f'else{{"no_layers_selected"}}'
-        )
-        return self.run_jsx(select_jsx)
+        return self.run_jsx(code)
 
     def precompose_by_index(self, indices: List[int], comp_name: str = "PreComp",
-                             move_attrs: bool = True) -> str:
-        """将指定索引的图层预合成"""
-        move_flag = 1 if move_attrs else 2
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'c.layers.precompose({json.dumps(indices)},"{_esc(comp_name)}",{move_flag});'
-            f'"ok";'
-        )
-        return self.run_jsx(jsx)
+                            move_attrs: bool = True) -> str:
+        """Precompose unique one-based layer indices with explicit boolean semantics."""
+        if not isinstance(indices, (list, tuple)) or not indices:
+            raise ValueError('indices must be a nonempty list')
+        if any(type(i) is not int or i < 1 for i in indices) or len(set(indices)) != len(indices):
+            raise ValueError('indices must be unique positive integers')
+        return self._precompose_targets(list(indices), comp_name, move_attrs)
 
     def list_precomps(self) -> List[dict]:
         """列出项目中所有合成及是否被用作预合成"""
@@ -2034,35 +2060,33 @@ return lines.join("\n");
                   mode: str = "add", feather: float = 0,
                   opacity: float = 100, inverted: bool = False,
                   closed: bool = True) -> str:
-        """为图层添加蒙版。mode: none/add/subtract/intersect/lighten/darken/difference"""
+        """Add a validated mask; configuration failure removes only the newly added mask."""
+        vertices = _shape_points(vertices, 'vertices')
         n = len(vertices)
-        in_t = in_tangents or [[0, 0]] * n
-        out_t = out_tangents or [[0, 0]] * n
-        mode_map = {
-            "none": "MaskMode.NONE", "add": "MaskMode.ADD",
-            "subtract": "MaskMode.SUBTRACT", "intersect": "MaskMode.INTERSECT",
-            "lighten": "MaskMode.LIGHTEN", "darken": "MaskMode.DARKEN",
-            "difference": "MaskMode.DIFFERENCE",
-        }
-        mode_jsx = mode_map.get(mode, "MaskMode.ADD")
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'var masks=tl.property("Masks");'
-            f'var m=masks.addProperty("ADBE Mask Atom");'
-            f'var shape=new Shape();'
-            f'shape.vertices={json.dumps(vertices)};'
-            f'shape.inTangents={json.dumps(in_t)};'
-            f'shape.outTangents={json.dumps(out_t)};'
-            f'shape.closed={"true" if closed else "false"};'
-            f'm.property("maskShape").setValue(shape);'
-            f'm.property("maskFeather").setValue([{feather},{feather}]);'
-            f'm.property("maskOpacity").setValue({opacity});'
-            f'm.maskMode={mode_jsx};'
-            f'm.inverted={"true" if inverted else "false"};'
-            f'"mask_added";'
+        incoming = [[0,0] for _ in vertices] if in_tangents is None else _shape_points(in_tangents, 'in_tangents')
+        outgoing = [[0,0] for _ in vertices] if out_tangents is None else _shape_points(out_tangents, 'out_tangents')
+        if len(incoming) != n or len(outgoing) != n:
+            raise ValueError('tangent counts must match vertices')
+        modes = {k: 'MaskMode.'+v for k,v in {'none':'NONE','add':'ADD','subtract':'SUBTRACT','intersect':'INTERSECT','lighten':'LIGHTEN','darken':'DARKEN','difference':'DIFFERENCE'}.items()}
+        if mode not in modes:
+            raise ValueError('unsupported mask mode')
+        feather = _finite_number(feather, 'feather'); opacity = _finite_number(opacity, 'opacity')
+        if feather < 0 or not 0 <= opacity <= 100:
+            raise ValueError('feather must be nonnegative and opacity must be 0..100')
+        if type(inverted) is not bool or type(closed) is not bool:
+            raise ValueError('inverted and closed must be boolean')
+        return self.run_jsx(
+            '(function(){var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}");var masks=tl.property("ADBE Mask Parade");'
+            'if(!masks)throw new Error("masks_not_supported");'
+            'app.beginUndoGroup("AE2Claude Add Mask");var m=null;try{'
+            'm=masks.addProperty("ADBE Mask Atom");var s=new Shape();'
+            f's.vertices={json.dumps(vertices)};s.inTangents={json.dumps(incoming)};s.outTangents={json.dumps(outgoing)};s.closed={str(closed).lower()};'
+            'm.property("ADBE Mask Shape").setValue(s);'
+            f'm.property("ADBE Mask Feather").setValue([{feather},{feather}]);'
+            f'm.property("ADBE Mask Opacity").setValue({opacity});m.maskMode={modes[mode]};m.inverted={str(inverted).lower()};'
+            'return "mask_added";}catch(e){if(m)m.remove();throw e;}finally{app.endUndoGroup();}})();'
         )
-        return self.run_jsx(jsx)
 
     def list_masks(self, name: str) -> List[dict]:
         """列出图层所有蒙版"""
@@ -2128,19 +2152,28 @@ return lines.join("\n");
 
     def animate_mask_path(self, name: str, mask_index: int,
                            keyframes: List[Tuple[float, List[List[float]]]]) -> str:
-        """蒙版路径关键帧动画。keyframes: [(time, [[x,y], ...]), ...]"""
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var m=c.layer("{_esc(name)}").property("Masks").property({mask_index});'
-            f'var mp=m.property("maskShape");'
+        """Animate vertices, preserving the mask's closure and same-size tangent data."""
+        if type(mask_index) is not int or mask_index < 1:
+            raise ValueError('mask_index must be a positive integer')
+        if not isinstance(keyframes, (list, tuple)) or not keyframes:
+            raise ValueError('keyframes must be a nonempty list')
+        frames = []
+        for frame in keyframes:
+            if not isinstance(frame, (list, tuple)) or len(frame) != 2:
+                raise ValueError('keyframes must contain time/vertices pairs')
+            frames.append([_finite_number(frame[0], 'time'), _shape_points(frame[1], 'vertices')])
+        return self.run_jsx(
+            '(function(){var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}"),m=tl.property("ADBE Mask Parade").property({mask_index});'
+            'if(!m)throw new Error("mask_not_found");if(tl.locked||m.locked)throw new Error("mask_is_locked");'
+            f'var mp=m.property("ADBE Mask Shape"),frames={json.dumps(frames)},shapes=[];'
+            'for(var i=0;i<frames.length;i++){var s=mp.valueAtTime(frames[i][0],true);'
+            'if(s.vertices.length!==frames[i][1].length){var z=[];for(var j=0;j<frames[i][1].length;j++)z.push([0,0]);s.inTangents=z;s.outTangents=z;}'
+            's.vertices=frames[i][1];shapes.push(s);}'
+            'app.beginUndoGroup("AE2Claude Mask Animation");try{'
+            'for(var k=0;k<frames.length;k++)mp.setValueAtTime(frames[k][0],shapes[k]);'
+            'return "ok";}finally{app.endUndoGroup();}})();'
         )
-        for t, verts in keyframes:
-            jsx += (
-                f'var s=new Shape();s.vertices={json.dumps(verts)};'
-                f's.closed=true;mp.setValueAtTime({t},s);'
-            )
-        jsx += '"ok";'
-        return self.run_jsx(jsx)
 
     def remove_mask(self, name: str, mask_index: int) -> str:
         """删除指定蒙版"""
@@ -2263,19 +2296,26 @@ return lines.join("\n");
     def create_null_control(self, name: str = "Null Control",
                              parent_to: List[str] = None,
                              position: List[float] = None) -> str:
-        """创建 Null 对象并可选批量绑定子图层。"""
-        jsx = (
-            f'var c=app.project.activeItem;'
-            f'var nl=c.layers.addNull();'
+        """Create a null only after resolving every requested child."""
+        names = [] if parent_to is None or parent_to == [] else _layer_names(parent_to, 'parent_to')
+        if position is not None:
+            if not isinstance(position, (list, tuple)) or len(position) not in (2,3):
+                raise ValueError('position must have two or three finite coordinates')
+            position = [_finite_number(v, 'position') for v in position]
+        code = (
+            '(function(){var c=app.project.activeItem;'
+            'if(!(c instanceof CompItem))throw new Error("no_active_comp");'
+            f'var names={json.dumps(names)},children=[];'
+            'for(var i=0;i<names.length;i++){var l=c.layer(names[i]);'
+            'if(!l)throw new Error("layer_not_found:"+names[i]);'
+            'if(l.locked)throw new Error("layer_is_locked");children.push(l);}'
+            'app.beginUndoGroup("AE2Claude Null Control");try{var nl=c.layers.addNull();'
             f'nl.name="{_esc(name)}";'
         )
-        if position:
-            jsx += f'nl.property("Transform").property("Position").setValue({json.dumps(position)});'
-        if parent_to:
-            for child in parent_to:
-                jsx += f'try{{c.layer("{_esc(child)}").parent=nl;}}catch(e){{}}'
-        jsx += 'nl.name;'
-        return self.run_jsx(jsx)
+        if position is not None:
+            code += f'nl.property("ADBE Transform Group").property("ADBE Position").setValue({json.dumps(position)});'
+        code += 'for(var j=0;j<children.length;j++)children[j].parent=nl;return nl.name;}finally{app.endUndoGroup();}})();'
+        return self.run_jsx(code)
 
     # ── Blending Mode + Track Matte ────────────────────────
 
@@ -2298,13 +2338,22 @@ return lines.join("\n");
         return r
 
     def set_track_matte(self, name: str, matte_layer: str,
-                         matte_type: str = "alpha") -> str:
-        """设置轨道蒙版。matte_type: alpha/alpha_inverted/luma/luma_inverted"""
-        tt = TRACK_MATTE_TYPES.get(matte_type, "TrackMatteType.ALPHA")
+                        matte_type: str = "alpha") -> str:
+        """Set the specified matte source without reordering unrelated layers."""
+        if matte_type not in TRACK_MATTE_TYPES or matte_type == 'none':
+            raise ValueError('matte_type must be alpha, alpha_inverted, luma or luma_inverted')
+        tt = TRACK_MATTE_TYPES[matte_type]
         return self.run_jsx(
-            f'var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'tl.trackMatteType={tt};"ok";'
+            '(function(){var c=app.project.activeItem;'
+            f'var tl=c.layer("{_esc(name)}"),ml=c.layer("{_esc(matte_layer)}");'
+            'if(!(tl instanceof AVLayer)||!(ml instanceof AVLayer))throw new Error("matte_requires_av_layers");'
+            'if(tl.id===ml.id)throw new Error("self_track_matte");'
+            'if(tl.locked)throw new Error("layer_is_locked");'
+            'if(typeof tl.setTrackMatte!=="function" && ml.index!==tl.index-1)'
+            'throw new Error("nonadjacent_track_matte_requires_ae23");'
+            'app.beginUndoGroup("AE2Claude Track Matte");try{'
+            f'if(typeof tl.setTrackMatte==="function")tl.setTrackMatte(ml,{tt});else tl.trackMatteType={tt};'
+            'return "ok";}finally{app.endUndoGroup();}})();'
         )
 
     def remove_track_matte(self, name: str) -> str:
@@ -2646,29 +2695,47 @@ return lines.join("\n");
         return self.run_jsx(jsx)
 
     def freeze_frame(self, name: str, at_time: float) -> str:
-        """冻结帧（仅对有 footage source 的图层有效）"""
+        """Freeze at a source time, replacing previous time-remap animation."""
+        at_time = _finite_number(at_time, 'at_time')
+        if at_time < 0:
+            raise ValueError('at_time must be nonnegative')
         return self.run_jsx(
-            f'var c=app.project.activeItem;'
+            '(function(){var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'if(!tl.canSetTimeRemapEnabled){{"ERR:layer_not_supported"}}else{{'
-            f'if(!tl.timeRemapEnabled)tl.timeRemapEnabled=true;'
-            f'var tr=tl.timeRemap;'
-            f'tr.setValueAtTime(tr.keyTime(1),{at_time});'
-            f'tr.setValueAtTime(tr.keyTime(tr.numKeys),{at_time});'
-            f'"frozen"}}'
+            'if(!tl.canSetTimeRemapEnabled)return "ERR:layer_not_supported";'
+            'if(tl.locked)throw new Error("layer_is_locked");'
+            f'if({at_time}>=tl.source.duration)throw new Error("source_time_out_of_range");'
+            'if(tl.timeRemapEnabled && tl.timeRemap.expressionEnabled)throw new Error("time_remap_expression_enabled");'
+            'app.beginUndoGroup("AE2Claude Freeze Frame");try{'
+            'if(!tl.timeRemapEnabled)tl.timeRemapEnabled=true;var tr=tl.timeRemap;'
+            'while(tr.numKeys>1)tr.removeKey(tr.numKeys);'
+            f'if(tr.numKeys)tr.setValueAtKey(1,{at_time});else tr.setValueAtTime(tl.inPoint,{at_time});'
+            'tr.setInterpolationTypeAtKey(1,KeyframeInterpolationType.HOLD,KeyframeInterpolationType.HOLD);'
+            'return "frozen";}finally{app.endUndoGroup();}})();'
         )
 
     def reverse_layer(self, name: str) -> str:
-        """反转图层时间（仅对有 footage source 的图层有效）"""
+        """Replace remap animation with full-source reverse playback across the layer's visible span.
+
+        Uses the last actual source frame, not source.duration (the exclusive end).
+        Existing remap expressions must be removed explicitly before replacing keys.
+        """
         return self.run_jsx(
-            f'var c=app.project.activeItem;'
+            '(function(){var c=app.project.activeItem;'
             f'var tl=c.layer("{_esc(name)}");'
-            f'if(!tl.canSetTimeRemapEnabled){{"ERR:layer_not_supported"}}else{{'
-            f'if(!tl.timeRemapEnabled)tl.timeRemapEnabled=true;'
-            f'var tr=tl.timeRemap;var dur=tl.source.duration;'
-            f'tr.setValueAtTime(tr.keyTime(1),dur);'
-            f'tr.setValueAtTime(tr.keyTime(tr.numKeys),0);'
-            f'"reversed"}}'
+            'if(!tl.canSetTimeRemapEnabled)return "ERR:layer_not_supported";'
+            'if(tl.locked)throw new Error("layer_is_locked");'
+            'if(tl.timeRemapEnabled && tl.timeRemap.expressionEnabled)throw new Error("time_remap_expression_enabled");'
+            'var first=tl.inPoint,last=tl.outPoint-c.frameDuration;'
+            'var sourceLast=Math.max(0,tl.source.duration-tl.source.frameDuration);'
+            'if(last<first-0.000001)throw new Error("layer_shorter_than_one_frame");'
+            'app.beginUndoGroup("AE2Claude Reverse Layer");try{'
+            'if(!tl.timeRemapEnabled)tl.timeRemapEnabled=true;var tr=tl.timeRemap;'
+            'while(tr.numKeys>1)tr.removeKey(tr.numKeys);'
+            'tr.setValueAtTime(first,sourceLast);if(last>first+0.000001)tr.setValueAtTime(last,0);'
+            'for(var j=tr.numKeys;j>=1;j--)if(Math.abs(tr.keyTime(j)-first)>0.000001 && Math.abs(tr.keyTime(j)-last)>0.000001)tr.removeKey(j);'
+            'for(var k=1;k<=tr.numKeys;k++)tr.setInterpolationTypeAtKey(k,KeyframeInterpolationType.LINEAR,KeyframeInterpolationType.LINEAR);'
+            'return "reversed";}finally{app.endUndoGroup();}})();'
         )
 
     # ── Render Queue Management ────────────────────────────
@@ -2730,11 +2797,12 @@ return lines.join("\n");
         )
 
     def clear_render_queue(self) -> str:
-        """清空渲染队列"""
+        """Clear the queue and report the number of removed items."""
         return self.run_jsx(
             'var rq=app.project.renderQueue;'
-            'for(var i=rq.numItems;i>=1;i--)rq.item(i).remove();'
-            '"cleared:"+rq.numItems;'
+            'if(rq.rendering)throw new Error("render_in_progress");'
+            'var removed=rq.numItems;for(var i=removed;i>=1;i--)rq.item(i).remove();'
+            '"cleared:"+removed;'
         )
 
     def start_render(self) -> str:
@@ -2790,13 +2858,16 @@ return lines.join("\n");
         )
 
     def reorder_layer(self, name: str, new_index: int) -> str:
-        """移动图层到指定索引 (1-based)"""
+        """Move to a one-based index; validate before changing the stack."""
+        if type(new_index) is not int or new_index < 1:
+            raise ValueError('new_index must be a positive integer')
         return self.run_jsx(
-            f'try{{var c=app.project.activeItem;'
-            f'var tl=c.layer("{_esc(name)}");'
-            f'tl.moveToBeginning();'
-            f'if({new_index}>1){{for(var i=1;i<{new_index};i++)tl.moveAfter(c.layer(i));}}'
-            f'"ok"}}catch(e){{"ERR:"+e.toString()}}'
+            '(function(){var c=app.project.activeItem;'
+            f'if({new_index}>c.numLayers)throw new Error("layer_index_out_of_range");'
+            f'var tl=c.layer("{_esc(name)}"),target=c.layer({new_index});'
+            'if(!tl)throw new Error("layer_not_found");'
+            f'if(tl.index<{new_index})tl.moveAfter(target);else if(tl.index>{new_index})tl.moveBefore(target);'
+            'return "ok";})();'
         )
 
     # ── Pixel Access (requires C++ renderFramePixels) ─────
@@ -4474,13 +4545,10 @@ return lines.join("\n");
 # ╚══════════════════════════════════════════════════════════╝
 
 def _esc(s: str) -> str:
-    """转义字符串用于嵌入 ExtendScript 字符串字面量"""
-    return (s
-        .replace('\\', '\\\\')
-        .replace('"', '\\"')
-        .replace("'", "\\'")
-        .replace('\n', '\\n')
-        .replace('\r', ''))
+    """Escape an ES3 string without dropping CR or exposing Unicode line breaks."""
+    if not isinstance(s, str):
+        raise TypeError('expected a string')
+    return json.dumps(s, ensure_ascii=True)[1:-1].replace("'", "\\'")
 
 
 def _normalize_rgb_255(values: List[Any]) -> List[int]:
