@@ -35,7 +35,7 @@ class PropertyGraphTests(unittest.TestCase):
     def test_property_batch_falls_back_as_one_jsx_dispatch(self) -> None:
         ae = AEBridge.__new__(AEBridge)
         ae.timeout = 30
-        ae._run_py = Mock(side_effect=RuntimeError("no attribute agent_stream_batch"))
+        ae._run_py = Mock(side_effect=RuntimeError("AttributeError: module 'PyShiftCore' has no attribute 'agent_stream_batch'"))
         ae.run_jsx = Mock(
             return_value=json.dumps(
                 {

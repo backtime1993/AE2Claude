@@ -1919,9 +1919,16 @@ return lines.join("\n");
                         closed: bool = True,
                         group_index: int = None) -> str:
         """在 Shape 图层中添加自定义路径。"""
+        vertices = _shape_points(vertices, 'vertices')
         n = len(vertices)
-        in_t = in_tangents or [[0, 0]] * n
-        out_t = out_tangents or [[0, 0]] * n
+        in_t = [[0, 0] for _ in vertices] if in_tangents is None else _shape_points(in_tangents, 'in_tangents')
+        out_t = [[0, 0] for _ in vertices] if out_tangents is None else _shape_points(out_tangents, 'out_tangents')
+        if len(in_t) != n or len(out_t) != n:
+            raise ValueError('Shape tangents must match the number of vertices')
+        if type(closed) is not bool:
+            raise ValueError('closed must be boolean')
+        if group_index is not None and (type(group_index) is not int or group_index < 1):
+            raise ValueError('group_index must be a positive integer')
         group_sel = (
             f'var grp=contents.property({group_index});'
             if group_index else

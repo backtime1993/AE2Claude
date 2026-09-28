@@ -205,6 +205,18 @@ def execute_batch(
                 args = resolve_references(item["args"], raw_results)
                 kwargs = resolve_references(item["kwargs"], raw_results)
                 value = getattr(ae, item["method"])(*args, **kwargs)
+                if isinstance(value, dict) and value.get("ok") is False:
+                    # A returned failure is as terminal as a raised exception.
+                    # Keep the original result for diagnosis, but do not expose
+                    # it as a successful dependency to later workflow steps.
+                    raw_results.append(None)
+                    error = str(value.get("error") or "operation_returned_failure")
+                    entries.append({"index": index, "ok": False, "error": error, "result": value})
+                    EVENTS.emit("batch.operation.failed", requestId=request_id,
+                                index=index, method=item["method"], error=error)
+                    if fail_fast:
+                        break
+                    continue
                 raw_results.append(value)
                 entry = {"index": index, "ok": True, "result": value}
                 captured = capture_method(item["method"], args, kwargs, value)

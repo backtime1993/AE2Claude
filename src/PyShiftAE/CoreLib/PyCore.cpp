@@ -100,6 +100,7 @@ namespace {
 
     struct AgentStreamResult {
         bool ok = false;
+        bool executed = false;
         std::string error;
         int streamType = -1;
         AgentStreamValue value;
@@ -300,6 +301,14 @@ namespace {
     {
         std::vector<AgentStreamResult> results(operations.size());
         bool hasWrites = false;
+        const auto markUnexecuted = [&results]() {
+            for (auto& result : results) {
+                if (!result.executed) {
+                    result.ok = false;
+                    if (result.error.empty()) result.error = "ERR:batch_not_started";
+                }
+            }
+        };
 
         // Resolve and type-check every path before opening an undo group. This
         // prevents malformed agent plans from partially editing the project.
@@ -309,7 +318,7 @@ namespace {
             auto root = getNewStreamRefForLayer(layerH);
             if (root.error != A_Err_NONE || root.value == NULL) {
                 results[i].error = "ERR:cannot_get_layer_root";
-                if (failFast) return results;
+                if (failFast) { if (!dryRun) markUnexecuted(); return results; }
                 continue;
             }
 
@@ -334,14 +343,14 @@ namespace {
             if (!error.empty()) {
                 results[i].ok = false;
                 results[i].error = error;
-                if (failFast) return results;
+                if (failFast) { if (!dryRun) markUnexecuted(); return results; }
             }
         }
 
         if (dryRun) return results;
         if (failFast) {
             for (const auto& result : results) {
-                if (!result.ok) return results;
+                if (!result.ok) { markUnexecuted(); return results; }
             }
         }
 
@@ -363,6 +372,7 @@ namespace {
         for (std::size_t i = 0; i < operations.size(); ++i) {
             if (!results[i].ok) continue;
             const auto& operation = operations[i];
+            results[i].executed = true;
             auto root = getNewStreamRefForLayer(layerH);
             std::vector<Result<AEGP_StreamRefH>> streams;
             Result<AEGP_StreamRefH> current;
@@ -383,7 +393,7 @@ namespace {
             if (!error.empty()) {
                 results[i].ok = false;
                 results[i].error = error;
-                if (failFast) break;
+                if (failFast) { markUnexecuted(); break; }
             }
         }
 
@@ -1030,6 +1040,7 @@ void bindStreamUtils(py::module_& m)
             py::dict entry;
             entry["index"] = static_cast<int>(i);
             entry["ok"] = result.ok;
+            entry["executed"] = result.executed;
             entry["streamType"] = result.streamType;
             if (!result.error.empty()) entry["error"] = result.error;
             if (result.ok && operations[i].action == "get" && !dryRun) {

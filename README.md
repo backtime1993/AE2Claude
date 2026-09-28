@@ -53,6 +53,7 @@ uv run ae2claude --help
 | 构建、安装与回退 | [构建说明](docs/BUILDING.md) |
 | 跳过主页、崩溃修复提示与回退 | [启动设置](docs/STARTUP.md) |
 | 9 月 29 日本机问题修复与验证 | [实机回归记录](docs/LIVE_REGRESSIONS_20260929.md) |
+| Beta 第二轮批处理修复 | [199 项回归与限制](docs/BETA_BATCH_INTEGRITY_20260929.md) |
 | 测试及发布前验收 | [测试](docs/TESTING.md) · [发布清单](docs/RELEASE_CHECKLIST.md) |
 
 ## 致谢与许可
