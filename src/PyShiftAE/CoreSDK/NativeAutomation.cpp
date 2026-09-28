@@ -5,6 +5,8 @@
 #include <pybind11/stl.h>
 #include <array>
 #include <variant>
+#include <map>
+#include <set>
 
 namespace py = pybind11;
 using namespace pybind11::literals;
@@ -315,9 +317,8 @@ Snapshot snapshot(int requestedComp, int maxItems, int maxLayers) {
 }
 
 struct Sample { int comp=0, type=0, keyCount=0; bool expression=false; std::vector<Value> values; };
-Sample sample(int compID, int layerID, const Path& path, const std::vector<double>& samples, bool preExpression) {
-    Sdk sdk; Sample result;
-    auto comp=composition(sdk,compID); result.comp=compId(sdk,comp);
+Sample sampleResolved(Sdk& sdk, AEGP_CompH comp, int layerID, const Path& path, const std::vector<double>& samples, bool preExpression) {
+    Sample result; result.comp=compId(sdk,comp);
     Stream stream(sdk); stream.resolve(findLayer(sdk,comp,layerID),path);
     AEGP_StreamType type{}; A_long count=0; A_Boolean expression=FALSE;
     check(sdk.streams->AEGP_GetStreamType(stream.get(),&type), "stream_type"); dimensions(type);
@@ -333,7 +334,61 @@ Sample sample(int compID, int layerID, const Path& path, const std::vector<doubl
     return result;
 }
 
-struct Key { A_Time time{}; Value value; int index=0, in=0, out=0, flags=0; std::vector<std::array<double,4>> ease; };
+Sample sample(int compID, int layerID, const Path& path, const std::vector<double>& samples, bool preExpression) {
+    Sdk sdk;
+    return sampleResolved(sdk, composition(sdk,compID), layerID, path, samples, preExpression);
+}
+
+struct PropertyRequest { int layer; Path path; };
+struct Samples { int comp=0; std::vector<Sample> rows; };
+Samples sampleMany(int compID, const std::vector<PropertyRequest>& properties, const std::vector<double>& times, bool preExpression) {
+    Sdk sdk; auto comp=composition(sdk,compID); Samples data; data.comp=compId(sdk,comp);
+    data.rows.reserve(properties.size());
+    for (const auto& prop:properties) data.rows.push_back(sampleResolved(sdk,comp,prop.layer,prop.path,times,preExpression));
+    return data;
+}
+
+struct FootageRow {
+    int id=0, flags=0, signature=0, files=0, filesPerFrame=0;
+    bool proxy=false; std::string name,path;
+};
+struct Footages { int scanned=0, nextOffset=0; bool truncated=false; std::vector<FootageRow> rows; };
+Footages footageInventory(int offset,int maximum,bool includeProxy) {
+    Sdk sdk; Footages data; auto proj=project(sdk); auto suite=sdk.suites.FootageSuite5();
+    AEGP_ItemH item=nullptr;
+    check(sdk.items->AEGP_GetFirstProjItem(proj,&item),"first_item");
+    int index=0;
+    while(item && data.scanned<maximum) {
+        if(index>=offset) {
+            ++data.scanned;
+            AEGP_ItemType type{}; AEGP_ItemFlags flags{};
+            check(sdk.items->AEGP_GetItemType(item,&type),"item_type");
+            check(sdk.items->AEGP_GetItemFlags(item,&flags),"item_flags");
+            for(int role=0;role<2;++role) {
+                if(role==0 && type!=AEGP_ItemType_FOOTAGE) continue;
+                if(role==1 && (!includeProxy || !(flags & AEGP_ItemFlag_HAS_PROXY))) continue;
+                FootageRow row; row.id=itemId(sdk,item); row.flags=flags; row.proxy=role==1;
+                Memory name(sdk),path(sdk); AEGP_FootageH footage=nullptr;
+                check(sdk.items->AEGP_GetItemName(sdk.plugin,item,&name.handle),"item_name");row.name=name.text();
+                check(role ? suite->AEGP_GetProxyFootageFromItem(item,&footage) : suite->AEGP_GetMainFootageFromItem(item,&footage),"item_footage");
+                AEGP_FootageSignature signature{};
+                check(suite->AEGP_GetFootageSignature(footage,&signature),"footage_signature");row.signature=signature;
+                if(signature!=AEGP_FootageSignature_SOLID) {
+                    A_long files=0,perFrame=0;
+                    check(suite->AEGP_GetFootageNumFiles(footage,&files,&perFrame),"footage_files");
+                    row.files=files;row.filesPerFrame=perFrame;
+                    check(suite->AEGP_GetFootagePath(footage,0,AEGP_FOOTAGE_MAIN_FILE_INDEX,&path.handle),"footage_path");row.path=path.text();
+                }
+                data.rows.push_back(std::move(row));
+            }
+        }
+        AEGP_ItemH next=nullptr;
+        check(sdk.items->AEGP_GetNextProjItem(proj,item,&next),"next_item");item=next;++index;
+    }
+    data.truncated=item!=nullptr;data.nextOffset=index;return data;
+}
+
+struct Key { A_Time time{}; Value value; int index=0, in=0, out=0, flags=0; std::vector<std::array<double,4>> ease; std::vector<Value> tangents; };
 struct Keys { int comp=0, type=0, total=0; std::vector<Key> rows; };
 Keys readKeys(int compID,int layerID,const Path& path,int start,int maximum) {
     Sdk sdk; Keys result;
@@ -354,6 +409,12 @@ Keys readKeys(int compID,int layerID,const Path& path,int start,int maximum) {
         check(sdk.keys->AEGP_GetKeyframeInterpolation(stream.get(),i,&in,&out), "keyframe_interpolation");
         check(sdk.keys->AEGP_GetKeyframeFlags(stream.get(),i,&flags), "keyframe_flags");
         row.in=in; row.out=out; row.flags=flags;
+        if(type==AEGP_StreamType_TwoD_SPATIAL || type==AEGP_StreamType_ThreeD_SPATIAL) {
+            OwnedValue incoming(sdk),outgoing(sdk);
+            check(sdk.keys->AEGP_GetNewKeyframeSpatialTangents(sdk.plugin,stream.get(),i,&incoming.value,&outgoing.value),"spatial_tangents");
+            incoming.owned=true;outgoing.owned=true;
+            row.tangents={unpack(type,incoming.value),unpack(type,outgoing.value)};
+        }
         for (A_short d=0;d<dims;++d) {
             AEGP_KeyframeEase inEase{},outEase{};
             check(sdk.keys->AEGP_GetKeyframeTemporalEase(stream.get(),i,d,&inEase,&outEase), "keyframe_ease");
@@ -366,6 +427,103 @@ Keys readKeys(int compID,int layerID,const Path& path,int start,int maximum) {
 
 struct Frame { double time; Value value; };
 struct WriteResult { int comp=0, written=0; bool ok=true; std::string error, outcome="not_started"; };
+
+// Preflight is completed by the caller before opening this single undo group.
+// A partial SDK failure has unknown outcome: never automatically replay writes.
+template<typename F> WriteResult undoWrite(Sdk& sdk,WriteResult result,bool dryRun,const std::string& name,F operation) {
+    if(dryRun) return result;
+    check(sdk.suites.UtilitySuite6()->AEGP_StartUndoGroup(name.c_str()),"start_undo");
+    try { operation(result);result.outcome="completed"; }
+    catch(const std::exception& e) {result.ok=false;result.error=e.what();result.outcome="unknown";}
+    if(sdk.suites.UtilitySuite6()->AEGP_EndUndoGroup()!=A_Err_NONE) {
+        result.ok=false;result.error+=";end_undo_failed";result.outcome="unknown";
+    }
+    return result;
+}
+
+struct EaseFrame { int index;std::vector<std::array<double,4>> ease; };
+WriteResult writeEase(int compID,int layerID,const Path& path,const std::vector<EaseFrame>& frames,bool dryRun,const std::string& name) {
+    Sdk sdk;WriteResult result;auto comp=composition(sdk,compID);result.comp=compId(sdk,comp);
+    auto layer=findLayer(sdk,comp,layerID);AEGP_LayerFlags flags{};
+    check(sdk.layers->AEGP_GetLayerFlags(layer,&flags),"layer_flags");
+    if(flags & AEGP_LayerFlag_LOCKED) throw std::runtime_error("layer_is_locked; outcome=not_started");
+    Stream stream(sdk);stream.resolve(layer,path);AEGP_StreamType type{};A_long count=0;A_short dims=0;
+    check(sdk.streams->AEGP_GetStreamType(stream.get(),&type),"stream_type");dimensions(type);
+    check(sdk.keys->AEGP_GetStreamNumKFs(stream.get(),&count),"keyframe_count");
+    check(sdk.keys->AEGP_GetStreamTemporalDimensionality(stream.get(),&dims),"temporal_dimensions");
+    for(const auto& row:frames) {
+        if(row.index>=count) throw std::runtime_error("key_index_out_of_range; outcome=not_started");
+        if(row.ease.size()!=static_cast<std::size_t>(dims)) throw std::runtime_error("temporal_dimension_mismatch; outcome=not_started");
+        AEGP_KeyframeFlags keyFlags{};
+        check(sdk.keys->AEGP_GetKeyframeFlags(stream.get(),row.index,&keyFlags),"keyframe_flags");
+        if(keyFlags & AEGP_KeyframeFlag_ROVING) throw std::runtime_error("roving_key_not_supported; outcome=not_started");
+    }
+    return undoWrite(sdk,result,dryRun,name,[&](WriteResult& r){
+        for(const auto& row:frames) {
+            check(sdk.keys->AEGP_SetKeyframeFlag(stream.get(),row.index,AEGP_KeyframeFlag_TEMPORAL_AUTOBEZIER,FALSE),"clear_auto_ease");
+            check(sdk.keys->AEGP_SetKeyframeFlag(stream.get(),row.index,AEGP_KeyframeFlag_TEMPORAL_CONTINUOUS,FALSE),"clear_continuous_ease");
+            check(sdk.keys->AEGP_SetKeyframeInterpolation(stream.get(),row.index,AEGP_KeyInterp_BEZIER,AEGP_KeyInterp_BEZIER),"set_bezier");
+            for(A_short d=0;d<dims;++d) {
+                const auto& e=row.ease[d];AEGP_KeyframeEase in{e[0],e[1]},out{e[2],e[3]};
+                check(sdk.keys->AEGP_SetKeyframeTemporalEase(stream.get(),row.index,d,&in,&out),"set_temporal_ease");
+            }
+            ++r.written;
+        }
+    });
+}
+
+const std::map<std::string,AEGP_LayerFlags> controlFlags={
+    {"enabled",AEGP_LayerFlag_VIDEO_ACTIVE},{"audio_active",AEGP_LayerFlag_AUDIO_ACTIVE},
+    {"effects_active",AEGP_LayerFlag_EFFECTS_ACTIVE},{"motion_blur",AEGP_LayerFlag_MOTION_BLUR},
+    {"shy",AEGP_LayerFlag_SHY},{"solo",AEGP_LayerFlag_SOLO},
+    {"guide",AEGP_LayerFlag_GUIDE_LAYER},{"adjustment",AEGP_LayerFlag_ADJUSTMENT_LAYER}};
+const std::map<std::string,PF_TransferMode> blendModes={
+    {"normal",PF_Xfer_IN_FRONT},{"add",PF_Xfer_ADD},{"multiply",PF_Xfer_MULTIPLY},
+    {"screen",PF_Xfer_SCREEN},{"overlay",PF_Xfer_OVERLAY},{"difference",PF_Xfer_DIFFERENCE2}};
+struct LayerChange { int id;std::map<std::string,bool> flags;std::string blend; };
+NativeAutomation::LayerControlType layerControlType(AEGP_ObjectType type) {
+    using NativeAutomation::LayerControlType;
+    switch(type) {
+        case AEGP_ObjectType_AV: return LayerControlType::AV;
+        case AEGP_ObjectType_TEXT: return LayerControlType::Text;
+        case AEGP_ObjectType_VECTOR: return LayerControlType::Shape;
+        default: return LayerControlType::Other;
+    }
+}
+WriteResult writeLayers(int compID,const std::vector<LayerChange>& changes,bool dryRun,const std::string& name) {
+    Sdk sdk;WriteResult result;auto comp=composition(sdk,compID);result.comp=compId(sdk,comp);
+    std::vector<AEGP_LayerH> layers;std::vector<AEGP_LayerTransferMode> modes;
+    for(const auto& row:changes) {
+        auto layer=findLayer(sdk,comp,row.id);AEGP_LayerFlags flags{};AEGP_ObjectType type{};AEGP_LayerTransferMode mode{};
+        check(sdk.layers->AEGP_GetLayerFlags(layer,&flags),"layer_flags");
+        if(flags & AEGP_LayerFlag_LOCKED) throw std::runtime_error("layer_is_locked; outcome=not_started");
+        check(sdk.layers->AEGP_GetLayerObjectType(layer,&type),"layer_type");
+        NativeAutomation::validateLayerControls(layerControlType(type),row.flags,!row.blend.empty());
+        if(!row.blend.empty()) {
+            const auto error=sdk.layers->AEGP_GetLayerTransferMode(layer,&mode);
+            if(error!=A_Err_NONE)
+                throw std::runtime_error("layer_blend:sdk_error="+std::to_string(error)+"; outcome=not_started");
+            mode.mode=blendModes.at(row.blend); // Preserve transfer flags and track matte.
+        }
+        layers.push_back(layer);modes.push_back(mode);
+    }
+    return undoWrite(sdk,result,dryRun,name,[&](WriteResult& r){
+        for(std::size_t i=0;i<changes.size();++i) {
+            for(const auto& flag:changes[i].flags) check(sdk.layers->AEGP_SetLayerFlag(layers[i],controlFlags.at(flag.first),flag.second),"set_layer_flag");
+            if(!changes[i].blend.empty()) check(sdk.layers->AEGP_SetLayerTransferMode(layers[i],&modes[i]),"set_layer_blend");
+            ++r.written;
+        }
+    });
+}
+
+py::dict writeResponse(const WriteResult& data,bool dryRun,std::size_t validated) {
+    auto result=base();result["ok"]=data.ok;result["compId"]=data.comp;result["dryRun"]=dryRun;
+    result["validated"]=validated;result["written"]=data.written;result["outcome"]=data.outcome;
+    result["error"]=data.error;result["retrySafe"]=data.outcome=="not_started";return result;
+}
+void validUndo(const std::string& name) {
+    if(name.empty() || name.size()>200 || name.find('\0')!=std::string::npos) throw std::invalid_argument("invalid undo name");
+}
 WriteResult writeKeys(int compID,int layerID,const Path& path,const std::vector<Frame>& frames,bool dryRun,const std::string& undoName) {
     WriteResult result;
     Sdk sdk;
@@ -450,6 +608,86 @@ Matrices transforms(int compID,const std::vector<int>& layerIDs,const std::vecto
 }
 
 void bindNativeAutomation(py::module_& m) {
+    m.def("native_set_keyframe_ease",[](int compID,int layerID,py::list path,py::list input,bool dryRun,std::string name){
+        ids(compID,layerID);validUndo(name);auto parsed=parsePath(path);limit(static_cast<int>(input.size()),NativeAutomation::kMaxKeys);
+        std::vector<EaseFrame> frames;std::set<int> seen;
+        for(auto entry:input) {
+            auto row=py::cast<py::dict>(entry);
+            if(row.size()!=2 || !row.contains("index") || !row.contains("temporal_ease")) throw std::invalid_argument("ease key requires index and temporal_ease");
+            if(py::isinstance<py::bool_>(row["index"])) throw std::invalid_argument("boolean key index");
+            int index=py::cast<int>(row["index"]);
+            if(index<0 || index>1000000 || !seen.insert(index).second) throw std::invalid_argument("invalid/duplicate key index");
+            auto ease=py::cast<py::list>(row["temporal_ease"]);limit(static_cast<int>(ease.size()),4);EaseFrame frame{index,{}};
+            for(auto dimension:ease) {
+                auto values=py::cast<py::list>(dimension);
+                if(values.size()!=4) throw std::invalid_argument("ease dimension requires four numbers");
+                std::array<double,4> e{};
+                for(int i=0;i<4;++i) {
+                    auto v=values[i];
+                    if(py::isinstance<py::bool_>(v) || !(py::isinstance<py::float_>(v)||py::isinstance<py::int_>(v))) throw std::invalid_argument("ease must be numeric");
+                    e[i]=py::cast<double>(v);
+                    if(!std::isfinite(e[i])) throw std::invalid_argument("nonfinite ease");
+                }
+                if(e[1]<0.001 || e[1]>1 || e[3]<0.001 || e[3]>1) throw std::invalid_argument("influence must be 0.001..1");
+                frame.ease.push_back(e);
+            }
+            frames.push_back(std::move(frame));
+        }
+        const auto data=dispatch([=]{return writeEase(compID,layerID,parsed,frames,dryRun,name);});
+        auto result=writeResponse(data,dryRun,frames.size());result["layerId"]=layerID;return result;
+    },py::arg("comp_id"),py::arg("layer_id"),py::arg("path"),py::arg("keyframes"),py::arg("dry_run")=true,py::arg("undo_name")="AE2Claude Native Keyframe Ease");
+
+    m.def("native_set_layer_controls",[](int compID,py::list input,bool dryRun,std::string name){
+        ids(compID);validUndo(name);limit(static_cast<int>(input.size()),256);std::set<int> seen;std::vector<LayerChange> changes;
+        for(auto entry:input) {
+            auto row=py::cast<py::dict>(entry);
+            for(auto item:row) {auto key=py::cast<std::string>(item.first);if(key!="layer_id" && key!="flags" && key!="blend_mode") throw std::invalid_argument("unknown layer field");}
+            if(!row.contains("layer_id") || py::isinstance<py::bool_>(row["layer_id"])) throw std::invalid_argument("invalid layer_id");
+            LayerChange change{};change.id=py::cast<int>(row["layer_id"]);ids(compID,change.id);
+            if(!seen.insert(change.id).second) throw std::invalid_argument("duplicate layer_id");
+            if(row.contains("flags")) for(auto flag:py::cast<py::dict>(row["flags"])) {
+                auto key=py::cast<std::string>(flag.first);
+                if(!controlFlags.count(key) || !py::isinstance<py::bool_>(flag.second)) throw std::invalid_argument("invalid layer flag");
+                change.flags.emplace(key,py::cast<bool>(flag.second));
+            }
+            if(row.contains("blend_mode")) {change.blend=py::cast<std::string>(row["blend_mode"]);if(!blendModes.count(change.blend)) throw std::invalid_argument("invalid blend_mode");}
+            if(change.flags.empty() && change.blend.empty()) throw std::invalid_argument("empty layer change");
+            changes.push_back(std::move(change));
+        }
+        const auto data=dispatch([=]{return writeLayers(compID,changes,dryRun,name);});return writeResponse(data,dryRun,changes.size());
+    },py::arg("comp_id"),py::arg("changes"),py::arg("dry_run")=true,py::arg("undo_name")="AE2Claude Native Layer Controls");
+
+    m.def("native_sample_properties", [](int compID,py::list input,std::vector<double> samples,bool preExpression) {
+        ids(compID);limit(static_cast<int>(input.size()),64);times(samples,NativeAutomation::kMaxSamples);
+        if(input.size()*samples.size()>4096) throw std::invalid_argument("at most 4096 property/time samples");
+        std::vector<PropertyRequest> properties;properties.reserve(input.size());
+        for(auto entry:input) {
+            auto prop=py::cast<py::dict>(entry);
+            if(prop.size()!=2 || !prop.contains("layer_id") || !prop.contains("path")) throw std::invalid_argument("property requires layer_id and path");
+            if(py::isinstance<py::bool_>(prop["layer_id"])) throw std::invalid_argument("boolean layer_id");
+            int layer=py::cast<int>(prop["layer_id"]);ids(compID,layer);
+            properties.push_back({layer,parsePath(py::cast<py::list>(prop["path"]))});
+        }
+        const auto data=dispatch([=]{return sampleMany(compID,properties,samples,preExpression);});
+        py::list rows;
+        for(std::size_t i=0;i<data.rows.size();++i) {
+            const auto& r=data.rows[i];
+            rows.append(py::dict("layerId"_a=properties[i].layer,"streamType"_a=r.type,"keyframeCount"_a=r.keyCount,"expressionEnabled"_a=r.expression,"values"_a=r.values));
+        }
+        auto result=base();result["compId"]=data.comp;result["times"]=samples;result["properties"]=rows;result["preExpression"]=preExpression;return result;
+    },py::arg("comp_id"),py::arg("properties"),py::arg("times"),py::arg("pre_expression")=false);
+
+    m.def("native_footage_inventory", [](int offset,int maximum,bool includeProxy) {
+        if(offset<0 || offset>100000) throw std::invalid_argument("offset outside 0..100000");
+        limit(maximum,NativeAutomation::kMaxSnapshotRows);
+        const auto data=dispatch([=]{return footageInventory(offset,maximum,includeProxy);});
+        py::list rows;
+        for(const auto& r:data.rows) rows.append(py::dict("itemId"_a=r.id,"name"_a=r.name,"proxy"_a=r.proxy,"path"_a=r.path,"signature"_a=r.signature,"numMainFiles"_a=r.files,"filesPerFrame"_a=r.filesPerFrame,"missing"_a=bool(r.flags & (r.proxy?AEGP_ItemFlag_MISSING_PROXY:AEGP_ItemFlag_MISSING)),"usingProxy"_a=bool(r.flags & AEGP_ItemFlag_USING_PROXY)));
+        auto result=base();result["footage"]=rows;result["offset"]=offset;result["scannedItems"]=data.scanned;result["truncated"]=data.truncated;
+        if(data.truncated) result["nextOffset"]=data.nextOffset;else result["nextOffset"]=py::none();
+        result["pathScope"]="first main file per footage source; missing flags reflect AE state, not a filesystem scan";return result;
+    },py::arg("offset")=0,py::arg("max_items")=500,py::arg("include_proxy")=true);
+
     m.def("native_snapshot", [](int compID,int maxItems,int maxLayers) {
         ids(compID); limit(maxItems,NativeAutomation::kMaxSnapshotRows); limit(maxLayers,NativeAutomation::kMaxSnapshotRows);
         const auto data=dispatch([=] {return snapshot(compID,maxItems,maxLayers);});
@@ -474,7 +712,7 @@ void bindNativeAutomation(py::module_& m) {
         ids(compID,layerID); limit(maximum,NativeAutomation::kMaxKeys); if(start<0 || start>1000000) throw std::invalid_argument("invalid zero-based start");
         auto parsed=parsePath(path); const auto data=dispatch([=] {return readKeys(compID,layerID,parsed,start,maximum);});
         py::list rows;
-        for(const auto& r:data.rows) rows.append(py::dict("index"_a=r.index,"time"_a=seconds(r.time),"timeRational"_a=py::dict("value"_a=r.time.value,"scale"_a=r.time.scale),"value"_a=py::cast(r.value),"inInterpolation"_a=r.in,"outInterpolation"_a=r.out,"flags"_a=r.flags,"temporalEase"_a=r.ease));
+        for(const auto& r:data.rows) rows.append(py::dict("index"_a=r.index,"time"_a=seconds(r.time),"timeRational"_a=py::dict("value"_a=r.time.value,"scale"_a=r.time.scale),"value"_a=py::cast(r.value),"inInterpolation"_a=r.in,"outInterpolation"_a=r.out,"flags"_a=r.flags,"temporalEase"_a=r.ease,"spatialTangents"_a=r.tangents));
         auto result=base(); result["compId"]=data.comp; result["layerId"]=layerID; result["streamType"]=data.type;
         result["total"]=data.total; result["startIndex"]=start; result["keyframes"]=rows;
         result["truncated"]=start+static_cast<int>(data.rows.size())<data.total; return result;

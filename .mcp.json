@@ -1,13 +1,10 @@
 {
   "mcpServers": {
-    "after-effects-preview": {
-      "type": "http",
-      "url": "http://localhost:3100/aftereffects/mcp"
-    },
     "ae2claude": {
       "command": "uv",
       "args": [
         "run",
+        "--no-sync",
         "ae2claude-mcp"
       ],
       "cwd": ".",

@@ -568,17 +568,7 @@
 
     // --- HTTP routing --------------------------------------------------------
     function readBody(req) {
-        return new Promise(function (resolve, reject) {
-            const chunks = [];
-            req.on('data', function (c) { chunks.push(c); });
-            req.on('end', function () {
-                try {
-                    const raw = Buffer.concat(chunks).toString('utf8');
-                    resolve(raw.length ? JSON.parse(raw) : {});
-                } catch (e) { reject(e); }
-            });
-            req.on('error', reject);
-        });
+        return window.AeLocalHttp.readBody(req, 4 * 1024 * 1024);
     }
 
     function sendJson(res, status, body) {
@@ -1336,6 +1326,10 @@
     }
 
     async function dispatch(req, res) {
+        if (!window.AeLocalHttp.trusted(req, PORT)) {
+            sendJson(res, 403, { error: 'untrusted_local_request', outcome: 'not_started', retrySafe: false });
+            return;
+        }
         const parsed = url.parse(req.url, true);
         const key = req.method + ' ' + parsed.pathname;
         const handler = ROUTES[key];

@@ -1,5 +1,41 @@
 # Changelog
 
+## 4.5.0 candidate — 2026-09-26
+
+- Added native single-dispatch multi-property sampling, main/proxy footage
+  inventory, manual keyframe Bezier easing, spatial tangent readback and bulk
+  layer switches/blend modes. New writes preflight all targets, default to
+  dry-run and use one undo group. Native revision: `native-automation-20260926`.
+- Bounded overview/layer pagination now traverses only requested rows. Avoid
+  redundant health and modern JSX watchdog round trips. Local 2048-value batch
+  sampling measured 15.40 ms versus 171.09 ms for sequential requests.
+- Reject browser-origin and unexpected Host requests on both loopback adapters;
+  reject ambiguous HTTP framing on the native server and bound CEP JSON bodies.
+- Advertise actual loaded native operations independently of static MCP/CLI
+  schemas. Consolidate repository plugin discovery to one router and one lazy
+  MCP; dependency installation is explicit (`uv sync`), startup uses `--no-sync`.
+- Reviewed community MCP, CLI and Skill designs; see
+  `docs/community-review-20260926.md` for primary sources and adoption decisions.
+
+- `start_render()` now calls AE's capability-checked `renderAsync()` and returns
+  `render_started` immediately. It no longer blocks the native idle hook until
+  export completes. Hosts without this API fail explicitly and require the UI;
+  there is no synchronous fallback. Callers must stop treating return as completion.
+- Added `get_render_status()` with named queue statuses. AE can defer JSX status
+  reads until rendering ends; use the visible queue for progress and pause/stop.
+  `render_started` is acceptance only. Never automatically replay an unknown result.
+- Windows AE 27 output paths now use `setSettings` / `Full Flat Path`; assigning
+  `OutputModule.file` corrupted Chinese directory names to `?` in live testing.
+  Apply templates before paths, and reacquire the output module afterwards.
+- Escape output paths and templates, reject invalid queue indexes and non-comp
+  selections, roll back newly added items when configuration fails, and propagate
+  malformed queue responses instead of reporting an empty queue.
+- Verified through the installed personal plugin: a 60-second 1280x720 H.264
+  export returned in 0.062 s instead of 29.187 s; Windows hung-window samples
+  dropped from 95/114 to 0/112. Both outputs contained 1,800 frames. A separate
+  Chinese-path export and failed-template rollback passed. The render fix alone
+  needs no AEX replacement; the new native operations above require the matching build.
+
 ## v4.4.0 — 2026-09-19
 
 Windows x64 release validated on After Effects Beta 27.0x22, Python 3.12.

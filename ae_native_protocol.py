@@ -4,14 +4,48 @@ from __future__ import annotations
 import math
 from typing import Any
 
-REVISION = "native-automation-20260912"
+REVISION = "native-automation-20260926"
 OPERATIONS = {
     "snapshot": "native_snapshot",
     "sample_property": "native_sample_property",
+    "sample_properties": "native_sample_properties",
+    "footage_inventory": "native_footage_inventory",
     "get_keyframes": "native_get_keyframes",
     "set_keyframes": "native_set_keyframes",
+    "set_keyframe_ease": "native_set_keyframe_ease",
+    "set_layer_controls": "native_set_layer_controls",
     "layer_transforms": "native_layer_transforms",
 }
+
+LAYER_FLAGS = frozenset({"enabled", "audio_active", "effects_active", "motion_blur", "shy", "solo", "guide", "adjustment"})
+BLEND_MODES = frozenset({"normal", "add", "multiply", "screen", "overlay", "difference"})
+
+
+def operation_contracts(available=None) -> dict:
+    """Static discovery without starting AE. Availability comes from live health."""
+    limits = {
+        "snapshot": {"max_items": 2000, "max_layers": 2000},
+        "sample_property": {"times": 2048},
+        "sample_properties": {"properties": 64, "times": 2048, "total_samples": 4096},
+        "footage_inventory": {"max_items": 2000},
+        "get_keyframes": {"max_keys": 4096},
+        "set_keyframes": {"keyframes": 4096},
+        "set_keyframe_ease": {"keyframes": 4096},
+        "set_layer_controls": {"changes": 256},
+        "layer_transforms": {"layer_ids": 64, "times": 64, "total_matrices": 1024},
+    }
+    return {name: {"risk": "write" if name.startswith("set_") else "read", "limits": limits[name],
+                   "dispatches": 1, "dryRunDefault": True if name.startswith("set_") else None,
+                   "undo": "single-group" if name.startswith("set_") else None}
+            for name in OPERATIONS if available is None or name in available}
+
+
+def _write_options(take, result, default):
+    result["dry_run"] = _boolean(take("dry_run", True), "dry_run")
+    name = take("undo_name", default)
+    if not isinstance(name, str) or not 1 <= len(name.encode("utf-8")) <= 200 or "\0" in name:
+        raise ValueError("undo_name must be 1..200 UTF-8 bytes without NUL")
+    result["undo_name"] = name
 
 
 def _integer(value: Any, name: str, minimum: int, maximum: int) -> int:
@@ -73,8 +107,47 @@ def normalize_request(operation: str, arguments: dict) -> dict:
     remaining = dict(arguments)
     def take(name: str, default: Any = None) -> Any:
         return remaining.pop(name, default)
-    result = {"comp_id": _integer(take("comp_id", 0), "comp_id", 0, 2_147_483_647)}
-    if operation == "snapshot":
+    result = {} if operation == "footage_inventory" else {"comp_id": _integer(take("comp_id", 0), "comp_id", 0, 2_147_483_647)}
+    if operation == "footage_inventory":
+        result.update(offset=_integer(take("offset", 0), "offset", 0, 100000),
+                      max_items=_integer(take("max_items", 500), "max_items", 1, 2000),
+                      include_proxy=_boolean(take("include_proxy", True), "include_proxy"))
+    elif operation == "sample_properties":
+        properties = []
+        for prop in _list(take("properties"), "properties", 64):
+            if not isinstance(prop, dict) or set(prop) != {"layer_id", "path"}:
+                raise ValueError('each property requires exactly layer_id and path')
+            properties.append({"layer_id": _integer(prop['layer_id'], 'layer_id', 1, 2_147_483_647),
+                               "path": _path(prop['path'])})
+        result['times'] = [_time(t) for t in _list(take('times'), 'times', 2048)]
+        if len(properties) * len(result['times']) > 4096:
+            raise ValueError('at most 4096 property/time samples per call')
+        result['properties'] = properties
+        result['pre_expression'] = _boolean(take('pre_expression', False), 'pre_expression')
+    elif operation == "set_layer_controls":
+        changes, seen = [], set()
+        for change in _list(take("changes"), "changes", 256):
+            if not isinstance(change, dict) or set(change) - {"layer_id", "flags", "blend_mode"}:
+                raise ValueError("layer change requires layer_id and flags and/or blend_mode")
+            layer = _integer(change.get("layer_id"), "layer_id", 1, 2_147_483_647)
+            if layer in seen:
+                raise ValueError("duplicate layer_id")
+            seen.add(layer)
+            flags = change.get("flags", {})
+            if not isinstance(flags, dict) or set(flags) - LAYER_FLAGS:
+                raise ValueError("unsupported layer flags")
+            row = {"layer_id": layer, "flags": {k: _boolean(v, k) for k, v in flags.items()}}
+            if "blend_mode" in change:
+                mode = change["blend_mode"]
+                if not isinstance(mode, str) or mode not in BLEND_MODES:
+                    raise ValueError("unsupported blend_mode")
+                row["blend_mode"] = mode
+            if not flags and "blend_mode" not in row:
+                raise ValueError("empty layer change")
+            changes.append(row)
+        result["changes"] = changes
+        _write_options(take, result, "AE2Claude Native Layer Controls")
+    elif operation == "snapshot":
         result.update(max_items=_integer(take("max_items", 500), "max_items", 1, 2000),
                       max_layers=_integer(take("max_layers", 500), "max_layers", 1, 2000))
     elif operation == "layer_transforms":
@@ -92,6 +165,26 @@ def normalize_request(operation: str, arguments: dict) -> dict:
         elif operation == "get_keyframes":
             result["start_index"] = _integer(take("start_index", 0), "start_index", 0, 1_000_000)
             result["max_keys"] = _integer(take("max_keys", 1000), "max_keys", 1, 4096)
+        elif operation == "set_keyframe_ease":
+            frames, seen = [], set()
+            for frame in _list(take("keyframes"), "keyframes", 4096):
+                if not isinstance(frame, dict) or set(frame) != {"index", "temporal_ease"}:
+                    raise ValueError("ease key requires exactly index and temporal_ease")
+                index = _integer(frame["index"], "index", 0, 1_000_000)
+                if index in seen:
+                    raise ValueError("duplicate key index")
+                seen.add(index)
+                ease = []
+                for dimension in _list(frame["temporal_ease"], "temporal_ease", 4):
+                    if not isinstance(dimension, list) or len(dimension) != 4:
+                        raise ValueError("ease dimension requires [inSpeed,inInfluence,outSpeed,outInfluence]")
+                    values = [_number(v) for v in dimension]
+                    if not all(0.001 <= values[i] <= 1 for i in (1, 3)):
+                        raise ValueError("native influence is a fraction in 0.001..1")
+                    ease.append(values)
+                frames.append({"index": index, "temporal_ease": ease})
+            result["keyframes"] = frames
+            _write_options(take, result, "AE2Claude Native Keyframe Ease")
         else:
             frames = []
             previous = -math.inf

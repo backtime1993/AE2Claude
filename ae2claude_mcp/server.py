@@ -124,7 +124,8 @@ def ae_status() -> dict[str, Any]:
 def ae_native_status() -> dict[str, Any]:
     """Read native queue, running work and idle-hook timing via health only, even while AE is busy. Does not prove project readability or forcibly cancel running work."""
     with bridge() as ae:
-        return ae.get_native_diagnostics()
+        # The new bridge already fetched live health; do not fetch it twice.
+        return ae._native_diagnostics_payload()
 
 
 @mcp.tool()
@@ -145,9 +146,27 @@ def ae_sample_property(layer_id: int, path: list[str | int], times: list[float],
 
 
 @mcp.tool()
+def ae_sample_properties(properties: list[dict[str, Any]], times: list[float],
+                         comp_id: int = 0, pre_expression: bool = False) -> dict[str, Any]:
+    """One SDK dispatch for 1..64 {layer_id,path} properties at shared times; at most 4096 samples. No focus or playhead changes."""
+    require_enabled()
+    with bridge() as ae:
+        return ae.sample_native_properties(properties, times, comp_id, pre_expression)
+
+
+@mcp.tool()
+def ae_footage_inventory(offset: int = 0, max_items: int = 500,
+                         include_proxy: bool = True) -> dict[str, Any]:
+    """Native main/proxy footage paths, signatures and AE missing flags. Paginate project items; first file only for sequences, no filesystem scan."""
+    require_enabled()
+    with bridge() as ae:
+        return ae.get_native_footage_inventory(offset, max_items, include_proxy)
+
+
+@mcp.tool()
 def ae_native_keyframes(layer_id: int, path: list[str | int], comp_id: int = 0,
                          start_index: int = 0, max_keys: int = 1000) -> dict[str, Any]:
-    """Read raw keyframe values, exact SDK rational times, interpolation enums, flags and temporal ease; zero-based paging."""
+    """Read raw keyframe values, exact SDK rational times, interpolation enums, flags, temporal ease and spatial [in,out] tangents; zero-based paging. Ease influences are native fractions, not percent."""
     require_enabled()
     with bridge() as ae:
         return ae.get_native_keyframes(layer_id, path, comp_id, start_index, max_keys)
@@ -163,6 +182,29 @@ def ae_set_native_keyframes(layer_id: int, path: list[str | int], keyframes: lis
         authorize("write", confirm=confirm)
     with bridge() as ae:
         return ae.set_native_keyframes(layer_id, path, keyframes, comp_id, dry_run, undo_name)
+
+
+@mcp.tool()
+def ae_set_native_keyframe_ease(layer_id: int, path: list[str | int], keyframes: list[dict[str, Any]],
+                                comp_id: int = 0, dry_run: bool = True,
+                                undo_name: str = "AE2Claude Native Keyframe Ease", confirm: bool = False) -> dict[str, Any]:
+    """Set manual Bezier ease in one undo group. Each {index,temporal_ease:[[inSpeed,inInfluence,outSpeed,outInfluence],...]}; index zero-based, native influences 0.001..1 fractions (not percent). Clears temporal auto/continuous flags; preserves time/value/spatial tangents. Rejects locked layers, roving keys, wrong dimensions before any mutation. Dry-run by default."""
+    require_enabled()
+    if not dry_run:
+        authorize("write", confirm=confirm)
+    with bridge() as ae:
+        return ae.set_native_keyframe_ease(layer_id, path, keyframes, comp_id, dry_run, undo_name)
+
+
+@mcp.tool()
+def ae_set_native_layer_controls(changes: list[dict[str, Any]], comp_id: int = 0, dry_run: bool = True,
+                                 undo_name: str = "AE2Claude Native Layer Controls", confirm: bool = False) -> dict[str, Any]:
+    """Preflight and update 1..256 {layer_id,flags?,blend_mode?} in one undo group. Boolean flags: enabled,audio_active,effects_active,motion_blur,shy,solo,guide,adjustment. Blend: normal,add,multiply,screen,overlay,difference. Preserves track mattes; rejects locked layers. Dry-run by default."""
+    require_enabled()
+    if not dry_run:
+        authorize("write", confirm=confirm)
+    with bridge() as ae:
+        return ae.set_native_layer_controls(changes, comp_id, dry_run, undo_name)
 
 
 @mcp.tool()
@@ -218,17 +260,7 @@ def ae_overview(layer_limit: int = 40) -> dict[str, Any]:
     require_enabled()
     layer_limit = max(1, min(layer_limit, 200))
     with bridge() as ae:
-        project = ae.project_info()
-        comp = ae.comp_info()
-        layers = ae.list_layers() if comp else []
-    return {
-        "ok": True,
-        "project": project,
-        "comp": comp or None,
-        "layers": layers[:layer_limit],
-        "layerCount": len(layers),
-        "truncated": len(layers) > layer_limit,
-    }
+        return ae.get_overview(layer_limit)
 
 
 @mcp.tool()
@@ -238,14 +270,7 @@ def ae_layers(offset: int = 0, limit: int = 100) -> dict[str, Any]:
     offset = max(0, offset)
     limit = max(1, min(limit, 500))
     with bridge() as ae:
-        layers = ae.list_layers()
-    return {
-        "ok": True,
-        "offset": offset,
-        "limit": limit,
-        "total": len(layers),
-        "layers": layers[offset : offset + limit],
-    }
+        return ae.get_layer_page(offset, limit)
 
 
 @mcp.tool()

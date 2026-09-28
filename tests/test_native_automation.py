@@ -176,6 +176,29 @@ class NativeEndpointTests(unittest.TestCase):
         with patch.object(native_server,"psc",SimpleNamespace(native_set_keyframes=lambda **kw:failure)):
             self.assertEqual(self.ae.set_native_keyframes(1,PATH,[FRAME],dry_run=False),failure)
 
+    def test_layer_preflight_failure_is_not_started_without_replay(self):
+        changes=[{"layer_id":1,"blend_mode":"screen"}]
+        for error in ("blend_mode_not_supported; outcome=not_started",
+                      "layer_blend:sdk_error=1; outcome=not_started"):
+            with self.subTest(error=error):
+                stub=Mock(side_effect=RuntimeError(error))
+                with patch.object(native_server,"psc",SimpleNamespace(native_set_layer_controls=stub)):
+                    result=self.ae.set_native_layer_controls(changes,dry_run=False)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["outcome"],"not_started")
+                self.assertTrue(result["retrySafe"])
+                self.assertEqual(stub.call_count,1)
+        self.ae.run_jsx.assert_not_called(); self.ae._run_py.assert_not_called()
+
+    def test_layer_partial_failure_stays_unknown_without_replay(self):
+        changes=[{"layer_id":1,"blend_mode":"screen"},{"layer_id":2,"blend_mode":"add"}]
+        failure={"ok":False,"written":1,"outcome":"unknown","retrySafe":False,"error":"set_layer_blend:sdk_error=1"}
+        stub=Mock(return_value=failure)
+        with patch.object(native_server,"psc",SimpleNamespace(native_set_layer_controls=stub)):
+            self.assertEqual(self.ae.set_native_layer_controls(changes,dry_run=False),failure)
+        self.assertEqual(stub.call_count,1)
+        self.ae.run_jsx.assert_not_called(); self.ae._run_py.assert_not_called()
+
     def test_client_rejects_invalid_input_before_network(self):
         with patch("ae_bridge._local_urlopen") as send:
             with self.assertRaises(ValueError):

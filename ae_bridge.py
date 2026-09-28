@@ -30,7 +30,7 @@ import urllib.parse
 import http.client
 from typing import Optional, List, Dict, Any, Tuple, Union
 
-__version__ = "4.4.0"
+__version__ = "4.5.0"
 
 _JSX_ERROR_KEY = "__ae2claude_error__"
 
@@ -442,7 +442,7 @@ TRACK_MATTE_TYPES = {
 
 class AEBridge:
     """
-    AE2Claude Bridge v4.4.0 - Agent-native API for After Effects.
+    AE2Claude Bridge v4.5.0 - Agent-native API for After Effects.
 
     Design principles:
     - One method = one AE logical action (no fat methods)
@@ -585,8 +585,10 @@ class AEBridge:
             ConnectionError: PyShiftAE 服务器不可达
         """
         started = time.monotonic()
-        request_id = self._arm_script_dialog_watchdog(timeout)
         server_wraps = getattr(self, 'health', {}).get('features', {}).get('wrapsJsxErrors', False)
+        # Modern bridges catch both parse and runtime errors inside eval. Avoid
+        # a CEP HTTP round trip for every JSX; legacy bridges retain the watchdog.
+        request_id = None if server_wraps else self._arm_script_dialog_watchdog(timeout)
         data = (code if server_wraps else _wrap_jsx_for_structured_errors(code)).encode('utf-8')
         req = urllib.request.Request(
             f'{self._base_url}/jsx',
@@ -757,6 +759,9 @@ class AEBridge:
     def get_native_diagnostics(self) -> dict:
         """Read native queue/idle telemetry without scheduling work on AE's main thread."""
         self._check_connection()
+        return self._native_diagnostics_payload()
+
+    def _native_diagnostics_payload(self) -> dict:
         return {"ok": bool(self.health.get('native')), "native": self.health.get('native'),
                 "execution": self.health.get('execution'), "features": self.health.get('features', {}),
                 "hint": None if self.health.get('native') else 'Native telemetry requires the updated AEX.'}
@@ -799,7 +804,7 @@ errors:errors,errorCount:errors.length,truncated:truncated});
         """获取当前活动合成信息"""
         r = self.run_jsx(
             'var c=app.project.activeItem;'
-            'c ? JSON.stringify({id:c.id,name:c.name,width:c.width,height:c.height,'
+            '(c instanceof CompItem) ? JSON.stringify({id:c.id,name:c.name,width:c.width,height:c.height,'
             'fps:1/c.frameDuration,duration:c.duration,numLayers:c.numLayers})'
             ': "null"'
         )
@@ -860,6 +865,31 @@ return lines.join("\n");
         self.run_jsx('app.endUndoGroup();')
 
     # ── Layer Queries ──────────────────────────────────────
+
+    def get_overview(self, layer_limit: int = 40) -> dict:
+        """Read a coherent project/active-comp summary in one dispatch; bound layer traversal in AE."""
+        if type(layer_limit) is not int or not 1 <= layer_limit <= 200:
+            raise ValueError('layer_limit must be an integer in 1..200')
+        return json.loads(self.run_jsx(
+            '(function(){var p=app.project;var c=p.activeItem;var comp=null;var rows=[];var count=0;'
+            'if(c instanceof CompItem){count=c.numLayers;comp={id:c.id,name:c.name,'
+            'width:c.width,height:c.height,fps:1/c.frameDuration,duration:c.duration,numLayers:count};'
+            f'for(var i=1;i<=Math.min(count,{layer_limit});i++){{var l=c.layer(i);'
+            'rows.push({id:l.id,index:i,name:l.name,startTime:l.startTime,outPoint:l.outPoint,label:l.label});}}'
+            'return JSON.stringify({ok:true,project:{numItems:p.numItems,file:p.file?p.file.fsName:"unsaved"},'
+            'comp:comp,layers:rows,layerCount:count,truncated:rows.length<count});})();'
+        ))
+
+    def get_layer_page(self, offset: int = 0, limit: int = 100) -> dict:
+        """Read only the requested active-comp layer range in AE, without scanning every layer."""
+        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 500:
+            raise ValueError('offset must be nonnegative; limit must be an integer in 1..500')
+        return json.loads(self.run_jsx(
+            '(function(){var c=app.project.activeItem;var rows=[];var count=(c instanceof CompItem)?c.numLayers:0;'
+            f'for(var i={offset}+1;i<=Math.min(count,{offset}+{limit});i++){{var l=c.layer(i);'
+            'rows.push({id:l.id,index:i,name:l.name,startTime:l.startTime,outPoint:l.outPoint,label:l.label});}'
+            f'return JSON.stringify({{ok:true,offset:{offset},limit:{limit},total:count,layers:rows}});}})();'
+        ))
 
     def list_layers(self) -> List[dict]:
         """列出当前合成所有图层"""
@@ -1410,14 +1440,17 @@ return lines.join("\n");
                 f'var it=app.project.item(i);'
                 f'if(it instanceof CompItem&&it.name=="{_esc(comp_name)}"){{c=it;break;}}}}'
             )
-        jsx += 'if(!c){"no_comp"}else{'
+        jsx += 'if(!(c instanceof CompItem)){"no_comp"}else{'
+        jsx += 'if(app.project.renderQueue.rendering)throw new Error("render_in_progress");'
         jsx += 'var rqi=app.project.renderQueue.items.add(c);'
+        jsx += 'try{'
+        if template:
+            jsx += f'rqi.outputModule(1).applyTemplate({json.dumps(template)});'
         if output_path:
             safe_path = output_path.replace('\\', '/')
-            jsx += f'rqi.outputModule(1).file=new File("{safe_path}");'
-        if template:
-            jsx += f'rqi.outputModule(1).applyTemplate("{template}");'
-        jsx += '"queued";}'
+            jsx += ('rqi.outputModule(1).setSettings({"Output File Info":'
+                    '{"Full Flat Path":' + json.dumps(safe_path) + '}});')
+        jsx += '}catch(e){rqi.remove();throw e;}"queued";}'
         return self.run_jsx(jsx)
 
     # ── Composition Management ─────────────────────────────
@@ -2647,25 +2680,46 @@ return lines.join("\n");
             'for(var i=1;i<=rq.numItems;i++){var ri=rq.item(i);'
             'var om=ri.outputModule(1);'
             'out.push({index:i,comp:ri.comp.name,status:ri.status,'
-            'outputPath:om.file?om.file.fsName:""});}'
+            'outputPath:om.file?om.file.fsName:"",elapsedSeconds:ri.elapsedSeconds,'
+            'render:ri.render});}'
             'JSON.stringify(out);'
         )
-        try:
-            return json.loads(r)
-        except json.JSONDecodeError:
-            return []
+        result = json.loads(r)
+        if not isinstance(result, list):
+            raise ValueError('Invalid render queue response; queue state is unknown')
+        return result
+
+    def get_render_status(self) -> dict:
+        """Read queue state (AE may defer this until render ends); render_started is not completion."""
+        return json.loads(self.run_jsx(
+            '(function(){var rq=app.project.renderQueue;var items=[];'
+            'var names=["QUEUED","UNQUEUED","NEEDS_OUTPUT","RENDERING",'
+            '"WILL_CONTINUE","USER_STOPPED","ERR_STOPPED","DONE"];'
+            'for(var i=1;i<=rq.numItems;i++){var ri=rq.item(i);var name="UNKNOWN";'
+            'for(var j=0;j<names.length;j++)if(ri.status===RQItemStatus[names[j]])'
+            '{name=names[j];break;}'
+            'items.push({index:i,comp:ri.comp.name,status:name,'
+            'elapsedSeconds:ri.elapsedSeconds});}'
+            'return JSON.stringify({rendering:rq.rendering,items:items});})();'
+        ))
 
     def set_render_output(self, rq_index: int, output_path: str,
                            template: str = None) -> str:
         """设置渲染项输出路径和模板"""
+        if isinstance(rq_index, bool) or not isinstance(rq_index, int) or rq_index < 1:
+            raise ValueError('rq_index must be a positive integer')
         safe_path = output_path.replace('\\', '/')
         jsx = (
+            'if(app.project.renderQueue.rendering)throw new Error("render_in_progress");'
             f'var ri=app.project.renderQueue.item({rq_index});'
             f'var om=ri.outputModule(1);'
-            f'om.file=new File("{safe_path}");'
         )
         if template:
-            jsx += f'om.applyTemplate("{_esc(template)}");'
+            jsx += f'om.applyTemplate({json.dumps(template)});'
+        # Reacquire after applyTemplate. On AE 27 Windows, assigning om.file
+        # replaces non-ANSI path characters with '?'; setSettings preserves them.
+        jsx += ('ri.outputModule(1).setSettings({"Output File Info":'
+                '{"Full Flat Path":' + json.dumps(safe_path) + '}});')
         jsx += '"ok";'
         return self.run_jsx(jsx)
 
@@ -2684,10 +2738,17 @@ return lines.join("\n");
         )
 
     def start_render(self) -> str:
-        """开始渲染（阻塞直到完成）"""
+        """Start asynchronously; returns render_started/already_rendering/nothing_queued. Poll get_render_status for completion."""
         return self.run_jsx(
-            'app.project.renderQueue.render();"render_complete";',
-            timeout=600000
+            '(function(){var rq=app.project.renderQueue;'
+            'if(rq.rendering)return "already_rendering";'
+            'var queued=false;for(var i=1;i<=rq.numItems;i++)'
+            'if(rq.item(i).status===RQItemStatus.QUEUED){queued=true;break;}'
+            'if(!queued)return "nothing_queued";'
+            'if(typeof rq.renderAsync!=="function")'
+            'throw new Error("async_render_unavailable: use the Render Queue UI");'
+            'rq.renderAsync();return "render_started";})();',
+            timeout=10000
         )
 
     # ── Batch / Selection ──────────────────────────────────
@@ -4261,6 +4322,18 @@ return lines.join("\n");
         return self._native_request("sample_property", {"comp_id": comp_id, "layer_id": layer_id,
                                     "path": path, "times": times, "pre_expression": pre_expression})
 
+    def sample_native_properties(self, properties: List[dict], times: List[float],
+                                 comp_id: int = 0, pre_expression: bool = False) -> dict:
+        """Sample up to 64 properties at shared times in one SDK dispatch; at most 4096 values."""
+        return self._native_request('sample_properties', {'comp_id': comp_id, 'properties': properties,
+                                    'times': times, 'pre_expression': pre_expression})
+
+    def get_native_footage_inventory(self, offset: int = 0, max_items: int = 500,
+                                     include_proxy: bool = True) -> dict:
+        """Read main/proxy paths and AE missing flags through the SDK; project-item pagination, no disk scan."""
+        return self._native_request('footage_inventory', {'offset': offset, 'max_items': max_items,
+                                    'include_proxy': include_proxy})
+
     def get_native_keyframes(self, layer_id: int, path: List[Union[str, int]], comp_id: int = 0,
                              start_index: int = 0, max_keys: int = 1000) -> dict:
         """Read key values, rational times, interpolation, flags and temporal ease; indices are zero-based."""
@@ -4277,6 +4350,19 @@ return lines.join("\n");
     def get_native_layer_transforms(self, layer_ids: List[int], times: List[float], comp_id: int = 0) -> dict:
         """Read up to 1024 layer-to-world matrices, including parent transforms, without moving the playhead."""
         return self._native_request("layer_transforms", {"comp_id": comp_id, "layer_ids": layer_ids, "times": times})
+
+    def set_native_keyframe_ease(self, layer_id: int, path: List[Union[str, int]], keyframes: List[dict],
+                                 comp_id: int = 0, dry_run: bool = True,
+                                 undo_name: str = "AE2Claude Native Keyframe Ease") -> dict:
+        """Set manual Bezier ease: {index,temporal_ease:[[inSpeed,inFraction,outSpeed,outFraction],...]}. Fractions 0.001..1; rejects roving keys."""
+        return self._native_request('set_keyframe_ease', {'comp_id': comp_id, 'layer_id': layer_id, 'path': path,
+                                    'keyframes': keyframes, 'dry_run': dry_run, 'undo_name': undo_name})
+
+    def set_native_layer_controls(self, changes: List[dict], comp_id: int = 0, dry_run: bool = True,
+                                  undo_name: str = "AE2Claude Native Layer Controls") -> dict:
+        """Batch {layer_id,flags?,blend_mode?}; preflight all layers, one undo group, preserve track mattes. See ae_native_protocol.LAYER_FLAGS/BLEND_MODES."""
+        return self._native_request('set_layer_controls', {'comp_id': comp_id, 'changes': changes,
+                                    'dry_run': dry_run, 'undo_name': undo_name})
 
     # ── Agent Property Graph ──────────────────────────────
 

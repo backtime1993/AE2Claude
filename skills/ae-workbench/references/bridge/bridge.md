@@ -1,11 +1,8 @@
----
-name: ae2claude-bridge
-description: "Use for any After Effects automation via AE2Claude bridge. Trigger on: AE, AE Beta, After Effects, 打开AE, 合成, 图层, 关键帧, 蒙版, 特效, 渲染, 表达式, 偏移, AE2Claude, PyShiftAE, ExtendScript, JSX."
----
-
-# AE2Claude Bridge v4.3.1 - After Effects 自动化
+# AE2Claude Bridge v4.5.0 - After Effects 自动化
 
 ## 规则
+
+This is the legacy CLI reference. The parent workbench router and live `ae_capabilities` take precedence; new native operations are also available through the structured MCP and `python -m ae2claude_mcp.cli`.
 
 **优先走 CLI**：所有 AE 操作优先通过 `ae2claude` 命令。CLI 覆盖不到的场景（如需要在 Python 脚本中程序化调用）可用 `from ae_bridge import AEBridge` 底层方式。
 
