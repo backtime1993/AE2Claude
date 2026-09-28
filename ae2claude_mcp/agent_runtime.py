@@ -73,6 +73,7 @@ class EventLog:
 
 
 EVENTS = EventLog()
+_FAILED_RESULT = object()
 
 
 def _resolve_reference(text: str, results: list[Any]) -> Any:
@@ -83,6 +84,8 @@ def _resolve_reference(text: str, results: list[Any]) -> Any:
     if index >= len(results):
         raise ValueError(f"result reference {text} is not available")
     value: Any = results[index]
+    if value is _FAILED_RESULT:
+        raise ValueError(f"result reference {text} targets a failed operation")
     for token in _PATH_TOKEN.finditer(match.group(2)):
         key, item_index = token.groups()
         if key is not None:
@@ -209,7 +212,7 @@ def execute_batch(
                     # A returned failure is as terminal as a raised exception.
                     # Keep the original result for diagnosis, but do not expose
                     # it as a successful dependency to later workflow steps.
-                    raw_results.append(None)
+                    raw_results.append(_FAILED_RESULT)
                     error = str(value.get("error") or "operation_returned_failure")
                     entries.append({"index": index, "ok": False, "error": error, "result": value})
                     EVENTS.emit("batch.operation.failed", requestId=request_id,
@@ -230,7 +233,7 @@ def execute_batch(
                     method=item["method"],
                 )
             except Exception as exc:
-                raw_results.append(None)
+                raw_results.append(_FAILED_RESULT)
                 entries.append({"index": index, "ok": False, "error": str(exc)})
                 EVENTS.emit(
                     "batch.operation.failed",

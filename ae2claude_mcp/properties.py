@@ -230,13 +230,14 @@ function pick(c,s){var i,l;if(s.id!==undefined){for(i=1;i<=c.numLayers;i++){l=c.
 function resolve(root,path){var p=root;for(var i=0;i<path.length;i++){var step=path[i];
     p=(typeof step==='number')?p.property(step+1):p.property(step);if(!p)throw new Error('path_not_found:'+step);}return p;}
 function finite(v){return typeof v==='number'&&isFinite(v);}
-function validate(p,op){
+function propertyKey(p){var indices=[];while(p&&p.parentProperty){indices.unshift(p.propertyIndex);p=p.parentProperty;}return indices.join('/');}
+function validate(p,op,plannedKeys){
     if(p.propertyType!==PropertyType.PROPERTY||p.propertyValueType===PropertyValueType.NO_VALUE)
         throw new Error('not_a_value_property');
     if(op.action!=='set')return;
     var timed=op.time!==null&&op.time!==undefined;
     if(timed&&!p.canVaryOverTime)throw new Error('property_cannot_animate');
-    if(!timed&&p.numKeys>0)throw new Error('animated_property_requires_time');
+    if(!timed&&(p.numKeys>0||plannedKeys[propertyKey(p)]))throw new Error('animated_property_requires_time');
     var v=op.value,t=p.propertyValueType,n=0;
     if(t===PropertyValueType.OneD||t===PropertyValueType.LAYER_INDEX||t===PropertyValueType.MASK_INDEX){if(!finite(v))throw new Error('expected_scalar');
         if(t!==PropertyValueType.OneD&&(v<0||Math.floor(v)!==v))throw new Error('expected_nonnegative_index');}
@@ -256,10 +257,11 @@ function response(out,dry){var ok=true;for(var i=0;i<out.length;i++)ok=ok&&out[i
 function safe(v){try{return JSON.parse(JSON.stringify(v));}catch(e){return String(v);}}
 var c=app.project.activeItem;if(!c||!(c instanceof CompItem))return JSON.stringify({ok:false,error:'no_active_comp'});
 var layer=pick(c,cfg.selector);if(!layer)return JSON.stringify({ok:false,error:'layer_not_found'});
-var out=[],resolved=[],hasWrites=false,i,preflightFailed=false;
+var out=[],resolved=[],plannedKeys={},hasWrites=false,i,preflightFailed=false;
 for(i=0;i<cfg.operations.length;i++)out[i]=skipped(i,'not_started');
 for(i=0;i<cfg.operations.length;i++){
-    try{var op=cfg.operations[i],prop=resolve(layer,op.path);validate(prop,op);resolved[i]=prop;
+    try{var op=cfg.operations[i],prop=resolve(layer,op.path);validate(prop,op,plannedKeys);resolved[i]=prop;
+        if(op.action==='set'&&op.time!==null&&op.time!==undefined)plannedKeys[propertyKey(prop)]=true;
         hasWrites=hasWrites||op.action==='set';out[i]={index:i,ok:true,executed:false,validated:true};}
     catch(e){out[i]={index:i,ok:false,executed:false,error:String(e)};preflightFailed=true;if(cfg.failFast)break;}
 }

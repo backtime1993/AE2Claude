@@ -9,6 +9,8 @@
 #include "../CoreSDK/ProjectSuites.h"
 #include "../CoreSDK/TaskUtilsQuiet.h"
 #include "../CoreSDK/UtilitySuites.h"
+#include "../CoreSDK/NativeAutomationValidation.h"
+#include <set>
 #include <filesystem>
 #include <deque>
 
@@ -22,6 +24,12 @@ Result<int> getUniqueStreamID(Result<AEGP_StreamRefH> streamH);
 Result<AEGP_StreamRefH> getNewParentStreamRef(Result<AEGP_StreamRefH> streamH);
 
 namespace {
+    A_Time streamTime(double seconds)
+    {
+        const auto time = NativeAutomation::timeFromSeconds(seconds);
+        return {time.value, time.scale};
+    }
+
     struct StreamPathStep {
         bool isIndex = false;
         int index = -1;
@@ -92,7 +100,7 @@ namespace {
     struct AgentStreamOperation {
         std::string action;
         std::vector<StreamPathStep> path;
-        float time = 0.0f;
+        A_Time time = {0, 1000000};
         bool hasTime = false;
         bool preExpression = false;
         AgentStreamValue value;
@@ -167,18 +175,15 @@ namespace {
     AgentStreamValue readAgentStreamValue(
         Result<AEGP_StreamRefH> stream,
         AEGP_StreamType type,
-        float time,
+        A_Time time,
         bool preExpression,
         std::string& error)
     {
         AgentStreamValue output;
-        A_Time timeT = {};
-        timeT.value = static_cast<A_long>(time * 1000000.0f);
-        timeT.scale = 1000000;
         auto valueResult = getNewStreamValue(
             stream,
             AEGP_LTimeMode_CompTime,
-            timeT,
+            time,
             preExpression ? TRUE : FALSE);
         if (valueResult.error != A_Err_NONE) {
             error = "ERR:get_value_failed:" + std::to_string(valueResult.error);
@@ -241,7 +246,7 @@ namespace {
         AEGP_StreamType type,
         const AgentStreamValue& input,
         bool hasTime,
-        float time)
+        A_Time time)
     {
         auto validationError = validateAgentStreamValue(type, input);
         if (!validationError.empty()) return validationError;
@@ -275,10 +280,7 @@ namespace {
 
         Result<void> setResult;
         if (hasTime) {
-            A_Time timeT = {};
-            timeT.value = static_cast<A_long>(time * 1000000.0f);
-            timeT.scale = 1000000;
-            auto keyResult = insertKeyframe(stream, AEGP_LTimeMode_CompTime, timeT);
+            auto keyResult = insertKeyframe(stream, AEGP_LTimeMode_CompTime, time);
             if (keyResult.error != A_Err_NONE || keyResult.value < 0) {
                 return "ERR:insert_keyframe_failed:" + std::to_string(keyResult.error);
             }
@@ -301,6 +303,7 @@ namespace {
     {
         std::vector<AgentStreamResult> results(operations.size());
         bool hasWrites = false;
+        std::set<int> plannedKeyedStreams;
         const auto markUnexecuted = [&results]() {
             for (auto& result : results) {
                 if (!result.executed) {
@@ -335,6 +338,22 @@ namespace {
                     results[i].streamType = static_cast<int>(typeResult.value);
                     if (operation.action == "set") {
                         error = validateAgentStreamValue(typeResult.value, operation.value);
+                        if (error.empty()) {
+                            const auto id = getUniqueStreamID(current);
+                            const auto keys = getStreamNumKFs(current);
+                            if (id.error != A_Err_NONE || keys.error != A_Err_NONE) {
+                                error = "ERR:cannot_get_animation_state";
+                            } else if (!operation.hasTime &&
+                                       (keys.value > 0 || plannedKeyedStreams.count(id.value))) {
+                                error = "ERR:animated_property_requires_time";
+                            } else if (operation.hasTime) {
+                                const auto canVary = canVaryOverTime(current);
+                                if (canVary.error != A_Err_NONE || !canVary.value)
+                                    error = "ERR:property_cannot_animate";
+                                else
+                                    plannedKeyedStreams.insert(id.value);
+                            }
+                        }
                     }
                     results[i].ok = error.empty();
                 }
@@ -998,7 +1017,7 @@ void bindStreamUtils(py::module_& m)
                 throw std::invalid_argument("agent stream path must contain 1..64 items");
             }
             if (source.contains("time") && !source["time"].is_none()) {
-                operation.time = py::cast<float>(source["time"]);
+                operation.time = streamTime(py::cast<double>(source["time"]));
                 operation.hasTime = true;
             }
             if (source.contains("preExpression")) {
@@ -1300,199 +1319,47 @@ void bindStreamUtils(py::module_& m)
 #endif
     });
 
-    // ── Get Stream Value by matchname path (native, no JSX) ──
-    // Usage: psc.get_stream_value(layer, ["ADBE Effect Parade", "ADBE Gaussian Blur 2", "ADBE Gaussian Blur 2-0001"], time)
-    // Returns: list of floats (1D→[v], 2D→[x,y], 3D→[x,y,z], color→[r,g,b,a])
-    m.def("get_stream_value", [](std::shared_ptr<Layer> layer,
-                                  const std::vector<std::string>& path,
-                                  float time) -> py::object {
-        enum class ValueKind {
-            Error,
-            Scalar,
-            Vector
-        };
-
-        ValueKind kind = ValueKind::Error;
-        std::string error;
-        double scalar = 0.0;
-        std::vector<double> values;
-
+    // Legacy reads share the batch implementation: one main-thread dispatch,
+    // checked time conversion, and the same stream lifetime handling.
+    const auto readStreamValue = [](std::shared_ptr<Layer> layer,
+                                   const std::vector<StreamPathStep>& path,
+                                   double time) -> py::object {
+        AgentStreamOperation operation;
+        operation.action = "get";
+        operation.path = path;
+        operation.time = streamTime(time);
+        std::vector<AgentStreamResult> results;
         {
             py::gil_scoped_release release;
-
-            auto layerH = layer->getLayerHandle();
-
-            auto& msg1 = enqueueSyncTaskQuiet(getNewStreamRefForLayer, layerH);
-            msg1->wait();
-            auto current = msg1->getResult();
-            if (current.error != A_Err_NONE || current.value == NULL) {
-                error = "ERR:cannot_get_layer_root";
-            } else {
-                std::vector<Result<AEGP_StreamRefH>> toDispose;
-                toDispose.push_back(current);
-
-                for (const auto& mn : path) {
-                    auto& msg = enqueueSyncTaskQuiet(getNewStreamByMatchname, current, mn);
-                    msg->wait();
-                    current = msg->getResult();
-                    if (current.error != A_Err_NONE || current.value == NULL) {
-                        error = "ERR:path_not_found:" + mn;
-                        break;
-                    }
-                    toDispose.push_back(current);
-                }
-
-                if (error.empty()) {
-                    A_Time timeT;
-                    timeT.value = static_cast<A_long>(time * 1000000);
-                    timeT.scale = 1000000;
-
-                    auto& msgVal = enqueueSyncTaskQuiet(getNewStreamValue, current,
-                        AEGP_LTimeMode_CompTime, timeT, (A_Boolean)FALSE);
-                    msgVal->wait();
-                    auto valResult = msgVal->getResult();
-
-                    auto& msgType = enqueueSyncTaskQuiet(getStreamType, current);
-                    msgType->wait();
-                    auto typeResult = msgType->getResult();
-
-                    if (valResult.error == A_Err_NONE) {
-                        AEGP_StreamType sType = typeResult.value;
-                        AEGP_StreamVal2& v = valResult.value.val;
-                        switch (sType) {
-                            case AEGP_StreamType_OneD:
-                                kind = ValueKind::Scalar;
-                                scalar = v.one_d;
-                                break;
-                            case AEGP_StreamType_TwoD:
-                            case AEGP_StreamType_TwoD_SPATIAL:
-                                kind = ValueKind::Vector;
-                                values = { v.two_d.x, v.two_d.y };
-                                break;
-                            case AEGP_StreamType_ThreeD:
-                            case AEGP_StreamType_ThreeD_SPATIAL:
-                                kind = ValueKind::Vector;
-                                values = { v.three_d.x, v.three_d.y, v.three_d.z };
-                                break;
-                            case AEGP_StreamType_COLOR:
-                                kind = ValueKind::Vector;
-                                values = { v.color.redF, v.color.greenF, v.color.blueF, v.color.alphaF };
-                                break;
-                            default:
-                                error = "unsupported_type:" + std::to_string(sType);
-                                break;
-                        }
-                        enqueueSyncTaskQuiet(disposeStreamValue, &valResult.value)->wait();
-                    } else {
-                        error = "ERR:get_value_failed:" + std::to_string(valResult.error);
-                    }
-                }
-
-                for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it) {
-                    enqueueSyncTaskQuiet(disposeStream, *it)->wait();
-                }
-            }
+            auto message = enqueueSyncTaskQuiet(executeAgentStreamBatchDirect,
+                layer->getLayerHandle(), std::vector<AgentStreamOperation>{operation},
+                false, std::string(), true);
+            message->wait();
+            results = message->getResult();
         }
+        const auto& result = results.front();
+        if (!result.ok) {
+            // Preserve the legacy unsupported-type response for existing callers.
+            const std::string prefix = "ERR:unsupported_stream_type:";
+            return py::cast(result.error.compare(0, prefix.size(), prefix) == 0
+                ? "unsupported_type:" + result.error.substr(prefix.size()) : result.error);
+        }
+        if (result.value.scalar) return py::cast(result.value.scalarValue);
+        return py::cast(result.value.values);
+    };
 
-        if (!error.empty()) {
-            return py::cast(error);
-        }
-        if (kind == ValueKind::Scalar) {
-            return py::cast(scalar);
-        }
-        return py::cast(values);
+    m.def("get_stream_value", [readStreamValue](std::shared_ptr<Layer> layer,
+                                               const std::vector<std::string>& path,
+                                               double time) -> py::object {
+        std::vector<StreamPathStep> steps;
+        for (const auto& name : path) steps.push_back({false, -1, name});
+        return readStreamValue(layer, steps, time);
     }, py::arg("layer"), py::arg("path"), py::arg("time"));
 
-    // ── Get Stream Value by mixed path (matchname + child index) ──
-    // Usage: psc.get_stream_value_at_path(layer, ["ADBE ... PosPins", 2, "ADBE FreePin3 PosPin Vtx Index"], time)
-    m.def("get_stream_value_at_path", [](std::shared_ptr<Layer> layer,
-                                          py::iterable path,
-                                          float time) -> py::object {
-        enum class ValueKind {
-            Error,
-            Scalar,
-            Vector
-        };
-
-        auto steps = parseStreamPathSteps(path);
-
-        ValueKind kind = ValueKind::Error;
-        std::string error;
-        double scalar = 0.0;
-        std::vector<double> values;
-
-        {
-            py::gil_scoped_release release;
-
-            auto layerH = layer->getLayerHandle();
-
-            auto& msg1 = enqueueSyncTaskQuiet(getNewStreamRefForLayer, layerH);
-            msg1->wait();
-            auto root = msg1->getResult();
-            if (root.error != A_Err_NONE || root.value == NULL) {
-                error = "ERR:cannot_get_layer_root";
-            } else {
-                std::vector<Result<AEGP_StreamRefH>> toDispose;
-                Result<AEGP_StreamRefH> current;
-                if (resolveStreamPath(root, steps, toDispose, current, error)) {
-                    A_Time timeT;
-                    timeT.value = static_cast<A_long>(time * 1000000);
-                    timeT.scale = 1000000;
-
-                    auto& msgVal = enqueueSyncTaskQuiet(getNewStreamValue, current,
-                        AEGP_LTimeMode_CompTime, timeT, (A_Boolean)FALSE);
-                    msgVal->wait();
-                    auto valResult = msgVal->getResult();
-
-                    auto& msgType = enqueueSyncTaskQuiet(getStreamType, current);
-                    msgType->wait();
-                    auto typeResult = msgType->getResult();
-
-                    if (valResult.error == A_Err_NONE) {
-                        AEGP_StreamType sType = typeResult.value;
-                        AEGP_StreamVal2& v = valResult.value.val;
-                        switch (sType) {
-                            case AEGP_StreamType_OneD:
-                                kind = ValueKind::Scalar;
-                                scalar = v.one_d;
-                                break;
-                            case AEGP_StreamType_TwoD:
-                            case AEGP_StreamType_TwoD_SPATIAL:
-                                kind = ValueKind::Vector;
-                                values = { v.two_d.x, v.two_d.y };
-                                break;
-                            case AEGP_StreamType_ThreeD:
-                            case AEGP_StreamType_ThreeD_SPATIAL:
-                                kind = ValueKind::Vector;
-                                values = { v.three_d.x, v.three_d.y, v.three_d.z };
-                                break;
-                            case AEGP_StreamType_COLOR:
-                                kind = ValueKind::Vector;
-                                values = { v.color.redF, v.color.greenF, v.color.blueF, v.color.alphaF };
-                                break;
-                            default:
-                                error = "unsupported_type:" + std::to_string(sType);
-                                break;
-                        }
-                        enqueueSyncTaskQuiet(disposeStreamValue, &valResult.value)->wait();
-                    } else {
-                        error = "ERR:get_value_failed:" + std::to_string(valResult.error);
-                    }
-                }
-
-                for (auto it = toDispose.rbegin(); it != toDispose.rend(); ++it) {
-                    enqueueSyncTaskQuiet(disposeStream, *it)->wait();
-                }
-            }
-        }
-
-        if (!error.empty()) {
-            return py::cast(error);
-        }
-        if (kind == ValueKind::Scalar) {
-            return py::cast(scalar);
-        }
-        return py::cast(values);
+    m.def("get_stream_value_at_path", [readStreamValue](std::shared_ptr<Layer> layer,
+                                                       py::iterable path,
+                                                       double time) -> py::object {
+        return readStreamValue(layer, parseStreamPathSteps(path), time);
     }, py::arg("layer"), py::arg("path"), py::arg("time"));
 
     // ── Set Stream Value by matchname path (native, no JSX) ──
@@ -2262,7 +2129,8 @@ void bindStreamUtils(py::module_& m)
     // ── Native Keyframe Insert ──
     m.def("insert_keyframe", [](std::shared_ptr<Layer> layer,
                                  const std::vector<std::string>& path,
-                                 float time) -> int {
+                                 double time) -> int {
+        const auto timeT = streamTime(time);
         auto layerH = layer->getLayerHandle();
         auto& msg1 = enqueueSyncTaskQuiet(getNewStreamRefForLayer, layerH);
         msg1->wait();
@@ -2282,10 +2150,6 @@ void bindStreamUtils(py::module_& m)
             }
             toDispose.push_back(current);
         }
-
-        A_Time timeT;
-        timeT.value = static_cast<A_long>(time * 1000000);
-        timeT.scale = 1000000;
 
         auto& msgKF = enqueueSyncTaskQuiet(insertKeyframe, current, AEGP_LTimeMode_CompTime, timeT);
         msgKF->wait();
