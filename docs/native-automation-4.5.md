@@ -12,6 +12,20 @@ Native revision: `native-automation-20260926`. The shared JSON allowlist, Python
 
 Both new write tools default to dry-run. Preflight resolves every target before the undo group begins. Real writes use one undo group; SDK failure after mutation reports `outcome=unknown`, may leave partial changes and is never automatically retried. Undo is recovery, not a transaction guarantee. Read-only policy blocks real writes even when `confirm=true`.
 
+Blend-mode preflight accepts AEGP AV, text and shape/vector layers; other object
+types are rejected before mutation. Blend support does not widen the existing
+AV-only restriction for `audio_active`, `effects_active` or `adjustment`, even
+when the requested flag value is false. Those flag capabilities require separate
+host validation. A transfer-mode read failure during preflight is `not_started`;
+setter failures after the undo group begins remain `unknown`.
+
+`tests/native_automation_test.cpp` covers the production capability validator.
+`tests/test_native_layer_controls_live.py` adds all six modes on AV/text/shape,
+mixed invalid batches, dry-run, independent JSX readback of transfer/matte state
+and single-step Undo. Run it with `AE2CLAUDE_LIVE_TEST=1`, a rebuilt AEX and an
+empty unsaved AE project. This regression is not covered by the earlier live
+acceptance measurements below; a new Windows build and host run are required.
+
 Example via Python (the same keyword arguments work with MCP):
 
 ```python

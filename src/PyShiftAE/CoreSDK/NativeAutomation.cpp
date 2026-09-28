@@ -481,6 +481,15 @@ const std::map<std::string,PF_TransferMode> blendModes={
     {"normal",PF_Xfer_IN_FRONT},{"add",PF_Xfer_ADD},{"multiply",PF_Xfer_MULTIPLY},
     {"screen",PF_Xfer_SCREEN},{"overlay",PF_Xfer_OVERLAY},{"difference",PF_Xfer_DIFFERENCE2}};
 struct LayerChange { int id;std::map<std::string,bool> flags;std::string blend; };
+NativeAutomation::LayerControlType layerControlType(AEGP_ObjectType type) {
+    using NativeAutomation::LayerControlType;
+    switch(type) {
+        case AEGP_ObjectType_AV: return LayerControlType::AV;
+        case AEGP_ObjectType_TEXT: return LayerControlType::Text;
+        case AEGP_ObjectType_VECTOR: return LayerControlType::Shape;
+        default: return LayerControlType::Other;
+    }
+}
 WriteResult writeLayers(int compID,const std::vector<LayerChange>& changes,bool dryRun,const std::string& name) {
     Sdk sdk;WriteResult result;auto comp=composition(sdk,compID);result.comp=compId(sdk,comp);
     std::vector<AEGP_LayerH> layers;std::vector<AEGP_LayerTransferMode> modes;
@@ -489,11 +498,11 @@ WriteResult writeLayers(int compID,const std::vector<LayerChange>& changes,bool 
         check(sdk.layers->AEGP_GetLayerFlags(layer,&flags),"layer_flags");
         if(flags & AEGP_LayerFlag_LOCKED) throw std::runtime_error("layer_is_locked; outcome=not_started");
         check(sdk.layers->AEGP_GetLayerObjectType(layer,&type),"layer_type");
-        // AV-only controls must not cause a late failure after earlier layers changed.
-        if(type!=AEGP_ObjectType_AV && (!row.blend.empty() || row.flags.count("audio_active") || row.flags.count("effects_active") || row.flags.count("adjustment")))
-            throw std::runtime_error("control_requires_av_layer; outcome=not_started");
+        NativeAutomation::validateLayerControls(layerControlType(type),row.flags,!row.blend.empty());
         if(!row.blend.empty()) {
-            check(sdk.layers->AEGP_GetLayerTransferMode(layer,&mode),"layer_blend");
+            const auto error=sdk.layers->AEGP_GetLayerTransferMode(layer,&mode);
+            if(error!=A_Err_NONE)
+                throw std::runtime_error("layer_blend:sdk_error="+std::to_string(error)+"; outcome=not_started");
             mode.mode=blendModes.at(row.blend); // Preserve transfer flags and track matte.
         }
         layers.push_back(layer);modes.push_back(mode);
