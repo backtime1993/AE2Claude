@@ -33,6 +33,18 @@ class StartupPreferencesTests(unittest.TestCase):
             startup.plan(self.root,False,False)
         self.assertEqual(self.main.read_bytes(),before)
 
+    def test_existing_debug_database_in_separate_major_directory(self):
+        other=self.root/'major25'
+        other.mkdir()
+        separated=other/'Debug Database.txt'
+        self.debug.rename(separated)
+        rows=startup.plan(self.root,False,False,separated)
+        result=startup.apply(rows,self.root/'backups')
+        self.assertEqual(result['changed'],2)
+        self.assertFalse((self.root/'Debug Database.txt').exists())
+        self.assertEqual([r['current'] for r in startup.plan(self.root,None,None,separated)],[False,False])
+        self.assertTrue((Path(result['backup'])/'Debug Database.txt').is_file())
+
     def test_second_write_failure_restores_first_file(self):
         before=self.main.read_bytes()
         real_write=startup.atomic_write

@@ -23,10 +23,13 @@ AE 正在运行且插件已加载时：
 
 ```powershell
 $env:AE2CLAUDE_LIVE_TEST='1'
+$env:AE2CLAUDE_EXPECTED_AE_MAJOR='27' # AE 2025 改为 25
 uv run python -m unittest discover -s tests -v
 uv run python test_v3.py
-uv run python tools\stress_test.py --requests 200 --workers 8 --write-cycles 12 --layers-per-cycle 30 --agent-operations 200
+uv run python tools\stress_test.py --ae-major 27 --requests 200 --workers 8 --write-cycles 12 --layers-per-cycle 30 --agent-operations 200
 ```
+
+AE 2025 同时将环境变量和压力测试的 `--ae-major` 改为 `25`；默认仍为 `27`，连接到不符的宿主必须失败。两套 AE 逐个运行，不同时占用 8089/8891。先确认插件启动完成且空白工程可读，再开始会修改工程的测试。
 
 压力测试包含 8089、8891、并发 JSX 只读、MCP 门面、受控写入，以及 Agent 属性树的单次 AEGP 批处理与逐条请求对比。写入阶段只有在 AE 是空白且未保存的工程时才执行；每轮创建的合成和图层会在返回前删除。完整 JSON 报告写入 `artifacts\stress`。
 

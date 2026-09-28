@@ -2,7 +2,7 @@
 
 `tools/configure_startup.py` 是一次性、可回退的启动设置工具。关闭主屏幕后，普通启动直接进入工作界面；关闭上次崩溃修复提示后，异常退出后的启动继续加载现有配置。它使用 AE 自身的持久设置，不安装常驻点击程序。
 
-目前实机验证为 Windows x64、After Effects Beta **27.0x58**。必须先关闭所有 AE 实例。
+目前实机验证为 Windows x64、After Effects Beta **27.0x58** 与 After Effects 2025 **25.6.4x3**。必须先关闭所有 AE 实例。
 
 ```powershell
 # 先查看将要修改的设置。按实际版本修改 prefs-dir。
@@ -12,6 +12,12 @@ uv run python tools/configure_startup.py --prefs-dir "$env:APPDATA/Adobe/After E
 uv run python tools/configure_startup.py --prefs-dir "$env:APPDATA/Adobe/After Effects (Beta)/27.0" --home-screen skip --crash-repair continue --apply --backup-dir state/backups/startup
 ```
 
+AE 2025 25.6.4 的主设置在 `25.6`，已有的 Debug Database 仍在 `25.0`。这种布局可显式指定已有调试文件；不复制、不新增其他版本的设置文件：
+
+```powershell
+uv run python tools/configure_startup.py --prefs-dir "$env:APPDATA/Adobe/After Effects/25.6" --debug-db "$env:APPDATA/Adobe/After Effects/25.0/Debug Database.txt" --home-screen skip --crash-repair continue --apply --backup-dir state/backups/startup
+```
+
 修改范围只有两处现有值：
 
 | 设置 | 值 | 行为 |
@@ -19,7 +25,7 @@ uv run python tools/configure_startup.py --prefs-dir "$env:APPDATA/Adobe/After E
 | General Section / Show Welcome Screen | 00 | 跳过主页 |
 | Debug Database / AE.DebugShowPreviousCrashWarning | false | 上次异常退出后不显示崩溃修复选项，继续正常启动 |
 
-第二项是 AE 的版本相关调试设置，并非跨版本稳定的公开接口。缺少该键、格式或位置不符、存在多个匹配项时，工具拒绝写入，不猜测新增键。升级 AE、切换正式版/Beta 或重置首选项后需重新验证。工具仅覆盖已指定版本的首选项目录。
+第二项是 AE 的版本相关调试设置，并非跨版本稳定的公开接口。缺少该键、格式或位置不符、存在多个匹配项时，工具拒绝写入，不猜测新增键。升级 AE、切换正式版/Beta 或重置首选项后需重新验证。工具仅修改已指定的现有主设置及 Debug Database 文件。
 
 自动保存、未保存工程的恢复提示和崩溃报告保持原设置；这项能力针对“崩溃修复选项”的“继续”。它不会自动丢弃或恢复未保存工程，也不处理缺失插件、登录、许可证或其他阻塞窗口。
 

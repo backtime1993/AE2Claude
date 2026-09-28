@@ -193,7 +193,7 @@ class BridgeHostRegressionTests(unittest.TestCase):
             result=self.ae.sample_native_property(layer,path,[0])
             self.assertFalse(result['ok'],result)
             self.assertIn(error,result['error'])
-        self.assertTrue(str(self.ae.run_jsx('app.version')).startswith('27.'))
+        self.assertTrue(str(self.ae.run_jsx('app.version')).startswith(os.environ.get('AE2CLAUDE_EXPECTED_AE_MAJOR', '27') + '.'))
 
 
     def test_json_queries_work_without_optional_host_json(self):

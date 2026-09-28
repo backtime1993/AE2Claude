@@ -48,7 +48,7 @@ uv run python -m unittest discover -s tests -v
 uv run python tools/stress_test.py --requests 200 --workers 8 --write-cycles 12 --layers-per-cycle 30 --agent-operations 200
 ```
 
-本轮实机范围只有 Beta 27.0x58 / Windows，不代表正式版、macOS 或所有第三方插件组合均已验证。主窗口模态检查仅适用于 Windows；AE 不投递 idle 回调时，仍可能等待或超时。超时和连接中断仍代表结果未知，不能据此重放写入。
+本节原始验收范围为 Beta 27.0x58 / Windows；同日后续完成了 [AE 2025 25.6.4x3 验收](AE2025_ACCEPTANCE_20260929.md)。这不代表其他版本、macOS 或所有第三方插件组合均已验证。主窗口模态检查仅适用于 Windows；AE 不投递 idle 回调时，仍可能等待或超时。超时和连接中断仍代表结果未知，不能据此重放写入。
 
 `reverse_layer` 明确定义为把整个源素材倒放到图层可见时间段，会替换原重映射曲线，不是对既有复杂变速曲线求逆；存在启用的时间重映射表达式时拒绝。`freeze_frame` 时间以源素材秒数为准。蒙版动画顶点数量变化时，新切线置零。
 

@@ -61,7 +61,7 @@ class MCPProtocolTests(unittest.IsolatedAsyncioTestCase):
         os.environ.get("AE2CLAUDE_LIVE_TEST") == "1",
         "set AE2CLAUDE_LIVE_TEST=1 with AE running",
     )
-    async def test_stdio_server_reaches_live_ae27(self) -> None:
+    async def test_stdio_server_reaches_selected_live_ae(self) -> None:
         params = StdioServerParameters(
             command=sys.executable,
             args=["-m", "ae2claude_mcp.server"],
@@ -74,7 +74,7 @@ class MCPProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(payload)
         self.assertEqual(payload["serverVersion"], __version__)
         self.assertTrue(payload["bridge"]["connected"], payload["bridge"])
-        self.assertTrue(str(payload["bridge"]["aeVersion"]).startswith("27."))
+        self.assertTrue(str(payload["bridge"]["aeVersion"]).startswith(os.environ.get("AE2CLAUDE_EXPECTED_AE_MAJOR", "27") + "."))
 
 
 if __name__ == "__main__":

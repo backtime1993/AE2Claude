@@ -21,7 +21,7 @@ HOME = re.compile(rb'(?m)^([ \t]*"Show Welcome Screen"[ \t]*=[ \t]*)(00|01)([ \t
 CRASH = re.compile(rb'(?m)^(AE\.DebugShowPreviousCrashWarning\t)(true|false)(\t(?:true|false)[ \t]*\r*)$')
 
 
-def plan(directory: Path, home: bool | None, crash: bool | None) -> list[dict]:
+def plan(directory: Path, home: bool | None, crash: bool | None, debug_file: Path | None = None) -> list[dict]:
     directory = directory.resolve(strict=True)
     homes = []
     for path in directory.glob('*.txt'):
@@ -30,7 +30,7 @@ def plan(directory: Path, home: bool | None, crash: bool | None) -> list[dict]:
             homes.append((path, data))
     if len(homes) != 1:
         raise ValueError('Expected exactly one existing Home Screen preference')
-    debug = directory / 'Debug Database.txt'
+    debug = (directory / 'Debug Database.txt') if debug_file is None else debug_file.resolve(strict=True)
     specs = [(homes[0][0], homes[0][1], HOME, home, b'01', b'00', 'homeScreen'),
              (debug, debug.read_bytes(), CRASH, crash, b'true', b'false', 'crashRepairPrompt')]
     rows = []
@@ -111,6 +111,7 @@ def require_ae_closed() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prefs-dir', type=Path, required=True)
+    parser.add_argument('--debug-db', type=Path, help='Existing Debug Database.txt when AE stores it in a separate major-version directory')
     parser.add_argument('--home-screen', choices=['show','skip'])
     parser.add_argument('--crash-repair', choices=['show','continue'])
     parser.add_argument('--apply', action='store_true')
@@ -122,12 +123,12 @@ def main() -> int:
         require_ae_closed()
     home = None if args.home_screen is None else args.home_screen == 'show'
     crash = None if args.crash_repair is None else args.crash_repair == 'show'
-    rows = plan(args.prefs_dir, home, crash)
+    rows = plan(args.prefs_dir, home, crash, args.debug_db)
     result = {'ok': True, 'applied': args.apply,
               'preferences': {r['key']: {'current': r['current'], 'desired': r['desired']} for r in rows}}
     if args.apply:
         result.update(apply(rows, args.backup_dir))
-        verified = plan(args.prefs_dir, None, None)
+        verified = plan(args.prefs_dir, None, None, args.debug_db)
         result['verified'] = {r['key']:r['current'] for r in verified}
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

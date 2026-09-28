@@ -14,10 +14,11 @@ from ae2claude_mcp import __version__
 
 LIVE = os.environ.get("AE2CLAUDE_LIVE_TEST") == "1"
 ROOT = Path(__file__).resolve().parents[1]
+EXPECTED_MAJOR = os.environ.get("AE2CLAUDE_EXPECTED_AE_MAJOR", "27")
 
 
 @unittest.skipUnless(LIVE, "set AE2CLAUDE_LIVE_TEST=1 with AE running")
-class LiveAE27Tests(unittest.TestCase):
+class LiveAEHostTests(unittest.TestCase):
     def test_native_bridge_reports_aligned_artifact(self) -> None:
         with urllib.request.urlopen("http://127.0.0.1:8089/health", timeout=5) as response:
             health = json.loads(response.read())
@@ -27,11 +28,11 @@ class LiveAE27Tests(unittest.TestCase):
         self.assertTrue(health["plugin_artifact"]["present"])
         self.assertRegex(health["plugin_artifact"]["sha256"], r"^[0-9a-f]{64}$")
 
-    def test_after_effects_27_read_path(self) -> None:
+    def test_selected_after_effects_read_path(self) -> None:
         with AEBridge() as ae:
             version = str(ae.run_jsx("app.version"))
             project = ae.project_info()
-        self.assertTrue(version.startswith("27."), version)
+        self.assertTrue(version.startswith(EXPECTED_MAJOR + "."), version)
         self.assertIsInstance(project, dict)
 
     def test_pinclicker_reports_ae_window_and_version(self) -> None:
@@ -40,7 +41,7 @@ class LiveAE27Tests(unittest.TestCase):
         self.assertTrue(health["ok"])
         package = json.loads((ROOT / "extensions/pin-clicker/package.json").read_text(encoding="utf-8"))
         self.assertEqual(health["extension_version"], package["version"])
-        self.assertTrue(str(health["ae"]["version"]).startswith("27."))
+        self.assertTrue(str(health["ae"]["version"]).startswith(EXPECTED_MAJOR + "."))
         self.assertNotIn("error", health["window"])
         self.assertTrue(str(health["window"]["class"]).startswith("AE_CApplication"))
 

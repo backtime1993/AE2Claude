@@ -4,7 +4,7 @@
 
 **当前版本：AE2Claude 4.5.0**。
 [下载 Windows x64 完整发布包](https://github.com/backtime1993/AE2Claude/releases/tag/v4.5.0)。
-当前实机验收基线：Windows x64 · After Effects Beta 27.0 · Python 3.12。
+当前实机验收基线：Windows x64 · After Effects 2025 25.6.4x3 / Beta 27.0x58 · Python 3.12。
 
 ## 主要能力
 
