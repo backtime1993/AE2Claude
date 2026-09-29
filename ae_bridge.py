@@ -1,7 +1,7 @@
 """
 AE Bridge - Universal After Effects Automation via PyShiftAE
 ============================================================
-通过 PyShiftAE 插件内嵌的 HTTP 服务器 (默认 8089) 与 After Effects 通信。
+通过 PyShiftAE 插件内嵌的 HTTP 服务器 (默认 18889) 与 After Effects 通信。
 
 核心设计原则:
 1. 所有 effect 属性使用 matchName (兼容中文/日文/英文 AE)
@@ -492,7 +492,7 @@ class AEBridge:
     - Agent orchestrates: loops, filtering, multi-step workflows are caller's job
     - Semantic property names: "position", "opacity" etc. (no raw AE paths)
 
-    Connection: PyShiftAE AEGP plugin HTTP server (default port 8089).
+    Connection: PyShiftAE AEGP plugin HTTP server (default port 18889).
 
     Example:
         with AEBridge() as ae:
@@ -504,11 +504,11 @@ class AEBridge:
             ae.end_undo()
     """
 
-    def __init__(self, port: int = 8089, timeout: int = 30,
+    def __init__(self, port: int = 18889, timeout: int = 30,
                  auto_dismiss: bool = False, **_ignored):
         """
         Args:
-            port: PyShiftAE HTTP 服务器端口 (默认 8089)
+            port: PyShiftAE HTTP 服务器端口 (默认 18889)
             timeout: HTTP 请求超时秒数
             auto_dismiss: 是否启动 Dialog Dismisser 后台线程
         """

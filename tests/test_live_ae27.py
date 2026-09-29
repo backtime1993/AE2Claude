@@ -20,7 +20,7 @@ EXPECTED_MAJOR = os.environ.get("AE2CLAUDE_EXPECTED_AE_MAJOR", "27")
 @unittest.skipUnless(LIVE, "set AE2CLAUDE_LIVE_TEST=1 with AE running")
 class LiveAEHostTests(unittest.TestCase):
     def test_native_bridge_reports_aligned_artifact(self) -> None:
-        with urllib.request.urlopen("http://127.0.0.1:8089/health", timeout=5) as response:
+        with urllib.request.urlopen("http://127.0.0.1:18889/health", timeout=5) as response:
             health = json.loads(response.read())
         self.assertEqual(health["status"], "ok")
         self.assertEqual(health["bridge_version"], __version__)

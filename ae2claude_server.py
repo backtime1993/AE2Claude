@@ -13,7 +13,7 @@ from multiprocessing.connection import Listener
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
-_AE_PORT = 8089
+_AE_PORT = 18889
 _AE_PIPE = r"\\.\pipe\PyShiftAEBridge"
 BRIDGE_VERSION = "4.5.0"
 _JSX_ERROR_KEY = "__ae2claude_error__"

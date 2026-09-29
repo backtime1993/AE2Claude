@@ -139,7 +139,7 @@ import sys, json, os, urllib.request, urllib.error, inspect, threading
 from ae2claude_mcp.runtime import classify_bridge_method
 
 CLI_VERSION = "4.5.0"
-BASE = "http://127.0.0.1:8089"
+BASE = "http://127.0.0.1:18889"
 # 项目根目录：优先用脚本所在目录，如果找不到 ae_bridge.py 则用已知路径
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _BRIDGE_DIR = _SCRIPT_DIR

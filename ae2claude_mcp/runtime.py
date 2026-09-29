@@ -111,7 +111,7 @@ def require_enabled() -> None:
 
 
 def bridge() -> AEBridge:
-    port = int(os.environ.get("AE2CLAUDE_PORT", "8089"))
+    port = int(os.environ.get("AE2CLAUDE_PORT", "18889"))
     timeout = int(os.environ.get("AE2CLAUDE_TIMEOUT", "30"))
     return AEBridge(port=port, timeout=timeout)
 
