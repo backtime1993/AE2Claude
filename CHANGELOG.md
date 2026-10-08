@@ -1,17 +1,29 @@
 # Changelog
 
-## Unreleased — 2026-10-08 upstream sync
+## v4.5.0 — 2026-10-08
+
+- Published the Windows x64 package with the accepted AEX, matching server,
+  bridge, MCP/CLI clients, scripts, presets and deployment tools; Python wheel,
+  sdist, release notes, validation evidence and SHA-256 checksums are separate assets.
+- Includes the native automation and all September 29 regression fixes described
+  below. The native source tree and binary match the historical 214-test acceptance
+  on AE 2025 25.6.4x3 and Beta 27.0x58; no new full live write-test run is claimed.
+- Bridge default: 18889; PinClicker CEP: 8891. Update the MCP configuration together
+  with the plugin's Python files when upgrading from v4.4.0 (port 8089).
+- Current CI covers 215 Python tests (156 passed, 59 live tests skipped), GCC/MSVC
+  standalone native tests, PinClicker syntax and installed-wheel smoke checks.
+- Fixed rollback-test fault injection on Windows temporary-directory aliases.
+
+### Source synchronization included in this release
 
 - Synced the eight existing local commits covering AE regressions, startup
   preferences, batch integrity, timeline precision and the bridge port change.
 - Completed the 18889 default-port migration in both MCP configuration templates,
   PinClicker's Python client and the pressure-test harness. PinClicker's CEP
   endpoint remains 8891. Existing v4.4.0 installations still use 8089.
-- Corrected the README's release link and candidate status. v4.4.0 remains the
-  latest published binary release; this source update does not publish a new AEX
-  package or claim a new live AE acceptance run.
+- Aligned connection templates and release documentation with the shipped version.
 
-## Unreleased — 2026-09-29
+### September 29 regression fixes
 
 - Fixed 17 locally reproduced JSX/native regressions in layer ordering,
   track mattes, precompose, expression sampling, masks, parenting, time remap,
