@@ -47,15 +47,20 @@ class StartupPreferencesTests(unittest.TestCase):
 
     def test_second_write_failure_restores_first_file(self):
         before=self.main.read_bytes()
+        debug_before=self.debug.read_bytes()
         real_write=startup.atomic_write
         def fail_second(path,data):
-            if path==self.debug:
+            # plan() resolves the temp directory; Windows runners may expose it
+            # through a junction or a short-name alias. Compare file identity.
+            if path.samefile(self.debug):
+                self.assertNotEqual(self.main.read_bytes(),before)
                 raise OSError('test replacement failure')
             return real_write(path,data)
         with patch.object(startup,'atomic_write',side_effect=fail_second):
-            with self.assertRaises(OSError):
+            with self.assertRaisesRegex(OSError,'test replacement failure'):
                 startup.apply(startup.plan(self.root,False,False),self.root/'backups')
         self.assertEqual(self.main.read_bytes(),before)
+        self.assertEqual(self.debug.read_bytes(),debug_before)
 
 
 if __name__=='__main__':
