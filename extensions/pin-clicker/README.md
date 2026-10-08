@@ -25,6 +25,9 @@ We need a reliable in-process click endpoint that does not depend on third-party
 
 ## Install / update
 
+The extension is maintained in `AE2Claude/extensions/pin-clicker`, inside the
+main repository rather than a separate project.
+
 From the extracted AE2Claude package, run
 `npm ci --omit=dev --no-audit --no-fund --prefix extensions/pin-clicker`.
 Copy the complete `extensions/pin-clicker` directory, including its local
