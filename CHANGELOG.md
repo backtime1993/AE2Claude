@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — 2026-10-08 upstream sync
+
+- Synced the eight existing local commits covering AE regressions, startup
+  preferences, batch integrity, timeline precision and the bridge port change.
+- Completed the 18889 default-port migration in both MCP configuration templates,
+  PinClicker's Python client and the pressure-test harness. PinClicker's CEP
+  endpoint remains 8891. Existing v4.4.0 installations still use 8089.
+- Corrected the README's release link and candidate status. v4.4.0 remains the
+  latest published binary release; this source update does not publish a new AEX
+  package or claim a new live AE acceptance run.
+
+## Unreleased — 2026-09-29
+
+- Fixed 17 locally reproduced JSX/native regressions in layer ordering,
+  track mattes, precompose, expression sampling, masks, parenting, time remap,
+  render-queue counts, Unicode strings, cold-start JSON, native property paths,
+  2D Position and unsupported easing. Windows modal JSX calls now return a
+  retry-safe not-started result before invoking the host script engine.
+- Added an opt-in, backed-up startup preferences tool to skip Home and the
+  previous-crash repair prompt. The version-specific debug key is validated
+  before any write; project auto-save/recovery behavior is retained.
+- Local Windows / AE Beta 27.0x58 acceptance: 179 tests, 650 pressure requests,
+  360 temporary layers and 9 rendered verification frames passed. Native fixes
+  require rebuilding and restarting AE. No new release is implied.
+  See [evidence and limits](docs/LIVE_REGRESSIONS_20260929.md).
+
 ## 4.5.0 candidate — 2026-09-26
 
 - Added native single-dispatch multi-property sampling, main/proxy footage

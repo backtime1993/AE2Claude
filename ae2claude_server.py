@@ -13,7 +13,7 @@ from multiprocessing.connection import Listener
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
-_AE_PORT = 8089
+_AE_PORT = 18889
 _AE_PIPE = r"\\.\pipe\PyShiftAEBridge"
 BRIDGE_VERSION = "4.5.0"
 _JSX_ERROR_KEY = "__ae2claude_error__"
@@ -39,39 +39,8 @@ def _serialized(operation):
     return guarded
 
 
-def _wrap_jsx_for_structured_errors(code: str) -> str:
-    """Catch parse/runtime errors without relying on ExtendScript's optional JSON."""
-    source = json.dumps(str(code), ensure_ascii=True)
-    # ES3 only. Keep helpers local and restore dialog handling on every exit.
-    prefix = r'''(function(){
-function __ae2q(v){
- if(v===null || typeof v==="undefined")return "null";
- var s=String(v),r='"',i,c,n;
- for(i=0;i<s.length;i++){
-  c=s.charAt(i);n=s.charCodeAt(i);
-  if(c==='"'||c==='\\')r+='\\'+c;
-  else if(n<32||n===8232||n===8233)r+='\\u'+('0000'+n.toString(16)).slice(-4);
-  else r+=c;
- }
- return r+'"';
-}
-function __ae2field(e,k){try{return e && e[k]!=null?String(e[k]):null;}catch(_){return null;}}
-function __ae2line(e){var n=Number(__ae2field(e,"line"));return n>0 && isFinite(n)?String(n):"null";}
-var __ae2quiet=false;
-try{
- if(typeof app!=="undefined" && app.beginSuppressDialogs){app.beginSuppressDialogs();__ae2quiet=true;}
-'''
-    suffix = r'''
-}catch(__ae2e){
- var message;try{message=String(__ae2e);}catch(_){message="Unprintable ExtendScript error";}
- return '{"__ae2claude_error__":'+__ae2q(message)+
- ',"name":'+__ae2q(__ae2field(__ae2e,"name"))+
- ',"line":'+__ae2line(__ae2e)+
- ',"fileName":'+__ae2q(__ae2field(__ae2e,"fileName"))+
- ',"stack":'+__ae2q(__ae2field(__ae2e,"stack"))+'}';
-}finally{if(__ae2quiet)app.endSuppressDialogs(false);}
-})();'''
-    return prefix + 'return eval(' + source + ');' + suffix
+# Keep the embedded server and legacy-client JSX guards identical.
+from ae_bridge import _wrap_jsx_for_structured_errors
 
 
 try:
@@ -275,11 +244,11 @@ def _execute_jsx(script, timeout_ms=120000):
                         response[key] = err_obj[key]
                 return response
             if isinstance(err_obj, dict) and "__jsx_error__" in err_obj:
-                return {
-                    "ok": False,
-                    "kind": "jsx-native",
-                    "error": err_obj.get("__jsx_error__", result),
-                }
+                response = {"ok": False, "kind": "jsx-native",
+                            "error": err_obj.get("__jsx_error__", result)}
+                if err_obj.get("outcome") == "not_started" and err_obj.get("retrySafe") is True:
+                    response.update(outcome="not_started", retrySafe=True)
+                return response
         return {"ok": True, "result": result}
     except Exception as exc:
         not_started = str(exc).startswith(("AE task deadline expired before execution;", "AE task cancelled before execution;", "AE task queue overloaded;", "AE dispatcher is shutting down;"))

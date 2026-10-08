@@ -142,3 +142,28 @@ class PreviewDeadlineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 previews.render_preview(bridge,timeout_ms=value)
         bridge.run_jsx.assert_not_called()
+
+
+class StressHostSelectionTests(unittest.TestCase):
+    def test_wrong_host_is_rejected_before_any_pressure_or_fixture_write(self):
+        for pin_version, jsx_version in [("27.0x58", "25.6.4x3"), ("25.6.4x3", "27.0x58")]:
+            with self.subTest(pin=pin_version, jsx=jsx_version):
+                with tempfile.TemporaryDirectory() as directory:
+                    output = str(Path(directory) / "report.json")
+                    def health(url):
+                        if ":18889/" in url:
+                            return {"status": "ok", "module_available": True}
+                        package = json.loads((stress_test.ROOT / "extensions/pin-clicker/package.json").read_text(encoding="utf-8"))
+                        return {"ok": True, "extension_version": package["version"], "ae": {"version": pin_version}}
+                    with patch("sys.argv", ["stress_test", "--ae-major", "25", "--output", output]), \
+                         patch.object(stress_test, "process_snapshot", return_value={}), \
+                         patch.object(stress_test, "get_json", side_effect=health), \
+                         patch.object(stress_test, "post_jsx", return_value={"ok": True, "result": jsx_version}), \
+                         patch.object(stress_test, "run_parallel") as reads, \
+                         patch.object(stress_test, "run_write_cycles") as writes, \
+                         patch.object(stress_test, "run_agent_property_pressure") as properties:
+                        with self.assertRaises(RuntimeError):
+                            stress_test.main()
+                        reads.assert_not_called()
+                        writes.assert_not_called()
+                        properties.assert_not_called()

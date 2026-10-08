@@ -1,4 +1,7 @@
 #include "UtilitySuites.h"
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 
 Result<void>ReportInfo(std::string info) {
@@ -75,6 +78,17 @@ Result<std::string> ExecuteScript(const std::string& script)
 	AEGP_PluginID pluginID = *pluginIDPtr;
 	AEGP_MemHandle resultMH = nullptr;
 	AEGP_MemHandle errorMH = nullptr;
+
+#ifdef _WIN32
+	// AE can deliver an idle callback while a modal startup/preferences dialog
+	// disables its main window. IsScriptingAvailable alone still reports true;
+	// ExecuteScript then opens another blocking error dialog before our JS guard.
+	HWND mainWindow = nullptr;
+	const auto windowError = suites.UtilitySuite6()->AEGP_GetMainHWND(&mainWindow);
+	if (windowError == A_Err_NONE && mainWindow && !IsWindowEnabled(mainWindow)) {
+		return Result<std::string>("{\"__jsx_error__\":\"host_modal_dialog\",\"outcome\":\"not_started\",\"retrySafe\":true}", A_Err_NONE);
+	}
+#endif
 
 	// Check scripting availability first
 	A_Boolean scriptAvail = FALSE;

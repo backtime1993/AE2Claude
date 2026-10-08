@@ -85,7 +85,7 @@ def get_json(url: str) -> dict[str, Any]:
 
 def post_jsx(source: str, *, retry_busy: bool = False, retry_seconds: float = 5.0) -> dict[str, Any]:
     request = urllib.request.Request(
-        "http://127.0.0.1:8089/jsx",
+        "http://127.0.0.1:18889/jsx",
         data=source.encode("utf-8"),
         headers={"Content-Type": "text/plain; charset=utf-8"},
     )
@@ -311,6 +311,7 @@ def run_agent_property_pressure(operation_count: int) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--ae-major", type=int, default=27, help="Expected host major version; prevents testing the wrong running AE")
     parser.add_argument("--requests", type=int, default=200)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--write-cycles", type=int, default=12)
@@ -319,6 +320,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
+    if args.ae_major < 1:
+        parser.error("ae-major must be positive")
     if args.requests < 1 or args.workers < 1:
         parser.error("requests and workers must be positive")
     if args.write_cycles < 0 or args.layers_per_cycle < 1:
@@ -334,19 +337,26 @@ def main() -> int:
     before = process_snapshot()
 
     def bridge_health() -> None:
-        payload = get_json("http://127.0.0.1:8089/health")
+        payload = get_json("http://127.0.0.1:18889/health")
         if payload.get("status") != "ok" or not payload.get("module_available"):
             raise RuntimeError(f"bad bridge health: {payload}")
 
     def pin_health() -> None:
         payload = get_json("http://127.0.0.1:8891/health")
-        if not payload.get("ok") or payload.get("extension_version") != "0.6.0":
+        if not str(payload.get("ae", {}).get("version", "")).startswith(str(args.ae_major) + "."):
+            raise RuntimeError("PinClicker is connected to a different AE version")
+        if not payload.get("ok") or payload.get("extension_version") != json.loads((ROOT / "extensions/pin-clicker/package.json").read_text(encoding="utf-8"))["version"]:
             raise RuntimeError(f"bad PinClicker health: {payload}")
 
     def jsx_read() -> None:
         payload = post_jsx("app.version", retry_busy=True)
-        if not payload.get("ok") or not str(payload.get("result", "")).startswith("27."):
+        if not payload.get("ok") or not str(payload.get("result", "")).startswith(str(args.ae_major) + "."):
             raise RuntimeError(f"bad JSX response: {payload}")
+
+    # Fail before fixture writes if either endpoint belongs to another host.
+    bridge_health()
+    pin_health()
+    jsx_read()
 
     suites = [
         run_parallel("bridge-health", args.requests, args.workers, bridge_health),
@@ -367,6 +377,9 @@ def main() -> int:
             mcp_errors.append(f"{type(exc).__name__}: {exc}")
     suites.append(summarize("mcp-ae-ping", mcp_timings, mcp_errors))
 
+    # The selected application may have changed during the read pressure.
+    pin_health()
+    jsx_read()
     write_result = run_write_cycles(args.write_cycles, args.layers_per_cycle)
     agent_result = run_agent_property_pressure(args.agent_operations)
     after = process_snapshot()
@@ -377,6 +390,7 @@ def main() -> int:
         "ok": failures == 0 and not write_failed and not agent_failed,
         "timestamp": datetime.now().astimezone().isoformat(),
         "bounds": {
+            "aeMajor": args.ae_major,
             "requestsPerReadSuite": args.requests,
             "workers": args.workers,
             "writeCycles": args.write_cycles,

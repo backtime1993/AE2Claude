@@ -52,4 +52,4 @@ pwsh -File tools\sync-installation.ps1 -Mode Apply -AllSupported
 
 `tools\clean.ps1` 只处理脚本内列出的缓存、日志、打包目录和编译中间件。默认仅报告；传入 `-Apply` 才删除。它明确保护 `.venv`、Release AEX、PinClicker `node_modules` 和本地 Adobe SDK。
 
-旧仓库、旧实验工程和未提交补丁必须先做 Git bundle、binary patch 与 SHA-256 清单，再移入 `F:\claude\ae workspace` 的任务归档，不直接永久删除。
+旧仓库、旧实验工程和未提交补丁必须先做 Git bundle、binary patch 与 SHA-256 清单，再移入 `F:\claude\可恢复归档` 的任务归档，不直接永久删除。

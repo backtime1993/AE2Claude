@@ -59,6 +59,6 @@ The preceding render fix changed `renderQueue.render()` to capability-tested `re
 
 ## Local transport boundaries
 
-Ports 8089 and 8891 bind loopback and reject Origin/Sec-Fetch-Site headers and unexpected or duplicate Host values before dispatch. Port 8089 rejects ambiguous HTTP framing; CEP bodies are bounded to 4 MiB and JSON objects. This prevents browser-driven localhost requests and common rebinding, but is not authentication against other local processes. Deliberate local clients retain the user's existing automation privileges.
+Ports 18889 and 8891 bind loopback and reject Origin/Sec-Fetch-Site headers and unexpected or duplicate Host values before dispatch. Port 18889 rejects ambiguous HTTP framing; CEP bodies are bounded to 4 MiB and JSON objects. This prevents browser-driven localhost requests and common rebinding, but is not authentication against other local processes. Deliberate local clients retain the user's existing automation privileges.
 
 Use one discoverable router Skill and one lazy MCP definition. Dependencies are installed explicitly, never during `initialize`/`tools/list`. Native SDK headers are developer-supplied and must not be committed. Build using the local licensed SDK, then deploy only with AE closed and verify the loaded artifact hash.

@@ -557,11 +557,14 @@ def ae_call(
     """Call any public AEBridge method; destructive calls require confirmation."""
     result = call_bridge_method(method, args, kwargs, confirm=confirm)
     response = {
-        "ok": True,
+        "ok": not (isinstance(result, dict) and result.get("ok") is False),
         "method": method,
         "risk": classify_bridge_method(method),
         "result": result,
     }
+    if not response["ok"]:
+        response["error"] = str(result.get("error") or "operation_returned_failure")
+        return response
     captured = script_library.capture_method(method, args or [], kwargs or {}, result)
     if captured is not None:
         response["capture"] = captured

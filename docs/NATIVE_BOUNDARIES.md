@@ -25,3 +25,18 @@ revision and script contracts remain unchanged.
 `tests/native_queue_test.cpp` needs C++17 and no Adobe SDK. Build with MSVC `/std:c++17 /EHsc /W4 /WX`, or GCC `-std=c++17 -pthread -Wall -Wextra -Werror`. It covers queued cancellation, running lifetime, 500 execution/cancellation races, inline dispatch, overload, shutdown, idle budget and JSON escaping. Linux CI runs it without distributing Adobe headers.
 
 Full AEX builds require licensed local Adobe SDK links plus Python 3.12, pybind11, vcpkg and MSVC. Publish only `build/Release/AE2Claude.aex`. Run `tools/sync-installation.ps1 -Mode Verify`, then `-Mode Apply -Target 'Adobe After Effects (Beta)'` with AE closed. Apply preserves backups and refuses a running AE process. Verify file hashes and live `ae_native_status` after launch; file copies alone do not prove the new AEX is loaded.
+
+## Windows modal and property-path corrections, 2026-09-29
+
+Before ExecuteScript, the Windows native bridge checks whether AE's main window
+is disabled by a modal dialog. When detected, it returns `host_modal_dialog`,
+`outcome=not_started`, `retrySafe=true`; the server preserves these fields.
+This only applies after the idle callback runs. A host that does not dispatch
+idle work can still time out; this check is not a universal dialog dismissor.
+
+Native property paths validate grouping and child bounds before entering SDK
+lookups. String steps enumerate at most 10000 children and require a unique
+matchName, including within indexed effect/mask groups. Ambiguous names require
+a zero-based SDK index; these indexes can differ from JSX property indexes.
+See [the live regression record](LIVE_REGRESSIONS_20260929.md) for evidence and
+remaining limits, and [startup settings](STARTUP.md) for opt-in launch behavior.

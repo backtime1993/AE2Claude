@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -27,7 +29,10 @@ def normalize_layer_ref(layer: LayerRef) -> dict[str, Any]:
         raise ValueError("layer must be a stable id, name, or selector object")
 
     if key in {"id", "index"}:
-        value = int(value)
+        if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+            value = int(value)
+        if type(value) is not int:
+            raise ValueError(f"layer {key} must be an integer, not a boolean or fraction")
         if value < 1:
             raise ValueError(f"layer {key} must be >= 1")
     elif not isinstance(value, str) or not value:
@@ -63,18 +68,38 @@ def normalize_operations(operations: list[dict[str, Any]]) -> list[dict[str, Any
         action = str(source.get("action", "")).lower()
         if action not in {"get", "set"}:
             raise ValueError(f"property operation {index} action must be get or set")
+        at_time = source.get("time")
+        if at_time is not None and (type(at_time) not in (int, float) or not math.isfinite(at_time)):
+            raise ValueError(f"property operation {index} time must be a finite number")
+        pre_expression = source.get("preExpression", False)
+        if type(pre_expression) is not bool:
+            raise ValueError(f"property operation {index} preExpression must be boolean")
         item: dict[str, Any] = {
             "action": action,
             "path": normalize_path(source.get("path")),
-            "time": source.get("time"),
-            "preExpression": bool(source.get("preExpression", False)),
+            "time": at_time,
+            "preExpression": pre_expression,
         }
         if action == "set":
             if "value" not in source:
                 raise ValueError(f"property operation {index} is missing value")
-            item["value"] = source["value"]
+            value = source["value"]
+            components = value if isinstance(value, (list, tuple)) else [value]
+            if any(isinstance(v, float) and not math.isfinite(v) for v in components):
+                raise ValueError(f"property operation {index} value must be finite")
+            item["value"] = value
         normalized.append(item)
     return normalized
+
+
+def _missing_native_export(exc: Exception, name: str) -> bool:
+    # Transport and deadline failures have unknown outcomes, even if their text
+    # happens to mention this API. Never replay them through the JSX backend.
+    if type(exc) is not RuntimeError:
+        return False
+    last_line = str(exc).strip().splitlines()[-1] if str(exc).strip() else ""
+    expected = "AttributeError: module 'PyShiftCore' has no attribute '" + name + "'"
+    return last_line == expected
 
 
 def _python_layer_prelude(selector: dict[str, Any]) -> str:
@@ -139,7 +164,7 @@ def property_batch(
     try:
         return json.loads(bridge._run_py(code, timeout=max(bridge.timeout, 120)))
     except Exception as exc:
-        if backend == "native" or "agent_stream_batch" not in str(exc):
+        if backend == "native" or not _missing_native_export(exc, "agent_stream_batch"):
             raise
         result = _property_batch_jsx(
             bridge, selector, normalized, dry_run, undo_name, fail_fast
@@ -174,7 +199,7 @@ def inspect_properties(
         try:
             return json.loads(bridge._run_py(code, timeout=max(bridge.timeout, 120)))
         except Exception as exc:
-            if backend == "native" or "agent_inspect_streams" not in str(exc):
+            if backend == "native" or not _missing_native_export(exc, "agent_inspect_streams"):
                 raise
     return _inspect_properties_jsx(
         bridge, selector, normalized_path, max_depth, max_nodes
@@ -197,30 +222,67 @@ def _property_batch_jsx(
             "undoName": str(undo_name),
             "failFast": bool(fail_fast),
         },
-        ensure_ascii=False,
+        ensure_ascii=True,
     )
-    code = (
-        "(function(){var cfg=" + payload + ";"
-        "function pick(c,s){var i,l;if(s.id!==undefined){for(i=1;i<=c.numLayers;i++){l=c.layer(i);if(l.id==s.id)return l;}}"
-        "else if(s.index!==undefined){return c.layer(s.index);}else{return c.layer(s.name);}return null;}"
-        "function resolve(root,path){var p=root;for(var i=0;i<path.length;i++){var step=path[i];"
-        "p=(typeof step==='number')?p.property(step+1):p.property(step);if(!p)throw new Error('path_not_found:'+step);}return p;}"
-        "function safe(v){try{return JSON.parse(JSON.stringify(v));}catch(e){return String(v);}}"
-        "var c=app.project.activeItem;if(!c||!(c instanceof CompItem))return JSON.stringify({ok:false,error:'no_active_comp'});"
-        "var layer=pick(c,cfg.selector);if(!layer)return JSON.stringify({ok:false,error:'layer_not_found'});"
-        "var out=[],resolved=[],hasWrites=false,i;for(i=0;i<cfg.operations.length;i++){try{var op=cfg.operations[i];"
-        "var prop=resolve(layer,op.path);resolved[i]=prop;hasWrites=hasWrites||op.action==='set';out[i]={index:i,ok:true};}"
-        "catch(e){out[i]={index:i,ok:false,error:String(e)};if(cfg.failFast)break;}}"
-        "if(cfg.dryRun){var dryOk=out.length===cfg.operations.length;for(i=0;i<out.length;i++)dryOk=dryOk&&out[i].ok;"
-        "return JSON.stringify({ok:dryOk,backend:'jsx-single-dispatch',dryRun:true,operationCount:cfg.operations.length,results:out});}"
-        "var undoOpen=false;try{if(hasWrites){app.beginUndoGroup(cfg.undoName);undoOpen=true;}"
-        "for(i=0;i<cfg.operations.length;i++){if(!out[i]||!out[i].ok)continue;try{var item=cfg.operations[i],p=resolved[i];"
-        "if(item.action==='get'){var t=item.time===null||item.time===undefined?c.time:item.time;out[i].value=safe(p.valueAtTime(t,!!item.preExpression));}"
-        "else if(item.time===null||item.time===undefined){p.setValue(item.value);}else{p.setValueAtTime(item.time,item.value);}}"
-        "catch(inner){out[i].ok=false;out[i].error=String(inner);if(cfg.failFast)break;}}}finally{if(undoOpen)app.endUndoGroup();}"
-        "var ok=out.length===cfg.operations.length;for(i=0;i<out.length;i++)ok=ok&&out[i].ok;"
-        "return JSON.stringify({ok:ok,backend:'jsx-single-dispatch',dryRun:false,operationCount:cfg.operations.length,results:out});})()"
-    )
+    code = "(function(){var cfg=" + payload + ";" + r"""
+function pick(c,s){var i,l;if(s.id!==undefined){for(i=1;i<=c.numLayers;i++){l=c.layer(i);if(l.id==s.id)return l;}}
+    else if(s.index!==undefined){return c.layer(s.index);}else{return c.layer(s.name);}return null;}
+function resolve(root,path){var p=root;for(var i=0;i<path.length;i++){var step=path[i];
+    p=(typeof step==='number')?p.property(step+1):p.property(step);if(!p)throw new Error('path_not_found:'+step);}return p;}
+function finite(v){return typeof v==='number'&&isFinite(v);}
+function propertyKey(p){var indices=[];while(p&&p.parentProperty){indices.unshift(p.propertyIndex);p=p.parentProperty;}return indices.join('/');}
+function validate(p,op,plannedKeys){
+    if(p.propertyType!==PropertyType.PROPERTY||p.propertyValueType===PropertyValueType.NO_VALUE)
+        throw new Error('not_a_value_property');
+    if(op.action!=='set')return;
+    var timed=op.time!==null&&op.time!==undefined;
+    if(timed&&!p.canVaryOverTime)throw new Error('property_cannot_animate');
+    if(!timed&&(p.numKeys>0||plannedKeys[propertyKey(p)]))throw new Error('animated_property_requires_time');
+    var v=op.value,t=p.propertyValueType,n=0;
+    if(t===PropertyValueType.OneD||t===PropertyValueType.LAYER_INDEX||t===PropertyValueType.MASK_INDEX){if(!finite(v))throw new Error('expected_scalar');
+        if(t!==PropertyValueType.OneD&&(v<0||Math.floor(v)!==v))throw new Error('expected_nonnegative_index');}
+    else if(t===PropertyValueType.TwoD||t===PropertyValueType.TwoD_SPATIAL)n=2;
+    else if(t===PropertyValueType.ThreeD||t===PropertyValueType.ThreeD_SPATIAL)n=3;
+    else if(t===PropertyValueType.COLOR){n=4;if(v instanceof Array&&v.length===3)v=op.value=v.concat([1]);}
+    else if(t===PropertyValueType.TEXT_DOCUMENT){if(typeof v!=='string')throw new Error('expected_text');}
+    else throw new Error('unsupported_write_value_type');
+    if(n){if(!(v instanceof Array)||v.length!==n)throw new Error('expected_'+n+'d_value');
+        for(var j=0;j<n;j++)if(!finite(v[j]))throw new Error('expected_finite_components');}
+    if(t===PropertyValueType.OneD||t===PropertyValueType.LAYER_INDEX||t===PropertyValueType.MASK_INDEX){if(p.hasMin&&v<p.minValue)throw new Error('value_below_minimum');
+        if(p.hasMax&&v>p.maxValue)throw new Error('value_above_maximum');}
+}
+function skipped(i,why){return {index:i,ok:false,executed:false,skipped:true,error:why};}
+function response(out,dry){var ok=true;for(var i=0;i<out.length;i++)ok=ok&&out[i].ok;
+    return JSON.stringify({ok:ok,backend:'jsx-single-dispatch',dryRun:dry,operationCount:cfg.operations.length,results:out});}
+function safe(v){try{return JSON.parse(JSON.stringify(v));}catch(e){return String(v);}}
+var c=app.project.activeItem;if(!c||!(c instanceof CompItem))return JSON.stringify({ok:false,error:'no_active_comp'});
+var layer=pick(c,cfg.selector);if(!layer)return JSON.stringify({ok:false,error:'layer_not_found'});
+var out=[],resolved=[],plannedKeys={},hasWrites=false,i,preflightFailed=false;
+for(i=0;i<cfg.operations.length;i++)out[i]=skipped(i,'not_started');
+for(i=0;i<cfg.operations.length;i++){
+    try{var op=cfg.operations[i],prop=resolve(layer,op.path);validate(prop,op,plannedKeys);resolved[i]=prop;
+        if(op.action==='set'&&op.time!==null&&op.time!==undefined)plannedKeys[propertyKey(prop)]=true;
+        hasWrites=hasWrites||op.action==='set';out[i]={index:i,ok:true,executed:false,validated:true};}
+    catch(e){out[i]={index:i,ok:false,executed:false,error:String(e)};preflightFailed=true;if(cfg.failFast)break;}
+}
+if(cfg.dryRun)return response(out,true);
+if(preflightFailed&&cfg.failFast){for(i=0;i<out.length;i++)if(out[i].ok)out[i]=skipped(i,'batch_preflight_failed');return response(out,false);}
+var undoOpen=false;
+try{
+    if(hasWrites){app.beginUndoGroup(cfg.undoName);undoOpen=true;}
+    for(i=0;i<cfg.operations.length;i++){
+        if(!out[i].ok)continue;
+        try{var item=cfg.operations[i],p=resolved[i];out[i].executed=true;
+            var t=item.time===null||item.time===undefined?c.time:item.time;
+            if(item.action==='get')out[i].value=safe(p.valueAtTime(t,item.preExpression));
+            else{var value=item.value;if(p.propertyValueType===PropertyValueType.TEXT_DOCUMENT){value=p.valueAtTime(t,true);value.text=item.value;}
+                if(item.time===null||item.time===undefined)p.setValue(value);else p.setValueAtTime(item.time,value);}}
+        catch(inner){out[i].ok=false;out[i].error=String(inner);if(cfg.failFast){
+            for(var j=i+1;j<out.length;j++)if(out[j].ok)out[j]=skipped(j,'skipped_after_failure');break;}}
+    }
+}finally{if(undoOpen)app.endUndoGroup();}
+return response(out,false);})()
+"""
     raw = bridge.run_jsx(code, timeout=max(60000, bridge.timeout * 1000))
     return json.loads(raw)
 
@@ -234,7 +296,7 @@ def _inspect_properties_jsx(
 ) -> dict[str, Any]:
     payload = json.dumps(
         {"selector": selector, "path": path, "maxDepth": max_depth, "maxNodes": max_nodes},
-        ensure_ascii=False,
+        ensure_ascii=True,
     )
     code = (
         "(function(){var cfg=" + payload + ";"
