@@ -1,6 +1,6 @@
 # AE2Claude 测试分层
 
-候选版的证据归档与未完成项见 [发布清单](RELEASE_CHECKLIST.md)。CI 保留
+当前版本的证据归档与验证边界见 [发布清单](RELEASE_CHECKLIST.md)。CI 保留
 Python 测试日志、GCC/MSVC 独立 C++ 测试日志及 Python 安装包检查结果 30 天；
 这些云端检查不替代以下 AE 真机验收。
 

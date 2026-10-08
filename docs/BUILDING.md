@@ -1,7 +1,8 @@
 # 构建、安装与回退
 
-当前候选版本尚未发布。CI 的 wheel / sdist 只包含 Python 客户端；它们不能
-代替 `AE2Claude.aex`，也不能证明 AE 真机验收通过。
+v4.5.0 的 Windows x64 完整发布包包含已验收的 `build/Release/AE2Claude.aex`
+及同版本配套源码、脚本、预设和部署工具。另行提供的 wheel / sdist 只包含
+Python 客户端，不能代替原生插件。发布附件中的验证报告区分历史实机验收与本次打包检查。
 
 ## 从源码构建原生插件
 
@@ -20,7 +21,11 @@ MSBuild src\PyShiftAE\Win\PyShiftAE.vcxproj /p:Configuration=Release /p:Platform
 ```
 
 唯一部署产物为 `build/Release/AE2Claude.aex`。保留构建日志、源码提交和
-SHA-256；在更换版本后重新构建，不能凭磁盘上存在 AEX 就当作当前产物。
+SHA-256；原生源码变化后重新构建，不能凭磁盘上存在 AEX 就当作当前产物。
+v4.5.0 复用 2026-09-29 已验收的原生二进制：发布源码的 `src` Git tree
+与验收提交 `df2708b` 一致，AEX SHA-256 为
+`aa5e9bbb8c5968faf3b84f7b87394c8f28568c790a1fbef4accd5f5dc3b584e8`。
+这不是重新编译或重新执行全部宿主写入测试的声明。
 
 ## 安装或升级
 

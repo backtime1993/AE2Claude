@@ -2,8 +2,8 @@
 
 让 AI 通过 MCP、命令行或 Python 操控 After Effects：读取工程、编辑图层与关键帧、运行 JSX、预览画面。
 
-**当前源码：AE2Claude 4.5.0 候选版**，包含 9 月 29 日的回归修复。
-[最新正式发布包仍为 v4.4.0](https://github.com/backtime1993/AE2Claude/releases/tag/v4.4.0)，不包含当前候选版修复。
+**当前版本：AE2Claude 4.5.0**，包含原生批量能力及 9 月 29 日的回归修复。
+[下载 Windows x64 完整发布包](https://github.com/backtime1993/AE2Claude/releases/tag/v4.5.0)；另提供 Python wheel、sdist、校验和与验证报告。
 已有实机验收记录：Windows x64 · After Effects 2025 25.6.4x3 / Beta 27.0x58 · Python 3.12；详见下方验收文档。
 
 ## 主要能力
