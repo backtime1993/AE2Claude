@@ -151,7 +151,7 @@ class StressHostSelectionTests(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as directory:
                     output = str(Path(directory) / "report.json")
                     def health(url):
-                        if ":8089/" in url:
+                        if ":18889/" in url:
                             return {"status": "ok", "module_available": True}
                         package = json.loads((stress_test.ROOT / "extensions/pin-clicker/package.json").read_text(encoding="utf-8"))
                         return {"ok": True, "extension_version": package["version"], "ae": {"version": pin_version}}

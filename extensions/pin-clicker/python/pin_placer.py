@@ -32,7 +32,7 @@ class CEPError(RuntimeError):
 
 
 class PinPlacer:
-    def __init__(self, cep_url: str = "http://127.0.0.1:8891", ae_url: str = "http://127.0.0.1:8089"):
+    def __init__(self, cep_url: str = "http://127.0.0.1:8891", ae_url: str = "http://127.0.0.1:18889"):
         self.cep = cep_url.rstrip("/")
         self.ae = ae_url.rstrip("/")
         self.comp_id = None
@@ -756,7 +756,7 @@ class PinPlacer:
             res["target_comp"] = [cx, cy]
         return res
 
-    # ---- AE-side helpers via AE2Claude 8089 Python channel ---------------
+    # ---- AE-side helpers via AE2Claude 18889 Python channel ---------------
     def _ae_py(self, code: str):
         req = urllib.request.Request(f"{self.ae}/", data=code.encode("utf-8"), method="POST")
         with urllib.request.urlopen(req, timeout=120) as resp:

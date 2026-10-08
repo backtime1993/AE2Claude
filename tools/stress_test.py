@@ -85,7 +85,7 @@ def get_json(url: str) -> dict[str, Any]:
 
 def post_jsx(source: str, *, retry_busy: bool = False, retry_seconds: float = 5.0) -> dict[str, Any]:
     request = urllib.request.Request(
-        "http://127.0.0.1:8089/jsx",
+        "http://127.0.0.1:18889/jsx",
         data=source.encode("utf-8"),
         headers={"Content-Type": "text/plain; charset=utf-8"},
     )
@@ -337,7 +337,7 @@ def main() -> int:
     before = process_snapshot()
 
     def bridge_health() -> None:
-        payload = get_json("http://127.0.0.1:8089/health")
+        payload = get_json("http://127.0.0.1:18889/health")
         if payload.get("status") != "ok" or not payload.get("module_available"):
             raise RuntimeError(f"bad bridge health: {payload}")
 

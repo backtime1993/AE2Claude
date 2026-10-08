@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — 2026-10-08 upstream sync
+
+- Synced the eight existing local commits covering AE regressions, startup
+  preferences, batch integrity, timeline precision and the bridge port change.
+- Completed the 18889 default-port migration in both MCP configuration templates,
+  PinClicker's Python client and the pressure-test harness. PinClicker's CEP
+  endpoint remains 8891. Existing v4.4.0 installations still use 8089.
+- Corrected the README's release link and candidate status. v4.4.0 remains the
+  latest published binary release; this source update does not publish a new AEX
+  package or claim a new live AE acceptance run.
+
 ## Unreleased — 2026-09-29
 
 - Fixed 17 locally reproduced JSX/native regressions in layer ordering,

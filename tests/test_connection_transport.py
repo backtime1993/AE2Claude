@@ -1,14 +1,45 @@
+import ast
 import json
+import os
 import subprocess
 import threading
 import unittest
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import patch
 
 from ae_bridge import AEBridge, JSXExecutionError, _local_urlopen
 from ae2claude_mcp import server
+from ae2claude_mcp import runtime
+
+
+class MCPConfigurationTests(unittest.TestCase):
+    def test_shipped_templates_connect_to_the_server_default_port(self):
+        root = Path(__file__).resolve().parents[1]
+        tree = ast.parse((root / 'ae2claude_server.py').read_text(encoding='utf-8'))
+        port = next(ast.literal_eval(node.value) for node in tree.body
+                    if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == '_AE_PORT'
+                            for target in node.targets))
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return b'{"status":"ok","bridge_version":"4.5.0"}'
+
+        for filename in ('.mcp.json', '.mcp.json.template'):
+            with self.subTest(template=filename):
+                config = json.loads((root / filename).read_text(encoding='utf-8'))
+                env = config['mcpServers']['ae2claude']['env']
+                with patch.dict(os.environ, env), patch(
+                    'ae_bridge._local_urlopen', return_value=Response()
+                ) as send:
+                    with runtime.bridge():
+                        pass
+                self.assertEqual(send.call_args.args[0].full_url,
+                                 f'http://127.0.0.1:{port}/health')
 
 
 class TransportTests(unittest.TestCase):

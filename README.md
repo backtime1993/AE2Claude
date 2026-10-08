@@ -2,9 +2,9 @@
 
 让 AI 通过 MCP、命令行或 Python 操控 After Effects：读取工程、编辑图层与关键帧、运行 JSX、预览画面。
 
-**当前版本：AE2Claude 4.5.0**。
-[下载 Windows x64 完整发布包](https://github.com/backtime1993/AE2Claude/releases/tag/v4.5.0)。
-当前实机验收基线：Windows x64 · After Effects 2025 25.6.4x3 / Beta 27.0x58 · Python 3.12。
+**当前源码：AE2Claude 4.5.0 候选版**，包含 9 月 29 日的回归修复。
+[最新正式发布包仍为 v4.4.0](https://github.com/backtime1993/AE2Claude/releases/tag/v4.4.0)，不包含当前候选版修复。
+已有实机验收记录：Windows x64 · After Effects 2025 25.6.4x3 / Beta 27.0x58 · Python 3.12；详见下方验收文档。
 
 ## 主要能力
 
@@ -21,6 +21,8 @@
 4. 重启 AE，将 [MCP 配置模板](.mcp.json.template) 中的路径改成仓库绝对路径，添加到客户端。
 
 Codex 可安装仓库内的[单入口插件](.codex-plugin/plugin.json)。先运行 `uv sync` 安装锁定依赖；MCP 启动使用 `uv run --no-sync`，不安装依赖、不启动 AE。原生插件仍需完成上述安装。
+
+当前源码的 AE 桥默认端口为 **18889**，PinClicker 仍为 **8891**。从旧版升级时同步更新服务文件和 MCP 配置中的 `AE2CLAUDE_PORT`；旧版 v4.4.0 发布包仍使用 8089，不要混用两版配置。
 
 4.5.0 新增原生批量采样、素材/代理清单、关键帧缓动与空间切线读取、图层标志和混合模式控制，并修复同步渲染阻塞与本地接口网页来源校验。参见[原生能力与验证](docs/native-automation-4.5.md)及[社区实现对照](docs/community-review-20260926.md)。
 
@@ -54,6 +56,7 @@ uv run ae2claude --help
 | 跳过主页、崩溃修复提示与回退 | [启动设置](docs/STARTUP.md) |
 | 9 月 29 日本机问题修复与验证 | [实机回归记录](docs/LIVE_REGRESSIONS_20260929.md) |
 | Beta 第二轮批处理修复 | [199 项回归与限制](docs/BETA_BATCH_INTEGRITY_20260929.md) |
+| 长时间轴、批次依赖与静态赋值修复 | [两版 AE 的 214 项回归记录](docs/BETA_TIMELINE_20260929.md) |
 | Beta 激活后缩成标题栏 | [还原矩形根因与修复](docs/WINDOW_FOCUS_20260929.md) |
 | 测试及发布前验收 | [测试](docs/TESTING.md) · [发布清单](docs/RELEASE_CHECKLIST.md) |
 

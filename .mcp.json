@@ -9,7 +9,7 @@
       ],
       "cwd": ".",
       "env": {
-        "AE2CLAUDE_PORT": "8089",
+        "AE2CLAUDE_PORT": "18889",
         "AE2CLAUDE_APPROVAL_MODE": "auto"
       }
     }
