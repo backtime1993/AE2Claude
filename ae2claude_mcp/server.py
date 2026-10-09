@@ -593,12 +593,26 @@ def ae_exec(
             "capture": script_library.capture_success(code, result)}
 
 
-def _review_result(metadata: dict[str, Any], paths: list[str]) -> CallToolResult:
-    from .frame_review import inline_png
+def _image_result(metadata: dict[str, Any], previews: list[dict[str, Any]]) -> CallToolResult:
+    metadata = {**metadata, "modelPreviews": previews}
     content = [TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False))]
-    for path in paths:
-        content.append(ImageContent(type="image", data=base64.b64encode(inline_png(path)).decode("ascii"), mimeType="image/png"))
+    for preview in previews:
+        data = Path(preview["path"]).read_bytes()
+        content.append(ImageContent(type="image", data=base64.b64encode(data).decode("ascii"), mimeType=preview["mimeType"]))
     return CallToolResult(content=content, structuredContent=metadata)
+
+
+def _review_result(metadata: dict[str, Any], paths: list[str]) -> CallToolResult:
+    from .model_images import prepare_image
+    return _image_result(metadata, [prepare_image(path) for path in paths])
+
+
+@mcp.tool(structured_output=False)
+def ae_prepare_image(path: str, crop: list[int] | None = None) -> CallToolResult:
+    """Read a local still image as a bounded WebP (1600px long edge, <=750KB). Optional crop [left,top,right,bottom] uses EXIF-oriented source pixels. Source unchanged; works without AE."""
+    from .model_images import prepare_image
+    require_enabled()
+    return _image_result({"ok": True}, [prepare_image(path, crop)])
 
 
 @mcp.tool(structured_output=False)
@@ -668,22 +682,11 @@ def ae_preview_frame(
     time_seconds: float | None = None,
     max_width: int = 1600,
 ) -> CallToolResult:
-    """Render the active comp frame to PNG and return both metadata and image pixels."""
+    """Render the active comp to managed PNG; return bounded WebP pixels and separate source/preview metadata."""
     require_enabled()
     with bridge() as ae:
         metadata = render_preview(ae, time_seconds, max_width=max_width)
-    path = Path(metadata["path"])
-    image_data = base64.b64encode(path.read_bytes()).decode("ascii")
-    return CallToolResult(
-        content=[
-            TextContent(
-                type="text",
-                text=json.dumps(metadata, ensure_ascii=False),
-            ),
-            ImageContent(type="image", data=image_data, mimeType="image/png"),
-        ],
-        structuredContent=metadata,
-    )
+    return _review_result(metadata, [metadata["path"]])
 
 
 @mcp.tool()

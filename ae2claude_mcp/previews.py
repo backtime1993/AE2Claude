@@ -23,7 +23,7 @@ def preview_root() -> Path:
 def prune_previews(*, max_age_hours: int = 24) -> int:
     cutoff = time.time() - max_age_hours * 3600
     removed = 0
-    for path in list(preview_root().glob("*.png")) + list(preview_root().glob("capture-*.json")):
+    for path in list(preview_root().glob("*.png")) + list(preview_root().glob("capture-*.json")) + list(preview_root().glob("model-*.webp")):
         try:
             if path.stat().st_mtime < cutoff:
                 path.unlink()
