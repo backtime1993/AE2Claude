@@ -19,6 +19,7 @@ from .checkpoints import create_checkpoint, list_checkpoints, revert_checkpoint
 from .previews import render_preview
 from . import script_library
 from .skills import discover_skills, prepare_skill, execute_skill, run_skill
+from .production import READ_ACTIONS, normalize as normalize_production, invoke as invoke_production
 from .runtime import (
     approval_mode,
     authorize,
@@ -59,6 +60,23 @@ mcp = FastMCP(
 # Leave headroom below the broker's 180-second default tool deadline.
 # Longer scripts must use ae_submit, which returns a task ID immediately.
 MAX_SYNC_SCRIPT_TIMEOUT_MS = 120_000
+
+
+@mcp.tool()
+def ae_production(action: str, options: dict[str, Any] | None = None,
+                  dry_run: bool = True, confirm: bool = False) -> dict[str, Any]:
+    """Structured authoring: essential_graphics/properties, shape_contents, expose_control, rename_control,
+    template_settings, essential_property, export_mogrt, shape_operator, stroke_dashes, text_range,
+    keyframe_interpolation, create_folder, project_items, render_output. Writes default to dry-run;
+    AE stable IDs, matchName paths, key/shape indices zero-based; EGP control indices one-based.
+    Inspect ae_capabilities(category='production') and docs/PRODUCTION.md for action options.
+    """
+    normalize_production(action, options, dry_run)
+    require_enabled()
+    if action not in READ_ACTIONS and not dry_run:
+        authorize("destructive" if action == "export_mogrt" else "write", confirm=confirm)
+    with bridge() as ae:
+        return invoke_production(ae, action, options, dry_run)
 
 
 @mcp.tool()

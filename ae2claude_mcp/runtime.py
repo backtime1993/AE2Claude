@@ -33,6 +33,7 @@ READ_PREFIXES = (
     "validate_",
 )
 DESTRUCTIVE_METHODS = {
+    "export_mogrt",
     "clear_render_queue",
     "exec_jsx_file",
     "remove_layer",

@@ -910,6 +910,35 @@ return lines.join("\n");
 
     # ── Undo Group ─────────────────────────────────────────
 
+    def get_essential_graphics(self, comp_id: int = 0) -> dict:
+        """Read MOGRT name and Essential Graphics controller names (one-based indices)."""
+        from ae2claude_mcp.production import invoke
+        return invoke(self, "essential_graphics", {"comp_id": comp_id})
+
+    def get_essential_properties(self, layer, comp_id: int = 0, max_nodes: int = 512) -> dict:
+        """Read a precomp layer's Essential Properties, source links and media replacement eligibility."""
+        from ae2claude_mcp.production import invoke
+        return invoke(self, "essential_properties", {"layer": layer, "comp_id": comp_id, "max_nodes": max_nodes})
+
+    def get_shape_contents(self, layer, comp_id: int = 0, max_nodes: int = 512) -> dict:
+        """Read shape contents with zero-based relative paths, names, enabled flags and values."""
+        from ae2claude_mcp.production import invoke
+        return invoke(self, "shape_contents", {"layer": layer, "comp_id": comp_id, "max_nodes": max_nodes})
+
+    def set_production(self, action: str, options: dict = None, dry_run: bool = True) -> dict:
+        """Plan/apply EGP, shape, text-range, interpolation, project organization or render output edits; excludes export."""
+        from ae2claude_mcp.production import invoke, READ_ACTIONS
+        if action in READ_ACTIONS or action == "export_mogrt":
+            raise ValueError("Use the read-only production getters or export_mogrt for this action")
+        return invoke(self, action, options, dry_run)
+
+    def export_mogrt(self, comp_id: int = 0, output_dir: str = None,
+                     overwrite: bool = False, dry_run: bool = True) -> dict:
+        """Export a saved, clean composition to a verified MOGRT file; never auto-save the project."""
+        from ae2claude_mcp.production import invoke
+        return invoke(self, "export_mogrt", {"comp_id": comp_id, "output_dir": output_dir,
+                                            "overwrite": overwrite}, dry_run)
+
     def begin_undo(self, name: str = "Script"):
         """开始 undo 组"""
         self.run_jsx(f"app.beginUndoGroup({json.dumps(str(name), ensure_ascii=False)});")
