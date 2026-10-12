@@ -13,6 +13,7 @@ license-files = ["LICENSE"]
 dependencies = [
     "mcp>=1.27,<2",
     "pillow>=11,<13",
+    "PyYAML>=6,<7",
 ]
 
 [project.scripts]
@@ -24,6 +25,9 @@ py-modules = ["ae_bridge", "ae_native_protocol", "pin_cmd"]
 
 [tool.setuptools.packages.find]
 include = ["ae2claude_mcp*"]
+
+[tool.setuptools.package-data]
+ae2claude_mcp = ["builtin_skills/*/SKILL.md"]
 
 [tool.setuptools.data-files]
 "share/ae2claude/scripts" = ["scripts/*.jsx", "scripts/registry.json"]

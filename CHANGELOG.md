@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — 2026-10-12
+
+- Added `ae2claude.skill/v1`: project/user/bundled Markdown discovery, strict
+  YAML metadata, offline catalogs, Agent context/tool bundles, MCP prompt and
+  CLI/MCP invocation. Skill execution enforces exact tools, read-only policy,
+  explicit write confirmation and a preparation hash before any dispatch.
+- Bundled report-only `pv-preflight` and `motion-review`. Preflight reads all
+  bounded project compositions and evaluates expressions without changing focus
+  or time. Motion review reuses native easing/tangent APIs; incomplete coverage
+  and intentional animation patterns stay visible. No AEX change is required.
+- Existing batch, Graph Editor and native keyframe interfaces retain their
+  contracts. This source change is unreleased and is not an AE Assistant MCP
+  integration. See [design and evidence](docs/SKILLS.md).
+
 ## Unreleased — 2026-09-29
 
 - Fixed 17 locally reproduced JSX/native regressions in layer ordering,

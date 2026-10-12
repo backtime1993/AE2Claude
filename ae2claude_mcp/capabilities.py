@@ -128,6 +128,8 @@ def capabilities(query: str = "", category: str = "") -> dict[str, Any]:
             "pixelComparison": True,
             "persistentScriptLibrary": True,
             "expressionValidation": True,
+            "skills": {"protocol": "ae2claude.skill/v1", "projectUserDiscovery": True,
+                       "scopedExecution": True, "bundledReadOnlyReports": True},
             "nativeQueueDiagnostics": "requires dispatcher-20260910 native build",
             "nativeAutomation": "requires matching AEX/server; check ae_native_status health features.nativeOperations for loaded availability",
             "forcedMainThreadInterruption": False,

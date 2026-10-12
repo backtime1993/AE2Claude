@@ -18,6 +18,7 @@ from .capabilities import capabilities
 from .checkpoints import create_checkpoint, list_checkpoints, revert_checkpoint
 from .previews import render_preview
 from . import script_library
+from .skills import discover_skills, prepare_skill, execute_skill, run_skill
 from .runtime import (
     approval_mode,
     authorize,
@@ -46,6 +47,10 @@ mcp = FastMCP(
         "automation when health features.nativeAutomation is true. They use stable "
         "IDs and one SDK dispatch without changing focus. A native failure never "
         "authorizes replay through JSX."
+        " For reusable tasks, discover ae_skills, prepare ae_skill with /skill-name, "
+        "then execute every Skill operation through ae_skill_execute with its exact hash "
+        "and discovery roots. Never bypass a Skill's denied operation using another tool. "
+        "Use ae_skill_run for bundled read-only pv-preflight or motion-review reports."
     ),
     json_response=True,
 )
@@ -54,6 +59,42 @@ mcp = FastMCP(
 # Leave headroom below the broker's 180-second default tool deadline.
 # Longer scripts must use ae_submit, which returns a task ID immediately.
 MAX_SYNC_SCRIPT_TIMEOUT_MS = 120_000
+
+
+@mcp.tool()
+def ae_skills(project_dir: str | None = None, user_dir: str | None = None) -> dict[str, Any]:
+    """Discover project/user/bundled Skill metadata and validation errors; no AE connection."""
+    return discover_skills(project_dir, user_dir)
+
+
+@mcp.tool()
+def ae_skill(command: str, project_dir: str | None = None, user_dir: str | None = None,
+             include_context: bool = True) -> dict[str, Any]:
+    """Prepare /skill-name: versioned instructions, AE context and least-privilege tool schemas."""
+    return prepare_skill(command, project_dir, user_dir, include_context)
+
+
+@mcp.tool()
+def ae_skill_execute(command: str, operations: list[dict[str, Any]], expected_sha256: str,
+                     project_dir: str | None = None, user_dir: str | None = None,
+                     confirm: bool = False, dry_run: bool = False,
+                     fail_fast: bool = True) -> dict[str, Any]:
+    """Execute a Skill-scoped plan; enforce hash, read_only, allowed_tools and global policy."""
+    return execute_skill(command, operations, expected_sha256, project_dir, user_dir,
+                         confirm, dry_run, fail_fast)
+
+
+@mcp.tool()
+def ae_skill_run(command: str, project_dir: str | None = None, user_dir: str | None = None,
+                 options: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Run bundled pv-preflight/motion-review; findings include coverage and incomplete checks."""
+    return run_skill(command, project_dir, user_dir, options)
+
+
+@mcp.prompt()
+def ae_skill_task(command: str, project_dir: str | None = None) -> str:
+    """Load /skill-name as an Agent task with current AE context and scoped tools."""
+    return json.dumps(prepare_skill(command, project_dir), ensure_ascii=False)
 
 
 def _sync_script_timeout(timeout_ms: int) -> int:

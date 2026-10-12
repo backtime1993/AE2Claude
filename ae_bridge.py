@@ -897,6 +897,17 @@ return lines.join("\n");
         except json.JSONDecodeError:
             return {"raw": r}
 
+    def get_preflight_snapshot(self, max_items: int = 2000, max_properties: int = 5000) -> dict:
+        """Read project-wide PV delivery checks without changing selection, time or project state."""
+        from ae2claude_mcp.skill_reports import preflight_snapshot
+        return preflight_snapshot(self, max_items, max_properties)
+
+    def get_keyframe_qc_targets(self, comp_id: int = 0, max_properties: int = 128,
+                               max_nodes: int = 5000) -> dict:
+        """Discover bounded animated properties for native keyframe review; no focus changes."""
+        from ae2claude_mcp.skill_reports import qc_targets
+        return qc_targets(self, comp_id, max_properties, max_nodes)
+
     # ── Undo Group ─────────────────────────────────────────
 
     def begin_undo(self, name: str = "Script"):
