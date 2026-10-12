@@ -10,6 +10,78 @@ from ae2claude_mcp.runtime import SafetyError
 
 
 class ProductionTests(unittest.TestCase):
+    def test_unsigned_stable_ids_and_newlines(self):
+        cfg=normalize('text_range',{'comp_id':3966343632,'layer':1,'start':0,'end':1,'text':'A\r\nB\nC'},True)
+        self.assertEqual(cfg['compId'],3966343632)
+        self.assertEqual(cfg['text'],'A\rB\rC')
+        cfg=normalize('project_items',{'changes':[{'item_id':3966343632,'folder_id':3966343633}]},True)
+        self.assertEqual(cfg['changes'][0]['item_id'],3966343632)
+
+    def test_null_shape_arguments_reject_before_transport(self):
+        for op,key in [('rename','name'),('add','match_name')]:
+            with self.subTest(op=op),self.assertRaises(ValueError):
+                normalize('shape_operator',{'layer':1,'path':[0],'operation':op,key:None},False)
+
+    def test_bounded_tree_is_prefix_not_skipped_first_children(self):
+        setup='''var events=[];function CompItem(){};var c=new CompItem();
+var PropertyType={INDEXED_GROUP:1};
+var group={name:'Contents',matchName:'ADBE Root Vectors Group',propertyType:1,numProperties:4,
+property:function(i){return {name:'Child'+i,matchName:'shape',numProperties:0,value:i}}};
+var layer={id:1,property:function(){return group}};c.numLayers=1;c.layer=function(){return layer};var app={project:{activeItem:c}};'''
+        out=self.evaluate('shape_contents',{'layer':1,'max_nodes':3},setup)['result']
+        self.assertTrue(out['truncated'])
+        self.assertEqual([x['name'] for x in out['result']],['Contents','Child1','Child2'])
+
+    def test_timed_essential_property_reads_requested_time(self):
+        setup='''var events=[];function CompItem(){};var c=new CompItem();
+var PropertyType={PROPERTY:1},p={propertyType:1,numKeys:1,expressionEnabled:false,value:0,
+setValueAtTime:function(t,v){events.push([t,v])},valueAtTime:function(t){return t===0.5?100:0}};
+var l={id:1,essentialProperty:{property:function(){return p}}};c.numLayers=1;c.layer=function(){return l};
+var app={project:{activeItem:c},beginUndoGroup:function(){},endUndoGroup:function(){}};'''
+        out=self.evaluate('essential_property',{'layer':1,'path':[0],'time':0.5,'value':100},setup,False)['result']
+        self.assertEqual(out['result']['value'],100)
+        self.assertEqual(out['result']['time'],0.5)
+
+    def test_valid_parent_child_reverse_avoids_intermediate_cycle(self):
+        setup='''var events=[];function FolderItem(id,name,parent){this.id=id;this.name=name;this._parent=parent}
+Object.defineProperty(FolderItem.prototype,'parentFolder',{get:function(){return this._parent},set:function(p){var x=p;while(x){if(x===this)throw Error('cycle');x=x._parent}this._parent=p;events.push([this.id,p.id])}});
+var root=new FolderItem(0,'root',null),a=new FolderItem(1,'A',root),b=new FolderItem(2,'B',a);
+var app={project:{rootFolder:root,numItems:2,item:function(i){return [a,b][i-1]}},beginUndoGroup:function(){},endUndoGroup:function(){}};'''
+        out=self.evaluate('project_items',{'changes':[{'item_id':1,'folder_id':2},{'item_id':2,'folder_id':0}]},setup,False)['result']
+        self.assertTrue(out['ok'],out)
+        self.assertEqual([x['parentId'] for x in out['result']],[2,0])
+
+    def render_host(self, disk=(), queued=()):
+        return '''var events=[],disk=DISK,queued=QUEUED;var $={os:'Windows'};
+function CompItem(){};var c=new CompItem();c.id=1;c.name='Clip';
+function File(path){this.fsName=path;this.exists=disk.indexOf(path)>=0;this.name=path.split('/').pop();
+this.parent={exists:true,fsName:'C:/out',getFiles:function(){return disk.map(function(p){return new File(p)})}}}
+function output(path){return {file:new File(path),setSettings:function(s){this.file=new File(s['Output File Info']['Full Flat Path'].replace(/\\.mov$/,'.mp4'))}}}
+var items=queued.map(function(p){var om=output(p);return {render:true,numOutputModules:1,outputModule:function(){return om}}});
+var rq={rendering:false,item:function(i){return items[i-1]},items:{add:function(){events.push('add');var om=output('C:/out/Clip.mp4');var ri={render:true,numOutputModules:1,outputModule:function(){return om},remove:function(){items.splice(items.indexOf(ri),1);events.push('remove-new')}};items.push(ri);return ri}}};
+Object.defineProperty(rq,'numItems',{get:function(){return items.length}});
+var app={project:{activeItem:c,file:{parent:{fsName:'C:/out'}},renderQueue:rq},beginUndoGroup:function(){},endUndoGroup:function(){}};
+'''.replace('DISK',json.dumps(disk)).replace('QUEUED',json.dumps(queued))
+
+    def test_pending_output_collision_rejected_after_template_extension(self):
+        out=self.evaluate('render_output',{'output_path':'C:/out/Clip.mov'},self.render_host(queued=['C:/out/clip.mp4']),False)
+        self.assertFalse(out['result']['ok'],out)
+        self.assertIn('render_output_reserved',out['result']['error'])
+        self.assertEqual(out['events'],['add','remove-new'])
+
+    def test_default_path_avoids_actual_extension_and_queue_collisions(self):
+        for disk,queued in [(['C:/out/Clip.mp4'],[]),([],['C:/out/clip.mp4'])]:
+            with self.subTest(disk=disk,queued=queued):
+                out=self.evaluate('render_output',{},self.render_host(disk,queued),False)['result']
+                self.assertTrue(out['ok'],out)
+                self.assertEqual(out['result']['path'],'C:/out/Clip_1.mp4')
+
+    def test_sequence_existing_frames_rejected(self):
+        out=self.evaluate('render_output',{'output_path':'C:/out/frame_[#####].png'},self.render_host(disk=['C:/out/frame_00001.png']),False)
+        self.assertFalse(out['result']['ok'],out)
+        self.assertIn('render_destination_exists',out['result']['error'])
+        self.assertEqual(out['events'],[])
+
     def evaluate(self, action, options, setup, dry_run=True):
         code = JSX.replace('SETTINGS', json.dumps(normalize(action, options, dry_run)))
         runner = '''const vm=require('node:vm'),fs=require('fs');

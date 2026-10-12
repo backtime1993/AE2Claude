@@ -23,6 +23,10 @@ def integer(value: Any, field: str, minimum: int = 0, maximum: int = 2**31 - 1) 
     return value
 
 
+def stable_id(value: Any, field: str, minimum: int = 0) -> int:
+    return integer(value, field, minimum, 2**32 - 1)
+
+
 def string(value: Any, field: str, empty: bool = False) -> str:
     if not isinstance(value, str) or "\0" in value or (not empty and not value.strip()):
         raise ValueError(f"{field} must be a nonempty string without NUL")
@@ -36,7 +40,7 @@ def number(value: Any, field: str, minimum: float | None = None) -> float:
 
 
 def normalize(action: str, options: dict | None, dry_run: bool) -> dict:
-    if action not in ACTIONS:
+    if not isinstance(action, str) or action not in ACTIONS:
         raise ValueError(f"Unknown production action: {action}")
     if type(dry_run) is not bool or (options is not None and not isinstance(options, dict)):
         raise ValueError("dry_run must be boolean; options must be an object")
@@ -58,7 +62,7 @@ def normalize(action: str, options: dict | None, dry_run: bool) -> dict:
     }[action] | {"comp_id"}
     if set(o) - fields:
         raise ValueError(f"Unsupported {action} options: {sorted(set(o) - fields)}")
-    cfg = {"action": action, "compId": integer(o.pop("comp_id", 0), "comp_id"),
+    cfg = {"action": action, "compId": stable_id(o.pop("comp_id", 0), "comp_id"),
            "dryRun": dry_run, **o}
     if "layer" in fields:
         cfg["selector"] = normalize_layer_ref(cfg.pop("layer", None))
@@ -84,7 +88,7 @@ def normalize(action: str, options: dict | None, dry_run: bool) -> dict:
         if ("value" in cfg) == (cfg.get("alternate_source_id") is not None):
             raise ValueError("Specify exactly one of value or alternate_source_id")
         if cfg.get("alternate_source_id") is not None:
-            cfg["alternate_source_id"] = integer(cfg["alternate_source_id"], "alternate_source_id", 1)
+            cfg["alternate_source_id"] = stable_id(cfg["alternate_source_id"], "alternate_source_id", 1)
         if cfg.get("time") is not None:
             cfg["time"] = number(cfg["time"], "time", 0)
     if action in {"export_mogrt", "render_output"}:
@@ -97,6 +101,9 @@ def normalize(action: str, options: dict | None, dry_run: bool) -> dict:
         required = {"add": "match_name", "rename": "name", "move": "index", "enable": "enabled"}
         if required.get(cfg["operation"]) not in cfg and cfg["operation"] in required:
             raise ValueError("Missing shape operation argument")
+        if cfg["operation"] in {"add", "rename"}:
+            field = required[cfg["operation"]]
+            cfg[field] = string(cfg.get(field), field)
         if cfg["operation"] == "move":
             cfg["index"] = integer(cfg["index"], "index")
         if cfg["operation"] == "enable" and type(cfg["enabled"]) is not bool:
@@ -111,7 +118,8 @@ def normalize(action: str, options: dict | None, dry_run: bool) -> dict:
     if action == "text_range":
         cfg["start"] = integer(cfg.get("start"), "start")
         cfg["end"] = integer(cfg.get("end"), "end", cfg["start"])
-        cfg["text"] = string(cfg.get("text"), "text", True)
+        # AE normalizes paragraph breaks to CR, including CharacterRange writes.
+        cfg["text"] = string(cfg.get("text"), "text", True).replace("\r\n", "\r").replace("\n", "\r")
         if cfg.get("key_index") is not None:
             cfg["key_index"] = integer(cfg["key_index"], "key_index")
     if action == "keyframe_interpolation":
@@ -129,7 +137,7 @@ def normalize(action: str, options: dict | None, dry_run: bool) -> dict:
                 raise ValueError("Bezier flags require Bezier interpolation at both ends")
     if action == "create_folder":
         cfg["name"] = string(cfg.get("name"), "name")
-        cfg["parent_id"] = integer(cfg.get("parent_id", 0), "parent_id")
+        cfg["parent_id"] = stable_id(cfg.get("parent_id", 0), "parent_id")
     if action == "project_items":
         changes = cfg.get("changes")
         if not isinstance(changes, list) or not 1 <= len(changes) <= 256:
@@ -138,14 +146,14 @@ def normalize(action: str, options: dict | None, dry_run: bool) -> dict:
         for row in changes:
             if not isinstance(row, dict) or set(row) - {"item_id", "name", "folder_id"} or len(row) < 2:
                 raise ValueError("Each change requires item_id and name/folder_id")
-            item_id = integer(row.get("item_id"), "item_id", 1)
+            item_id = stable_id(row.get("item_id"), "item_id", 1)
             if item_id in seen:
                 raise ValueError("Duplicate item_id in changes")
             seen.add(item_id)
             if "name" in row:
                 string(row["name"], "name")
             if "folder_id" in row:
-                integer(row["folder_id"], "folder_id")
+                stable_id(row["folder_id"], "folder_id")
         cfg["fix_expressions"] = cfg.get("fix_expressions", True)
         if type(cfg["fix_expressions"]) is not bool:
             raise ValueError("fix_expressions must be boolean")
@@ -168,18 +176,31 @@ function begin(){app.beginUndoGroup('AE2Claude '+cfg.action);undo=true;started=t
 function eg(){var rows=[];need(typeof c.getMotionGraphicsTemplateControllerName==='function','essential_graphics_unavailable');
  for(var i=1;i<=c.motionGraphicsTemplateControllerCount;i++)rows.push({index:i,name:c.getMotionGraphicsTemplateControllerName(i)});
  return {compId:c.id,name:c.motionGraphicsTemplateName,controllers:rows};}
-function tree(root){var stack=[{p:root,path:[]}],rows=[];while(stack.length&&rows.length<cfg.max_nodes){var n=stack.pop(),x=n.p;
+function tree(root){var stack=[{p:root,path:[],next:0}],rows=[];while(stack.length&&rows.length<cfg.max_nodes){var n=stack[stack.length-1],x=n.p;
+ if(n.next>0){if(n.next>(x.numProperties||0)){stack.pop();continue;}
+ var i=n.next++,child=x.property(i),step=x.propertyType===PropertyType.INDEXED_GROUP?i-1:child.matchName;
+ stack.push({p:child,path:n.path.concat([step]),next:0});continue;}
  var row={path:n.path,name:x.name,matchName:x.matchName,numKeys:x.numKeys||0,numChildren:x.numProperties||0};
  try{if(x.canSetEnabled)row.enabled=x.enabled;if(x.canSetAlternateSource!==undefined)row.canSetAlternateSource=x.canSetAlternateSource;
  if(x.essentialPropertySource)row.source={name:x.essentialPropertySource.name,matchName:x.essentialPropertySource.matchName||null};
  if(!x.numProperties){var v=x.value;if(typeof v==='number'||typeof v==='string'||v instanceof Array)row.value=v;}}
- catch(e){row.readError=String(e);}rows.push(row);
- for(var i=Math.min(x.numProperties||0,cfg.max_nodes);i>=1;i--){if(stack.length+rows.length>=cfg.max_nodes){result.truncated=true;break;}
- var child=x.property(i),step=x.propertyType===PropertyType.INDEXED_GROUP?i-1:child.matchName;
- stack.push({p:child,path:n.path.concat([step])});}}
- result.truncated=!!result.truncated||stack.length>0;return rows;}
+ catch(e){row.readError=String(e);}rows.push(row);n.next=1;}
+ while(stack.length&&stack[stack.length-1].next>(stack[stack.length-1].p.numProperties||0))stack.pop();
+ result.truncated=stack.length>0;return rows;}
 function shapeRoot(){var root=l.property('ADBE Root Vectors Group');need(root,'not_shape_layer');return root;}
 function safeName(name){return name.replace(/[<>:"\/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/,'')||'composition';}
+function outputKey(file){var s=file.fsName.replace(/\\/g,'/');return typeof $!=='undefined'&&/windows/i.test($.os)?s.toLowerCase():s;}
+function sequencePattern(file){var s=outputKey(file),m=/\[(#+)\]/.exec(s);if(!m)return null;
+ function esc(t){return t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
+ return new RegExp('^'+esc(s.slice(0,m.index))+'-?\\d{'+m[1].length+',}'+esc(s.slice(m.index+m[0].length))+'$');}
+function outputExists(file){if(file.exists)return true;var pattern=sequencePattern(file);if(!pattern)return false;
+ var files=file.parent.getFiles();for(var i=0;i<files.length;i++)if(pattern.test(outputKey(files[i])))return true;return false;}
+function outputReserved(file,skip){var rq=p.renderQueue,key=outputKey(file),pattern=sequencePattern(file);
+ for(var i=1;i<=rq.numItems;i++){var ri=rq.item(i);if(ri===skip||!ri.render)continue;
+  for(var j=1;j<=ri.numOutputModules;j++){var other=ri.outputModule(j).file;if(!other)continue;
+   var otherKey=outputKey(other),otherPattern=sequencePattern(other);
+   if((key.replace(/\[#+\]/g,'[#]')===otherKey.replace(/\[#+\]/g,'[#]'))||(pattern&&pattern.test(otherKey))||(otherPattern&&otherPattern.test(key)))return true;}}
+ return false;}
 try{
  if(cfg.action!=='create_folder'&&cfg.action!=='project_items')c=comp();
  if(cfg.selector)l=layer();
@@ -200,13 +221,14 @@ try{
  }else if(cfg.action==='essential_property'){
   need(l.essentialProperty,'essential_properties_unavailable');target=resolve(l.essentialProperty,cfg.path);
   var replacement=cfg.alternate_source_id?item(cfg.alternate_source_id):null;
-  if(cfg.alternate_source_id){need(replacement,'alternate_source_not_found');need(target.canSetAlternateSource&&typeof target.setAlternateSource==='function','not_media_replacement_property');need(replacement.isMediaReplacementCompatible===true,'incompatible_media_replacement');need(replacement.isMediaReplacementCompatible===true,'incompatible_media_replacement');}
+  if(cfg.alternate_source_id){need(replacement,'alternate_source_not_found');need(target.canSetAlternateSource&&typeof target.setAlternateSource==='function','not_media_replacement_property');need(replacement.isMediaReplacementCompatible===true,'incompatible_media_replacement');}
   else {need(target.propertyType===PropertyType.PROPERTY,'not_leaf_property');need(!target.expressionEnabled,'expression_driven_property');
-   need(!target.numKeys||cfg.time!==undefined&&cfg.time!==null,'animated_property_requires_time');}
+   need(!target.numKeys||(cfg.time!==undefined&&cfg.time!==null),'animated_property_requires_time');}
   result.plan={compId:c.id,layerId:l.id,path:cfg.path,alternateSourceId:cfg.alternate_source_id||null,value:cfg.value};
   if(!cfg.dryRun){begin();if(replacement)target.setAlternateSource(replacement);
    else if(cfg.time!==undefined&&cfg.time!==null)target.setValueAtTime(cfg.time,cfg.value);else target.setValue(cfg.value);
-   result.result={path:cfg.path,value:replacement?null:target.value,alternateSourceId:replacement?target.alternateSource.id:null};}
+   var atTime=cfg.time!==undefined&&cfg.time!==null;
+   result.result={path:cfg.path,time:atTime?cfg.time:null,value:replacement?null:(atTime?target.valueAtTime(cfg.time,false):target.value),alternateSourceId:replacement?target.alternateSource.id:null};}
  }else if(cfg.action==='template_settings'){
   need(c.motionGraphicsTemplateName!==undefined,'mogrt_name_unavailable');result.plan={compId:c.id,oldName:c.motionGraphicsTemplateName,name:cfg.name};
   if(!cfg.dryRun){begin();c.motionGraphicsTemplateName=cfg.name;result.result=eg();need(result.result.name===cfg.name,'mogrt_name_readback_failed');}
@@ -280,29 +302,36 @@ try{
   for(var i=0;i<cfg.changes.length;i++){var change=cfg.changes[i],x=item(change.item_id);need(x&&x!==p.rootFolder,'project_item_not_found');
    var parent=change.folder_id!==undefined?item(change.folder_id):x.parentFolder;need(parent instanceof FolderItem,'destination_folder_not_found');
    if(cfg.fix_expressions&&change.name!==undefined&&change.name!==x.name){need(typeof p.autoFixExpressions==='function','expression_repair_unavailable');
-    for(var n=1;n<=p.numItems;n++)if(p.item(n)!==x)need(p.item(n).name!==x.name,'ambiguous_expression_source_name');oldNames[x.name]=true;
+    for(var n=1;n<=p.numItems;n++)if(p.item(n)!==x)need(p.item(n).name!==x.name,'ambiguous_expression_source_name');oldNames['$'+x.name]=true;
     need(!newNames['$'+change.name],'duplicate_destination_name');newNames['$'+change.name]=true;
     for(var q=1;q<=p.numItems;q++)if(p.item(q)!==x)need(p.item(q).name!==change.name,'ambiguous_expression_destination_name');}
    plannedParents[String(x.id)]=parent.id;rows.push({item:x,parent:parent,change:change,oldName:x.name});}
   for(var j=0;j<rows.length;j++){var row=rows[j],ancestor=row.parent,seen={};
    while(ancestor&&ancestor!==p.rootFolder){need(ancestor!==row.item&&!seen[String(ancestor.id)],'folder_cycle');seen[String(ancestor.id)]=true;
     ancestor=plannedParents[String(ancestor.id)]!==undefined?item(plannedParents[String(ancestor.id)]):ancestor.parentFolder;}
-   if(cfg.fix_expressions&&row.change.name!==undefined&&row.change.name!==row.oldName)need(!oldNames[row.change.name],'rename_chain_requires_separate_steps');}
+   if(cfg.fix_expressions&&row.change.name!==undefined&&row.change.name!==row.oldName)need(!oldNames['$'+row.change.name],'rename_chain_requires_separate_steps');}
   result.plan=cfg.changes;
-  if(!cfg.dryRun){begin();result.result=[];for(var k=0;k<rows.length;k++){var row=rows[k];row.item.parentFolder=row.parent;
+  if(!cfg.dryRun){begin();result.result=[];
+   for(var d=0;d<rows.length;d++)if(rows[d].item instanceof FolderItem&&rows[d].item.parentFolder!==rows[d].parent)rows[d].item.parentFolder=p.rootFolder;
+   for(var k=0;k<rows.length;k++){var row=rows[k];row.item.parentFolder=row.parent;
    if(row.change.name!==undefined){row.item.name=row.change.name;if(cfg.fix_expressions&&row.oldName!==row.change.name)p.autoFixExpressions(row.oldName,row.change.name);}
    result.result.push({id:row.item.id,name:row.item.name,parentId:row.item.parentFolder===p.rootFolder?0:row.item.parentFolder.id});}}
  }else if(cfg.action==='render_output'){
-  need(!p.renderQueue.rendering,'render_in_progress');var path=cfg.output_path;
-  if(!path){need(p.file,'save_project_before_default_render_path');var stem=p.file.parent.fsName+'/'+safeName(c.name),suffix=0;
-   path=stem+'.mov';while(new File(path).exists&&suffix<1000){suffix++;path=stem+'_'+suffix+'.mov';}need(suffix<1000,'default_output_names_exhausted');}
-  var file=new File(path);need(file.parent.exists,'output_directory_missing');need(cfg.overwrite||!file.exists,'render_destination_exists');need(cfg.overwrite||!file.exists,'render_destination_exists');
+  need(!p.renderQueue.rendering,'render_in_progress');var path=cfg.output_path,automatic=!path,suffix=0,stem=null;
+  if(automatic){need(p.file,'save_project_before_default_render_path');stem=p.file.parent.fsName+'/'+safeName(c.name);
+   path=stem+'.mov';while((outputExists(new File(path))||outputReserved(new File(path),null))&&suffix<1000){suffix++;path=stem+'_'+suffix+'.mov';}need(suffix<1000,'default_output_names_exhausted');}
+  var file=new File(path);need(file.parent.exists,'output_directory_missing');need(cfg.overwrite||!outputExists(file),'render_destination_exists');need(!outputReserved(file,null),'render_output_reserved');
   result.plan={compId:c.id,path:file.fsName,exists:file.exists,renderTemplate:cfg.render_template||null,outputTemplate:cfg.output_template||null,
    templateValidation:'templates are validated during apply; new queue item is removed on failure'};
   if(!cfg.dryRun){begin();var ri=p.renderQueue.items.add(c);
    try{if(cfg.render_template)ri.applyTemplate(cfg.render_template);if(cfg.output_template)ri.outputModule(1).applyTemplate(cfg.output_template);
-    ri.outputModule(1).setSettings({'Output File Info':{'Full Flat Path':file.fsName}});
-    var actual=ri.outputModule(1).file;need(actual,'output_path_readback_failed');need(cfg.overwrite||!actual.exists,'render_destination_exists');result.result={index:p.renderQueue.numItems,path:actual.fsName,queued:ri.render};
+    var actual=null;while(true){ri.outputModule(1).setSettings({'Output File Info':{'Full Flat Path':file.fsName}});
+     actual=ri.outputModule(1).file;need(actual,'output_path_readback_failed');
+     var occupied=outputExists(actual),reserved=outputReserved(actual,ri);
+     if(!reserved&&(!occupied||(cfg.overwrite&&!automatic)))break;
+     if(!automatic){need(!reserved,'render_output_reserved');need(!occupied,'render_destination_exists');}
+     suffix++;need(suffix<1000,'default_output_names_exhausted');file=new File(stem+'_'+suffix+'.mov');}
+    result.result={index:p.renderQueue.numItems,path:actual.fsName,queued:ri.render};
    }catch(e){ri.remove();throw e;}}
  }
  result.applied=started;result.undoMode=undo?'single-group':'none';return JSON.stringify(result);
