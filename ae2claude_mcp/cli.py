@@ -13,7 +13,7 @@ from ae_bridge import AEBridge, JSXExecutionError
 from . import __version__
 from .agent_runtime import execute_batch
 from .capabilities import capabilities
-from .runtime import authorize, bridge, call_bridge_method, require_enabled
+from .runtime import authorize, bridge, bridge_result_error, call_bridge_method, require_enabled
 from .skills import discover_skills, prepare_skill, execute_skill, run_skill
 
 
@@ -176,7 +176,9 @@ def dispatch(args: argparse.Namespace) -> Any:
         result = call_bridge_method(
             args.method, args.args, args.kwargs, confirm=args.confirm
         )
-        return {"ok": True, "method": args.method, "result": result}
+        error = bridge_result_error(args.method, result)
+        return {"ok": error is None, "method": args.method, "result": result,
+                **({"error": error} if error is not None else {})}
     if args.command == "recover-modal":
         require_enabled()
         authorize("write", confirm=args.confirm)
@@ -221,7 +223,10 @@ def dispatch(args: argparse.Namespace) -> Any:
         if args.command == "jsx":
             authorize("destructive", confirm=args.confirm)
             code = args.code if args.code is not None else sys.stdin.read()
-            return {"ok": True, "result": ae.run_jsx(code)}
+            result = ae.run_jsx(code)
+            error = bridge_result_error("run_jsx", result)
+            return {"ok": error is None, "result": result,
+                    **({"error": error} if error is not None else {})}
     raise RuntimeError(f"unsupported command: {args.command}")
 
 

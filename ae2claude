@@ -136,7 +136,7 @@ Bridge (ae2claude call <method> [args...] [--key value]):
 """
 import sys, json, os, urllib.request, urllib.error, inspect, threading
 
-from ae2claude_mcp.runtime import classify_bridge_method
+from ae2claude_mcp.runtime import bridge_result_error, classify_bridge_method
 
 CLI_VERSION = "4.5.0"
 BASE = "http://127.0.0.1:18889"
@@ -363,6 +363,13 @@ def _split_call_args(args):
             i += 1
     return positional, kwargs
 
+def _reject_failure(method_name, result):
+    error = bridge_result_error(method_name, result)
+    if error is not None:
+        print(f"error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _print_method_result(result):
     if isinstance(result, (dict, list)):
         print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -386,6 +393,7 @@ def _invoke_method(method_name, positional=None, kwargs=None):
 
     try:
         result = method(*positional, **kwargs)
+        _reject_failure(method_name, result)
         _print_method_result(result)
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
@@ -451,7 +459,8 @@ def _ensure_comp():
     r = req("/jsx",
         '(function(){var n=0;for(var i=1;i<=app.project.numItems;i++)'
         '{if(app.project.item(i) instanceof CompItem)n++;}return n;})()')
-    count = int(r.get("result", "0")) if r.get("ok") else 0
+    _reject_failure("run_jsx", r)
+    count = int(r.get("result", "0"))
     if count == 0:
         print("No comp found, creating default 1920x1080 30fps 10s...", file=sys.stderr)
         r2 = req("/jsx",
@@ -478,6 +487,7 @@ def main():
                 payload = {"ok": False, "kind": "operation", "error": str(exc)}
             print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
             sys.exit(1)
+        _reject_failure("run_jsx", result)
         if result:
             print(result)
         return
@@ -707,6 +717,7 @@ def main():
 
     if r.get("ok"):
         result = r.get("result", "")
+        _reject_failure("run_jsx", result)
         if result:
             print(result)
     else:

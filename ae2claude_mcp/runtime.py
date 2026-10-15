@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -81,6 +82,24 @@ def authorize(risk: Risk, *, confirm: bool = False) -> None:
         raise SafetyError("This write requires confirm=true in manual mode")
     if mode == "auto" and risk == "destructive" and not confirm:
         raise SafetyError("This destructive operation requires confirm=true")
+
+
+def bridge_result_error(method: str, result: Any) -> str | None:
+    """Recognize explicit failure envelopes without treating property data as errors."""
+    script = method in {"run_jsx", "run_jsx_checked", "exec_jsx_file"}
+    parsed = result
+    if script and isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+        except (TypeError, ValueError):
+            pass
+    if script and parsed is False:
+        return "script_reported_failure"
+    if isinstance(parsed, dict) and (parsed.get("ok") is False or
+                                   parsed.get("success") is False or
+                                   parsed.get("outcome") == "unknown"):
+        return str(parsed.get("error") or "operation_returned_failure")
+    return None
 
 
 def kill_switch_path() -> Path:

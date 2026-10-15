@@ -740,8 +740,11 @@ class AEBridge:
         PostMessage = user32.PostMessageW
         WM_KEYDOWN, WM_KEYUP, VK_RETURN = 0x0100, 0x0101, 0x0D
 
-        # 获取 AE PID
+        # Fail closed: an absent AE process must never target other applications.
         ae_pid = self._find_ae_pid()
+        if not ae_pid:
+            self._dismiss_running = False
+            return
 
         WINFUNCTYPE = ctypes.WINFUNCTYPE(
             ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
@@ -757,7 +760,7 @@ class AEBridge:
                         return True
                     pid = ctypes.wintypes.DWORD()
                     GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                    if ae_pid and pid.value != ae_pid:
+                    if pid.value != ae_pid:
                         return True
                     cls = ctypes.create_unicode_buffer(256)
                     GetClassName(hwnd, cls, 256)
@@ -783,8 +786,7 @@ class AEBridge:
         try:
             r = subprocess.run(
                 ['powershell', '-c',
-                 '(Get-Process | Where-Object '
-                 '{$_.MainWindowTitle -like "*After Effects*"}).Id'],
+                 "(Get-Process -Name AfterFX,'AfterFX (Beta)' -ErrorAction SilentlyContinue).Id"],
                 capture_output=True, text=True, timeout=5
             )
             if r.stdout.strip():
@@ -1326,7 +1328,7 @@ return lines.join("\n");
             'app.beginUndoGroup("AE2Claude Set Effect Property");undoOpen=true;'
             + set_call +
             'app.endUndoGroup();undoOpen=false;'
-            'var current;try{current=p.value;}catch(x){current=null;}'
+            f'var current;try{{current={"p.value" if at_time is None else f"p.valueAtTime({float(at_time)},false)"};}}catch(x){{current=null;}}'
             'return JSON.stringify({ok:true,effectIndex:effect.propertyIndex,'
             'propertyName:p.name,propertyMatchName:p.matchName,value:current});'
             '}catch(e){'
@@ -4581,8 +4583,15 @@ return lines.join("\n");
             r = _read_bridge_response(resp)
         if r.get("ok"):
             val = r.get("result", "")
-            if isinstance(val, str):
-                val = val.strip("'\"")
+            if isinstance(val, str) and val.startswith(("'", '"')):
+                # The server returns repr(result); stripping quotes corrupts both
+                # quoted names and JSON's backslash escaping. Parse string literals
+                # without executing code, retaining non-string repr compatibility.
+                import ast
+                decoded = ast.literal_eval(val)
+                if not isinstance(decoded, str):
+                    raise ValueError("AE bridge returned an invalid Python string result")
+                val = decoded
             return val
         raise RuntimeError(r.get("error", "unknown"))
 

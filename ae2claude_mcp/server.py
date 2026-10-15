@@ -24,6 +24,7 @@ from .runtime import (
     approval_mode,
     authorize,
     bridge,
+    bridge_result_error,
     call_bridge_method,
     classify_bridge_method,
     is_enabled,
@@ -440,8 +441,10 @@ def ae_run_script(
         result = json.loads(raw_result)
     except (TypeError, json.JSONDecodeError):
         result = raw_result
+    error = bridge_result_error("run_jsx", result)
     return {
-        "ok": True,
+        "ok": error is None,
+        **({"error": error} if error is not None else {}),
         "script": entry["slug"],
         "name": entry["name"],
         "risk": entry["risk"],
@@ -615,14 +618,15 @@ def ae_call(
 ) -> dict[str, Any]:
     """Call any public AEBridge method; destructive calls require confirmation."""
     result = call_bridge_method(method, args, kwargs, confirm=confirm)
+    error = bridge_result_error(method, result)
     response = {
-        "ok": not (isinstance(result, dict) and result.get("ok") is False),
+        "ok": error is None,
         "method": method,
         "risk": classify_bridge_method(method),
         "result": result,
     }
     if not response["ok"]:
-        response["error"] = str(result.get("error") or "operation_returned_failure")
+        response["error"] = error
         return response
     captured = script_library.capture_method(method, args or [], kwargs or {}, result)
     if captured is not None:
@@ -648,7 +652,9 @@ def ae_exec(
             else None
         )
         result = ae.run_jsx(code, timeout=timeout_ms)
-    return {"ok": True, "checkpoint": checkpoint, "result": result,
+    error = bridge_result_error("run_jsx", result)
+    return {"ok": error is None, **({"error": error} if error is not None else {}),
+            "checkpoint": checkpoint, "result": result,
             "capture": script_library.capture_success(code, result)}
 
 

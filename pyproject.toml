@@ -13,6 +13,7 @@ license-files = ["LICENSE"]
 dependencies = [
     "mcp>=1.27,<2",
     "pillow>=11,<13",
+    "numpy>=2,<3",
     "PyYAML>=6,<7",
 ]
 
@@ -31,6 +32,7 @@ ae2claude_mcp = ["builtin_skills/*/SKILL.md"]
 
 [tool.setuptools.data-files]
 "share/ae2claude/scripts" = ["scripts/*.jsx", "scripts/registry.json"]
+"share/ae2claude/pin-clicker/python" = ["extensions/pin-clicker/python/pin_placer.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

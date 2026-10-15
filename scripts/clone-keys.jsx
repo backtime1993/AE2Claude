@@ -47,14 +47,14 @@
         _writeKey(c.prop, c.info, newTime);
         newKeys.push({prop: c.prop, time: newTime});
     }
-    // 3. 选中新关键帧，取消选中旧关键帧
-    for (var n = 0; n < newKeys.length; n++){
-        var idx = newKeys[n].prop.nearestKeyIndex(newKeys[n].time);
-        newKeys[n].prop.setSelectedAtKey(idx, true);
-    }
+    // 3. 先取消旧选择，再选中新帧，保留与原关键帧时间重叠的新选择。
     for (var n = 0; n < collected.length; n++){
         var idx = collected[n].prop.nearestKeyIndex(collected[n].info.time);
         collected[n].prop.setSelectedAtKey(idx, false);
+    }
+    for (var n = 0; n < newKeys.length; n++){
+        var idx = newKeys[n].prop.nearestKeyIndex(newKeys[n].time);
+        newKeys[n].prop.setSelectedAtKey(idx, true);
     }
     app.endUndoGroup();
 

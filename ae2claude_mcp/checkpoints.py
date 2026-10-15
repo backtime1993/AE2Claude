@@ -75,29 +75,42 @@ class CheckpointStore:
         os.replace(staged, target)
         return meta
 
-    def list(self, source_path: str, limit: int = 20) -> list[dict[str, Any]]:
+    def _entries(self, source_path: str) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
         for meta_path in self.project_dir(source_path).glob("*.json"):
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            aep = self.aep_path(source_path, str(meta.get("id", "")))
-            if aep.exists() and _canonical_path(meta.get("sourceProjectPath", source_path)) == _canonical_path(source_path):
+            if not isinstance(meta, dict) or meta.get("id") != meta_path.stem:
+                continue
+            original = meta.get("sourceProjectPath")
+            if not isinstance(original, str) or not isinstance(meta.get("timestamp"), str):
+                continue
+            try:
+                aep = self.lookup(source_path, meta["id"])
+            except (ValueError, OSError):
+                continue
+            if aep.is_file() and _canonical_path(original) == _canonical_path(source_path):
                 entries.append(meta)
-        entries.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
-        return entries[: max(1, min(limit, 200))]
+        entries.sort(key=lambda item: item["timestamp"], reverse=True)
+        return entries
+
+    def list(self, source_path: str, limit: int = 20) -> list[dict[str, Any]]:
+        return self._entries(source_path)[: max(1, min(limit, 200))]
 
     def lookup(self, source_path: str, checkpoint_id: str) -> Path:
         if not checkpoint_id or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in checkpoint_id):
             raise ValueError("Invalid checkpoint id")
         path = self.aep_path(source_path, checkpoint_id)
-        if not path.exists():
+        if path.resolve().parent != self.project_dir(source_path).resolve():
+            raise ValueError("Checkpoint escaped project directory")
+        if not path.is_file():
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_id}")
         return path
 
     def prune(self, source_path: str) -> list[str]:
-        entries = self.list(source_path, limit=10_000)
+        entries = self._entries(source_path)
         removed: list[str] = []
         for meta in entries[self.keep :]:
             checkpoint_id = str(meta["id"])
@@ -201,26 +214,31 @@ def revert_checkpoint(
         raise RuntimeError("Cannot revert an unsaved project")
     checkpoint = store.lookup(source_path, checkpoint_id)
 
-    recovery = create_checkpoint(ae, f"Before revert to {checkpoint_id}", store=store)
     source = Path(source_path)
-    staged = source.parent / f".{source.name}.ae2claude-{checkpoint_id}.tmp"
-    close_result = json.loads(
-        ae.run_jsx(
-            '(function(){try{app.project.close(CloseOptions.DO_NOT_SAVE_CHANGES);'
-            'return JSON.stringify({ok:true});}catch(e){return JSON.stringify({ok:false,error:String(e)});}})();',
-            timeout=60_000,
-        )
-    )
-    if not close_result.get("ok"):
-        raise RuntimeError(close_result.get("error", "project_close_failed"))
-
+    staged = source.parent / f".{source.name}.ae2claude-{store.make_id()}.tmp"
     try:
+        # Retention pruning during recovery creation may remove the requested
+        # snapshot. Preserve it before saving or closing the current project.
         shutil.copy2(checkpoint, staged)
-        os.replace(staged, source)
-    except Exception:
+        recovery = create_checkpoint(ae, f"Before revert to {checkpoint_id}", store=store)
+        if recovery.get("skipped"):
+            raise RuntimeError("Project changed before recovery checkpoint was created")
+        close_result = json.loads(
+            ae.run_jsx(
+                '(function(){try{app.project.close(CloseOptions.DO_NOT_SAVE_CHANGES);'
+                'return JSON.stringify({ok:true});}catch(e){return JSON.stringify({ok:false,error:String(e)});}})();',
+                timeout=60_000,
+            )
+        )
+        if not close_result.get("ok"):
+            raise RuntimeError(close_result.get("error", "project_close_failed"))
+        try:
+            os.replace(staged, source)
+        except Exception:
+            ae.run_jsx(f'app.open(new File({json.dumps(str(source), ensure_ascii=False)}));', timeout=120_000)
+            raise
+    finally:
         staged.unlink(missing_ok=True)
-        ae.run_jsx(f'app.open(new File({json.dumps(str(source), ensure_ascii=False)}));', timeout=120_000)
-        raise
 
     open_code = f"""
 (function () {{

@@ -67,14 +67,14 @@ try{
  }if(fonts.length>cfg.maxItems){out.truncated=true;limit('font limit');}}
 }catch(e){limit('fonts: '+String(e));}
 var n=0;
-try{for(var r=1;r<=p.renderQueue.numItems;r++){
+try{outputScan:for(var r=1;r<=p.renderQueue.numItems;r++){
  var item=p.renderQueue.item(r);
  for(var m=1;m<=item.numOutputModules;m++){
-  if(n++>=cfg.maxItems){out.truncated=true;limit('output module limit');break;}
+  if(n++>=cfg.maxItems){out.truncated=true;limit('output module limit');break outputScan;}
   var om=item.outputModule(m),file=om.file;
   out.outputs.push({renderItem:r,module:m,compId:item.comp.id,queued:item.render,
    path:file?file.fsName:null,parentExists:file?file.parent.exists:false});
- }if(n>=cfg.maxItems)break;
+ }
 }}catch(e){limit('render queue: '+String(e));}
 return JSON.stringify(out);
 })();'''

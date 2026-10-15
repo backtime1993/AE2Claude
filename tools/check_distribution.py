@@ -27,6 +27,9 @@ import sysconfig
 from pathlib import Path
 import ae_bridge
 import ae_native_protocol
+import pin_cmd
+import numpy
+assert pin_cmd.PinPlacer.__name__ == "PinPlacer"
 assert "var JSON=" in ae_bridge._jsx_json_compat()
 from ae2claude_mcp import __version__
 from ae2claude_mcp.catalog import SCRIPT_ROOT, load_script_registry

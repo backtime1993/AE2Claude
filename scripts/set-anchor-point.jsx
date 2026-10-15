@@ -15,13 +15,15 @@
 
     app.beginUndoGroup("Set Anchor Point");
 
-    for (var i = 0; i < sel.length; i++){
-        var layer = sel[i];
-        if (layer instanceof CameraLayer || layer instanceof LightLayer) continue;
-        _setAP(layer, pos);
+    try {
+        for (var i = 0; i < sel.length; i++){
+            var layer = sel[i];
+            if (layer instanceof CameraLayer || layer instanceof LightLayer) continue;
+            _setAP(layer, pos);
+        }
+    } finally {
+        app.endUndoGroup();
     }
-
-    app.endUndoGroup();
 
     function _getBounds(layer){
         var rect = layer.sourceRectAtTime(comp.time, false);
@@ -168,39 +170,32 @@
     }
 
     function _setAP(layer, position){
+        // Refuse unsupported writes before moving Position; otherwise a failed
+        // Anchor Point write can leave the artwork displaced.
+        if (layer.locked) throw new Error("layer_is_locked");
+        if (layer.anchorPoint.numKeys || layer.anchorPoint.expressionEnabled)
+            throw new Error("animated_anchor_point_not_supported");
+        if (layer.position.expressionEnabled)
+            throw new Error("expression_driven_position");
+        if (layer.position.dimensionsSeparated &&
+            (layer.transform.xPosition.expressionEnabled || layer.transform.yPosition.expressionEnabled ||
+             (layer.threeDLayer && layer.transform.zPosition.expressionEnabled)))
+            throw new Error("expression_driven_position");
+
+        var bounds = _getBounds(layer);
+        var factors = {tl:[0,0],tm:[0.5,0],tr:[1,0],ml:[0,0.5],mm:[0.5,0.5],
+                       mr:[1,0.5],bl:[0,1],bm:[0.5,1],br:[1,1]};
+        var f = factors[position] || factors.mm;
+        var newAP = [bounds.left + bounds.width*f[0], bounds.top + bounds.height*f[1]];
         var target = _getTarget(layer, position);
         var ap = layer.anchorPoint.value;
         var p = layer.position.value;
-        var posDelta = [p[0] - target[0], p[1] - target[1]];
-        var sx = layer.scale.value[0]/100, sy = layer.scale.value[1]/100;
-
+        var delta = [p[0] - target[0], p[1] - target[1]];
         if (!layer.threeDLayer){
-            var rot = layer.rotation.value;
-            var rad = rot * Math.PI / 180;
-            var dx = posDelta[0] - ap[0], dy = posDelta[1] - ap[1];
-            dy *= -1;
-            var rx = dx*Math.cos(rad) - dy*Math.sin(rad);
-            var ry = dx*Math.sin(rad) + dy*Math.cos(rad);
-            sx = sx === 0 ? 1 : sx;
-            sy = sy === 0 ? 1 : sy;
-            var newAP = [rx/sx + ap[0], -(ry/sy - ap[1])];
-            if (isNaN(newAP[0])) newAP[0] = ap[0];
-            if (isNaN(newAP[1])) newAP[1] = ap[1];
-            var delta = [p[0] - target[0], p[1] - target[1]];
             _updatePosition(layer, delta, newAP);
         } else {
-            var sz = layer.scale.value[2]/100;
-            sx = sx === 0 ? 1 : sx; sy = sy === 0 ? 1 : sy; sz = sz === 0 ? 1 : sz;
-            var rot3 = [layer.xRotation.value, layer.yRotation.value, layer.zRotation.value];
-            var ori = layer.orientation.value;
-            var invOri = [-ori[0], -ori[1], -ori[2]];
-            var invRot = [-rot3[0], -rot3[1], -rot3[2]];
-            // reverse rotation to find anchor delta
-            var unrot = _rot3D(_rot3D(target, p, invOri), p, invRot);
-            var newAPDelta = [p[0] - unrot[0], p[1] - unrot[1], p[2] - unrot[2]];
-            newAPDelta = [newAPDelta[0]/sx, newAPDelta[1]/sy, newAPDelta[2]/sz];
-            var delta = [p[0] - target[0], p[1] - target[1], p[2] - target[2]];
-            _updatePosition3D(layer, delta, newAPDelta);
+            delta.push(p[2] - target[2]);
+            _updatePosition3D(layer, delta, [newAP[0]-ap[0],newAP[1]-ap[1],-ap[2]]);
         }
     }
 
@@ -221,7 +216,7 @@
                 _offsetProp(layer.transform.yPosition, delta[1]);
             }
             layer.anchorPoint.setValue(newAP);
-        } catch(e){}
+        } catch(e){throw e;}
     }
 
     function _updatePosition3D(layer, delta, apDelta){
@@ -243,7 +238,7 @@
             }
             var ap = layer.anchorPoint.value;
             layer.anchorPoint.setValue([ap[0]+apDelta[0], ap[1]+apDelta[1], ap[2]+apDelta[2]]);
-        } catch(e){}
+        } catch(e){throw e;}
     }
 
     function _offsetProp(prop, delta){

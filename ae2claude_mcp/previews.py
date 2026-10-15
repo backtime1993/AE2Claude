@@ -23,7 +23,12 @@ def preview_root() -> Path:
 def prune_previews(*, max_age_hours: int = 24) -> int:
     cutoff = time.time() - max_age_hours * 3600
     removed = 0
-    for path in list(preview_root().glob("*.png")) + list(preview_root().glob("capture-*.json")) + list(preview_root().glob("model-*.webp")):
+    # PREVIEW_ROOT is configurable and may contain user reference images.
+    # Only expire files bearing the prefixes produced by our preview pipeline.
+    root = preview_root()
+    patterns = ("frame-*.png", "grid-*.png", "diff-*.png", "compare-*.png",
+                "capture-*.json", "model-*.webp")
+    for path in (path for pattern in patterns for path in root.glob(pattern)):
         try:
             if path.stat().st_mtime < cutoff:
                 path.unlink()
