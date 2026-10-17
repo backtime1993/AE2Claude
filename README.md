@@ -77,4 +77,6 @@ MCP 客户端用 `ae_skills` → `ae_skill` → `ae_skill_execute`；两个内�
 
 ## 致谢与许可
 
+阻塞报错排障：[`ae_capture_blocked_ui`](docs/BLOCKED_UI_CAPTURE.md) 在 AE 被模态弹窗阻塞时按需返回完整弹窗图片；正常状态不截图，无需调用 JSX 或 Computer Use 获取该类证据。
+
 原生核心基于 [PyShiftAE](https://github.com/Trentonom0r3/PyShiftAE)，采用 [AGPL-3.0](LICENSE)。其他设计参考与依赖说明见 [第三方声明](THIRD_PARTY_NOTICES.md)。

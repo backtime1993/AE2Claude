@@ -1,7 +1,11 @@
 # AE MCP over Tailscale
 
-This optional transport reuses the existing 53-tool MCP server and all AE safety
+This optional transport reuses the existing MCP server and all AE safety
 checks. Local stdio clients and the native bridge at 127.0.0.1:18889 are unchanged.
+
+`ae_capture_blocked_ui` also returns inline images of confirmed AE modal dialogs
+through this same authenticated endpoint. See [blocked UI capture](BLOCKED_UI_CAPTURE.md)
+for the on-demand workflow, image limits and recovery boundaries.
 No Adobe binary reinstall is needed. The native bridge is never exposed remotely.
 
 ## Access model
