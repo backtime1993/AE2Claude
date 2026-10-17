@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — 2026-10-17
+
+- Added owner-authenticated private Tailscale MCP transport and a scoped Windows
+  sign-in service, reusing the existing tool authorization and native bridge.
+- Added `ae_capture_blocked_ui`: independent, bounded Windows modal screenshots
+  with inline model images; idle calls capture nothing. Real AE script-error
+  dialogs were verified through private HTTPS without changing the project.
+- Synced structured PV authoring, MOGRT export and readback fixes, bounded image
+  previews/crops, and execution, recovery, transport and installer audit repairs.
+- The source update does not replace the published v4.5.0 binary assets or claim
+  a new complete live write-test suite. UI screenshots are not general UI control.
+
+## Unreleased — 2026-10-12
+
+- Added `ae2claude.skill/v1`: project/user/bundled Markdown discovery, strict
+  YAML metadata, offline catalogs, Agent context/tool bundles, MCP prompt and
+  CLI/MCP invocation. Skill execution enforces exact tools, read-only policy,
+  explicit write confirmation and a preparation hash before any dispatch.
+- Bundled report-only `pv-preflight` and `motion-review`. Preflight reads all
+  bounded project compositions and evaluates expressions without changing focus
+  or time. Motion review reuses native easing/tangent APIs; incomplete coverage
+  and intentional animation patterns stay visible. No AEX change is required.
+- Existing batch, Graph Editor and native keyframe interfaces retain their
+  contracts. This source change is unreleased and is not an AE Assistant MCP
+  integration. See [design and evidence](docs/SKILLS.md).
+
 ## v4.5.0 — 2026-10-08
 
 - Published the Windows x64 package with the accepted AEX, matching server,

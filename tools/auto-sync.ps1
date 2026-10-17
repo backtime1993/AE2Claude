@@ -62,7 +62,23 @@ try {
     $afterHead = (& git -C $ProjectRoot rev-parse HEAD).Trim()
     $updated = $beforeHead -ne $afterHead
 
-    if ($updated) {
+    # A fetched commit remains unvalidated if a previous run failed tests or
+    # compilation. A later run at the same HEAD must retry those checks before
+    # touching an installation, rather than treating unchanged HEAD as success.
+    $validationPath = Join-Path $stateRoot 'last-auto-validation.json'
+    $validationRequired = $true
+    if (Test-Path -LiteralPath $validationPath -PathType Leaf) {
+        try {
+            $validation = Get-Content -LiteralPath $validationPath -Raw | ConvertFrom-Json
+            $validationRequired = $validation.head -ne $afterHead -or
+                (-not $SkipNativeBuild -and $validation.nativeBuild -ne $true)
+        } catch {
+            # Missing/old/corrupt checkpoints never authorize installation.
+            $validationRequired = $true
+        }
+    }
+
+    if ($validationRequired) {
         $uv = (Get-Command uv -ErrorAction Stop).Source
         Invoke-Checked -FilePath $uv -Arguments @('sync', '--locked', '--project', $ProjectRoot) -Label 'uv sync' | Out-Null
         Invoke-Checked -FilePath $uv -Arguments @('run', '--project', $ProjectRoot, 'python', '-m', 'unittest', 'discover', '-s', (Join-Path $ProjectRoot 'tests'), '-v') -Label 'Python tests' | Out-Null
@@ -98,6 +114,13 @@ try {
                 '/nologo'
             ) -Label 'native Release build' | Out-Null
         }
+        # Publish only after every required check completes; failed runs retain
+        # the previous HEAD's checkpoint and cannot bypass checks on retry.
+        [pscustomobject]@{
+            head = $afterHead
+            nativeBuild = -not $SkipNativeBuild
+            validatedAt = (Get-Date).ToString('o')
+        } | ConvertTo-Json | Set-Content -LiteralPath $validationPath -Encoding utf8
     }
 
     $syncScript = Join-Path $PSScriptRoot 'sync-installation.ps1'

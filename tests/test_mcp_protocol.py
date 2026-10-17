@@ -54,6 +54,7 @@ class MCPProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "ae_submit",
                 "ae_task",
                 "ae_events",
+                "ae_skills", "ae_skill", "ae_skill_execute", "ae_skill_run", "ae_production",
             }.issubset(names)
         )
 

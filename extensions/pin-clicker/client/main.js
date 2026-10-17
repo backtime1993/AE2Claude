@@ -556,7 +556,13 @@
         const wrapped = '(function(){try{var __r=(function(){' + code + '\n})();return typeof __r==="string"?__r:JSON.stringify(__r);}catch(e){return JSON.stringify({__jsx_error:String(e)});}})();';
         const raw = await evalJSX(wrapped);
         if (raw == null || raw === 'undefined') return null;
-        try { return JSON.parse(raw); } catch (_) { return raw; }
+        if (raw === 'EvalScript error.') throw new Error(raw);
+        let result;
+        try { result = JSON.parse(raw); } catch (_) { return raw; }
+        if (result && typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, '__jsx_error')) {
+            throw new Error('JSX: ' + result.__jsx_error);
+        }
+        return result;
     }
 
     async function aeVersion() {
@@ -932,26 +938,35 @@
     }
 
     async function handleEnsureViewer(body) {
-        const compName = body && typeof body.comp_name === 'string' ? body.comp_name.replace(/\"/g, '\\"') : null;
+        const compName = body && typeof body.comp_name === 'string' ? body.comp_name : null;
         const compId = body && body.comp_id != null ? Number(body.comp_id) : null;
         const layerIndex = body && body.layer_index != null ? Number(body.layer_index) : null;
-
+        if (compId !== null && (!Number.isInteger(compId) || compId < 1 || compId > 4294967295)) {
+            throw new Error('bad_comp_id');
+        }
+        if (layerIndex !== null && (!Number.isInteger(layerIndex) || layerIndex < 1 || layerIndex > 2147483647)) {
+            throw new Error('bad_layer_index');
+        }
+        // JSON escaping also covers backslashes/newlines; ES3 needs U+2028/2029 escaped.
+        const nameLiteral = JSON.stringify(compName).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
         const code = [
             'var target_comp=null;',
-            'if(' + (compId != null ? 1 : 0) + '){',
-            '  for(var i=1;i<=app.project.numItems;i++){var it=app.project.item(i); if(it.id==' + (compId || 0) + '){target_comp=it;break;}}',
-            '}',
-            'if(!target_comp && ' + (compName ? 1 : 0) + '){',
-            '  for(var i2=1;i2<=app.project.numItems;i2++){var it2=app.project.item(i2); if(it2 instanceof CompItem && it2.name=="' + (compName || '') + '"){target_comp=it2;break;}}',
-            '}',
-            'if(target_comp){target_comp.openInViewer();}',
+            'var requested_id=' + JSON.stringify(compId) + ',requested_name=' + nameLiteral + ';',
+            'if(requested_id!==null || requested_name!==null){',
+            '  for(var i=1;i<=app.project.numItems;i++){',
+            '    var it=app.project.item(i);',
+            '    if(it instanceof CompItem && (requested_id!==null ? it.id===requested_id : it.name===requested_name)){target_comp=it;break;}',
+            '  }',
+            '  if(!target_comp) return {error:"comp_not_found"};',
+            '}else{target_comp=app.project.activeItem;}',
+            'if(!target_comp || !(target_comp instanceof CompItem)) return {error:"no_active_comp"};',
+            'var wanted_layer=' + JSON.stringify(layerIndex) + ';',
+            'if(wanted_layer!==null && wanted_layer>target_comp.numLayers) return {error:"layer_index_out_of_range"};',
+            'target_comp.openInViewer();',
             'var ai=app.project.activeItem;',
-            'if(!ai || !(ai instanceof CompItem)) return {error:"no_active_comp",active:(ai?ai.name:null)};',
+            'if(!ai || ai.id!==target_comp.id) return {error:"target_viewer_not_active"};',
             'try{app.activeViewer.setActive();}catch(_a){}',
-            'var layer=null;',
-            'if(' + (layerIndex != null ? 1 : 0) + '){',
-            '  if(' + (layerIndex || 0) + '>=1 && ' + (layerIndex || 0) + '<=ai.numLayers){layer=ai.layer(' + (layerIndex || 0) + ');}',
-            '}',
+            'var layer=wanted_layer!==null ? target_comp.layer(wanted_layer) : null;',
             'var sel_info=null;',
             'if(layer){',
             '  for(var k=1;k<=ai.numLayers;k++){ai.layer(k).selected=(ai.layer(k)==layer);}',

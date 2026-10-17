@@ -155,13 +155,19 @@ def _execute_code(source, prefer_exec=False):
             result = exec_locals.get("_result")
         else:
             try:
-                result = eval(source, exec_globals, exec_globals)
+                compiled = compile(source, "<ae>", "eval")
             except SyntaxError:
                 exec_locals = dict(exec_globals)
                 exec_locals["_result"] = None
                 compiled = compile(source, "<ae>", "exec")
                 exec(compiled, exec_locals, exec_locals)
                 result = exec_locals.get("_result")
+            else:
+                # Runtime SyntaxError must not replay an expression with side effects.
+                result = eval(compiled, exec_globals, exec_globals)
+        # Formatting can run user code too; report failures after execution honestly.
+        if result is not None:
+            result = repr(result)
     except Exception:
         error = traceback.format_exc()
     finally:
@@ -169,8 +175,8 @@ def _execute_code(source, prefer_exec=False):
         sys.stdout = old_stdout
 
     response = {"ok": error is None}
-    if result is not None:
-        response["result"] = repr(result)
+    if result is not None and error is None:
+        response["result"] = result
     if output:
         response["output"] = output
     if error:

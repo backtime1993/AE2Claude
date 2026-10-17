@@ -45,6 +45,7 @@ def _json_type(annotation: Any) -> dict[str, Any]:
 
 def _category(name: str) -> str:
     for prefix, category in (
+        (("get_essential_", "get_shape_contents", "set_production", "export_mogrt"), "production"),
         (("get_native_snapshot", "sample_native_propert", "get_native_keyframes", "set_native_keyframe", "set_native_layer_controls", "get_native_layer_transforms", "get_native_footage_inventory"), "native-automation"),
         (("property_", "get_property", "set_property", "inspect_properties"), "property"),
         (("get_native_diagnostics",), "diagnostics"),
@@ -128,6 +129,9 @@ def capabilities(query: str = "", category: str = "") -> dict[str, Any]:
             "pixelComparison": True,
             "persistentScriptLibrary": True,
             "expressionValidation": True,
+            "productionAuthoring": True,
+            "skills": {"protocol": "ae2claude.skill/v1", "projectUserDiscovery": True,
+                       "scopedExecution": True, "bundledReadOnlyReports": True},
             "nativeQueueDiagnostics": "requires dispatcher-20260910 native build",
             "nativeAutomation": "requires matching AEX/server; check ae_native_status health features.nativeOperations for loaded availability",
             "forcedMainThreadInterruption": False,

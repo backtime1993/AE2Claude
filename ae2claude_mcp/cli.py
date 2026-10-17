@@ -13,7 +13,8 @@ from ae_bridge import AEBridge, JSXExecutionError
 from . import __version__
 from .agent_runtime import execute_batch
 from .capabilities import capabilities
-from .runtime import authorize, bridge, call_bridge_method, require_enabled
+from .runtime import authorize, bridge, bridge_result_error, call_bridge_method, require_enabled
+from .skills import discover_skills, prepare_skill, execute_skill, run_skill
 
 
 def _json_value(value: str) -> Any:
@@ -66,6 +67,22 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="live bridge, project, and comp status")
+
+    skills = sub.add_parser("skills", help="discover versioned Skill metadata without contacting AE")
+    skills.add_argument("--project-dir", default=None)
+    skills.add_argument("--user-dir", default=None, help="directory directly containing user Skill folders")
+    skill = sub.add_parser("skill", help="prepare /skill-name for an Agent, run a bundled check, or execute a scoped plan")
+    skill.add_argument("skill_command", help="Skill name or /skill-name followed by request text")
+    skill.add_argument("--project-dir", default=None)
+    skill.add_argument("--user-dir", default=None)
+    mode = skill.add_mutually_exclusive_group()
+    mode.add_argument("--run", action="store_true", help="run a bundled read-only check")
+    mode.add_argument("--execute", metavar="FILE", help="Agent operations JSON, or - for stdin")
+    skill.add_argument("--expected-sha256", default=None, help="hash returned by Skill preparation")
+    skill.add_argument("--offline", action="store_true", help="prepare without reading AE context")
+    skill.add_argument("--options", type=_json_value, default={})
+    skill.add_argument("--dry-run", action="store_true")
+    skill.add_argument("--confirm", action="store_true")
 
     recover = sub.add_parser("recover-modal", help="close a blocking AE script-error dialog")
     recover.add_argument("--confirm", action="store_true")
@@ -134,6 +151,19 @@ def dispatch(args: argparse.Namespace) -> Any:
 
     if args.command in {"capabilities", "methods"}:
         return capabilities(query=args.query, category=args.category)
+    if args.command == "skills":
+        return discover_skills(args.project_dir, args.user_dir)
+    if args.command == "skill":
+        if args.run:
+            return run_skill(args.skill_command, args.project_dir, args.user_dir, args.options)
+        if args.execute:
+            if not args.expected_sha256:
+                raise ValueError("--execute requires --expected-sha256 from Skill preparation")
+            return execute_skill(args.skill_command, _read_json_document(args.execute),
+                                 args.expected_sha256, args.project_dir, args.user_dir,
+                                 confirm=args.confirm, dry_run=args.dry_run)
+        return prepare_skill(args.skill_command, args.project_dir, args.user_dir,
+                             include_context=not args.offline)
     if args.command == "batch":
         return execute_batch(
             _read_json_document(args.file),
@@ -146,7 +176,9 @@ def dispatch(args: argparse.Namespace) -> Any:
         result = call_bridge_method(
             args.method, args.args, args.kwargs, confirm=args.confirm
         )
-        return {"ok": True, "method": args.method, "result": result}
+        error = bridge_result_error(args.method, result)
+        return {"ok": error is None, "method": args.method, "result": result,
+                **({"error": error} if error is not None else {})}
     if args.command == "recover-modal":
         require_enabled()
         authorize("write", confirm=args.confirm)
@@ -191,7 +223,10 @@ def dispatch(args: argparse.Namespace) -> Any:
         if args.command == "jsx":
             authorize("destructive", confirm=args.confirm)
             code = args.code if args.code is not None else sys.stdin.read()
-            return {"ok": True, "result": ae.run_jsx(code)}
+            result = ae.run_jsx(code)
+            error = bridge_result_error("run_jsx", result)
+            return {"ok": error is None, "result": result,
+                    **({"error": error} if error is not None else {})}
     raise RuntimeError(f"unsupported command: {args.command}")
 
 

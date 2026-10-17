@@ -18,6 +18,7 @@ from .runtime import (
     SafetyError,
     authorize,
     bridge,
+    bridge_result_error,
     classify_bridge_method,
     public_bridge_methods,
     require_enabled,
@@ -208,12 +209,12 @@ def execute_batch(
                 args = resolve_references(item["args"], raw_results)
                 kwargs = resolve_references(item["kwargs"], raw_results)
                 value = getattr(ae, item["method"])(*args, **kwargs)
-                if isinstance(value, dict) and value.get("ok") is False:
+                error = bridge_result_error(item["method"], value)
+                if error is not None:
                     # A returned failure is as terminal as a raised exception.
                     # Keep the original result for diagnosis, but do not expose
                     # it as a successful dependency to later workflow steps.
                     raw_results.append(_FAILED_RESULT)
-                    error = str(value.get("error") or "operation_returned_failure")
                     entries.append({"index": index, "ok": False, "error": error, "result": value})
                     EVENTS.emit("batch.operation.failed", requestId=request_id,
                                 index=index, method=item["method"], error=error)

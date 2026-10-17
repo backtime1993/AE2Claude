@@ -116,7 +116,10 @@ def _python_layer_prelude(selector: dict[str, Any]) -> str:
         "    idx=int(selector['index'])-1\n"
         "    layer=layers[idx] if 0 <= idx < len(layers) else None\n"
         "else:\n"
-        "    layer=next((x for x in layers if x.name==selector['name']),None)\n"
+        "    matches=[x for x in layers if x.name==selector['name']]\n"
+        "    if len(matches)>1:\n"
+        "        raise RuntimeError('ambiguous_layer_name')\n"
+        "    layer=matches[0] if matches else None\n"
         "if layer is None:\n"
         "    raise RuntimeError('layer_not_found')\n"
     )
@@ -226,7 +229,7 @@ def _property_batch_jsx(
     )
     code = "(function(){var cfg=" + payload + ";" + r"""
 function pick(c,s){var i,l;if(s.id!==undefined){for(i=1;i<=c.numLayers;i++){l=c.layer(i);if(l.id==s.id)return l;}}
-    else if(s.index!==undefined){return c.layer(s.index);}else{return c.layer(s.name);}return null;}
+    else if(s.index!==undefined){return s.index<=c.numLayers?c.layer(s.index):null;}else{var found=null;for(i=1;i<=c.numLayers;i++){l=c.layer(i);if(l.name===s.name){if(found)throw new Error('ambiguous_layer_name');found=l;}}return found;}return null;}
 function resolve(root,path){var p=root;for(var i=0;i<path.length;i++){var step=path[i];
     p=(typeof step==='number')?p.property(step+1):p.property(step);if(!p)throw new Error('path_not_found:'+step);}return p;}
 function finite(v){return typeof v==='number'&&isFinite(v);}
@@ -301,7 +304,7 @@ def _inspect_properties_jsx(
     code = (
         "(function(){var cfg=" + payload + ";"
         "function pick(c,s){var i,l;if(s.id!==undefined){for(i=1;i<=c.numLayers;i++){l=c.layer(i);if(l.id==s.id)return l;}}"
-        "else if(s.index!==undefined){return c.layer(s.index);}else{return c.layer(s.name);}return null;}"
+        "else if(s.index!==undefined){return s.index<=c.numLayers?c.layer(s.index):null;}else{var found=null;for(i=1;i<=c.numLayers;i++){l=c.layer(i);if(l.name===s.name){if(found)throw new Error('ambiguous_layer_name');found=l;}}return found;}return null;}"
         "function resolve(root,path){var p=root;for(var i=0;i<path.length;i++){var step=path[i];"
         "p=(typeof step==='number')?p.property(step+1):p.property(step);if(!p)return null;}return p;}"
         "var c=app.project.activeItem;if(!c||!(c instanceof CompItem))return JSON.stringify({ok:false,error:'no_active_comp'});"
