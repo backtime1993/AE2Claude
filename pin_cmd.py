@@ -268,6 +268,11 @@ def _build_parser():
 
 
 def main(argv):
+    # Help and JSON include Chinese text, including when stdout is redirected
+    # on a Western Windows installation. Keep the command's output UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     ap = _build_parser()
     args = ap.parse_args(argv)
     try:

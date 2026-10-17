@@ -50,6 +50,14 @@ class PinCommandReviewTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('ae2claude pin', result.stdout)
 
+    def test_help_uses_utf8_even_with_western_redirected_stdio(self):
+        env = {**os.environ, 'PYTHONIOENCODING': 'cp1252', 'PYTHONUTF8': '0'}
+        result = subprocess.run([sys.executable, str(ROOT / 'pin_cmd.py'), '--help'],
+                                env=env, capture_output=True, encoding='utf-8', timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('一行命令', result.stdout)
+        self.assertIn('一键自适应打点', result.stdout)
+
     def test_installed_data_location_is_used_outside_checkout(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

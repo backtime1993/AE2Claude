@@ -84,7 +84,7 @@ class MoBarExportReviewTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             report = json.loads(result.stdout)
             output = Path(report['output'])
-            self.assertEqual(output.parent, base)
+            self.assertTrue(output.parent.samefile(base))
             self.assertTrue(output.name.startswith('mobar-export-'))
             self.assertEqual((output / 'Decoded.jsx').read_text(), 'var line="x";\n2;')
             self.assertFalse((base / 'scripts').exists())
