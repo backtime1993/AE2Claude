@@ -740,8 +740,11 @@ class AEBridge:
         PostMessage = user32.PostMessageW
         WM_KEYDOWN, WM_KEYUP, VK_RETURN = 0x0100, 0x0101, 0x0D
 
-        # 获取 AE PID
+        # Fail closed: an absent AE process must never target other applications.
         ae_pid = self._find_ae_pid()
+        if not ae_pid:
+            self._dismiss_running = False
+            return
 
         WINFUNCTYPE = ctypes.WINFUNCTYPE(
             ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
@@ -757,7 +760,7 @@ class AEBridge:
                         return True
                     pid = ctypes.wintypes.DWORD()
                     GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                    if ae_pid and pid.value != ae_pid:
+                    if pid.value != ae_pid:
                         return True
                     cls = ctypes.create_unicode_buffer(256)
                     GetClassName(hwnd, cls, 256)
@@ -783,8 +786,7 @@ class AEBridge:
         try:
             r = subprocess.run(
                 ['powershell', '-c',
-                 '(Get-Process | Where-Object '
-                 '{$_.MainWindowTitle -like "*After Effects*"}).Id'],
+                 "(Get-Process -Name AfterFX,'AfterFX (Beta)' -ErrorAction SilentlyContinue).Id"],
                 capture_output=True, text=True, timeout=5
             )
             if r.stdout.strip():
@@ -897,7 +899,47 @@ return lines.join("\n");
         except json.JSONDecodeError:
             return {"raw": r}
 
+    def get_preflight_snapshot(self, max_items: int = 2000, max_properties: int = 5000) -> dict:
+        """Read project-wide PV delivery checks without changing selection, time or project state."""
+        from ae2claude_mcp.skill_reports import preflight_snapshot
+        return preflight_snapshot(self, max_items, max_properties)
+
+    def get_keyframe_qc_targets(self, comp_id: int = 0, max_properties: int = 128,
+                               max_nodes: int = 5000) -> dict:
+        """Discover bounded animated properties for native keyframe review; no focus changes."""
+        from ae2claude_mcp.skill_reports import qc_targets
+        return qc_targets(self, comp_id, max_properties, max_nodes)
+
     # ── Undo Group ─────────────────────────────────────────
+
+    def get_essential_graphics(self, comp_id: int = 0) -> dict:
+        """Read MOGRT name and Essential Graphics controller names (one-based indices)."""
+        from ae2claude_mcp.production import invoke
+        return invoke(self, "essential_graphics", {"comp_id": comp_id})
+
+    def get_essential_properties(self, layer, comp_id: int = 0, max_nodes: int = 512) -> dict:
+        """Read a precomp layer's Essential Properties, source links and media replacement eligibility."""
+        from ae2claude_mcp.production import invoke
+        return invoke(self, "essential_properties", {"layer": layer, "comp_id": comp_id, "max_nodes": max_nodes})
+
+    def get_shape_contents(self, layer, comp_id: int = 0, max_nodes: int = 512) -> dict:
+        """Read shape contents with zero-based relative paths, names, enabled flags and values."""
+        from ae2claude_mcp.production import invoke
+        return invoke(self, "shape_contents", {"layer": layer, "comp_id": comp_id, "max_nodes": max_nodes})
+
+    def set_production(self, action: str, options: dict = None, dry_run: bool = True) -> dict:
+        """Plan/apply EGP, shape, text-range, interpolation, project organization or render output edits; excludes export."""
+        from ae2claude_mcp.production import invoke, READ_ACTIONS
+        if action in READ_ACTIONS or action == "export_mogrt":
+            raise ValueError("Use the read-only production getters or export_mogrt for this action")
+        return invoke(self, action, options, dry_run)
+
+    def export_mogrt(self, comp_id: int = 0, output_dir: str = None,
+                     overwrite: bool = False, dry_run: bool = True) -> dict:
+        """Export a saved, clean composition to a verified MOGRT file; never auto-save the project."""
+        from ae2claude_mcp.production import invoke
+        return invoke(self, "export_mogrt", {"comp_id": comp_id, "output_dir": output_dir,
+                                            "overwrite": overwrite}, dry_run)
 
     def begin_undo(self, name: str = "Script"):
         """开始 undo 组"""
@@ -1286,7 +1328,7 @@ return lines.join("\n");
             'app.beginUndoGroup("AE2Claude Set Effect Property");undoOpen=true;'
             + set_call +
             'app.endUndoGroup();undoOpen=false;'
-            'var current;try{current=p.value;}catch(x){current=null;}'
+            f'var current;try{{current={"p.value" if at_time is None else f"p.valueAtTime({float(at_time)},false)"};}}catch(x){{current=null;}}'
             'return JSON.stringify({ok:true,effectIndex:effect.propertyIndex,'
             'propertyName:p.name,propertyMatchName:p.matchName,value:current});'
             '}catch(e){'
@@ -4541,8 +4583,15 @@ return lines.join("\n");
             r = _read_bridge_response(resp)
         if r.get("ok"):
             val = r.get("result", "")
-            if isinstance(val, str):
-                val = val.strip("'\"")
+            if isinstance(val, str) and val.startswith(("'", '"')):
+                # The server returns repr(result); stripping quotes corrupts both
+                # quoted names and JSON's backslash escaping. Parse string literals
+                # without executing code, retaining non-string repr compatibility.
+                import ast
+                decoded = ast.literal_eval(val)
+                if not isinstance(decoded, str):
+                    raise ValueError("AE bridge returned an invalid Python string result")
+                val = decoded
             return val
         raise RuntimeError(r.get("error", "unknown"))
 

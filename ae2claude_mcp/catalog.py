@@ -47,7 +47,7 @@ def load_script_registry(script_root: Path = SCRIPT_ROOT) -> list[dict[str, Any]
         tags = item.get("tags", [])
         if not isinstance(tags, list):
             tags = [str(tags)]
-        modes = item.get("modes", DEFAULT_MODES)
+        modes = item.get("modes", list(DEFAULT_MODES))
         if not isinstance(modes, list):
             modes = [str(modes)]
         normalized_modes = [str(mode).strip().lower() for mode in modes]

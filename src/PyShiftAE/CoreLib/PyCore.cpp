@@ -858,7 +858,10 @@ void bindCompItem(py::module_& m)
         .def("addShape", &CompItem::addShape,
             py::return_value_policy::reference)
         .def_property("bgColor", &CompItem::getBGColor,
-            [](CompItem& self, std::vector<float> c) { self.setBGColor(c[0], c[1], c[2]); })
+            [](CompItem& self, std::vector<float> c) {
+                if (c.size() < 3) throw std::invalid_argument("bgColor requires at least three RGB components");
+                self.setBGColor(c[0], c[1], c[2]);
+            })
         .def_property_readonly("workAreaStart", &CompItem::getWorkAreaStart)
         .def_property_readonly("workAreaDuration", &CompItem::getWorkAreaDuration)
         .def("setWorkArea", &CompItem::setWorkArea, py::arg("start"), py::arg("duration"))

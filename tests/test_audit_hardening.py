@@ -119,7 +119,7 @@ class ScriptTimeoutTests(unittest.TestCase):
         def run_script(code, timeout):
             self.assertEqual(timeout, 600_000)
             started.set()
-            if not gate.wait(2):
+            if not gate.wait(30):
                 raise TimeoutError("test gate")
             return "done"
         ae.run_jsx.side_effect = run_script
@@ -128,12 +128,14 @@ class ScriptTimeoutTests(unittest.TestCase):
         try:
             with patch("ae2claude_mcp.agent_runtime.bridge", return_value=context):
                 task = manager.submit([{"method": "run_jsx", "kwargs": {"code": "noop", "timeout": 600_000}}], confirm=True)
-                self.assertTrue(started.wait(1))
+                self.assertTrue(started.wait(10))
                 self.assertEqual(task["status"], "working")
+                # Wait for the completion callback instead of assuming a busy
+                # Windows runner schedules the worker within two seconds.
+                finished = threading.Event()
+                manager._jobs[task["taskId"]]["future"].add_done_callback(lambda _: finished.set())
                 gate.set()
-                deadline = time.monotonic() + 2
-                while manager.get(task["taskId"])["status"] == "working" and time.monotonic() < deadline:
-                    time.sleep(0.01)
+                self.assertTrue(finished.wait(30), "background completion callback timed out")
                 task = manager.get(task["taskId"])
                 self.assertEqual(task["status"], "completed")
                 self.assertEqual(task["result"]["results"][0]["result"], "done")

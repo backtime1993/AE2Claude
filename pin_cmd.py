@@ -5,16 +5,23 @@ Registered by ae2claude's main() dispatcher. Reuses pin_placer.PinPlacer
 """
 import argparse
 import ctypes
+import importlib.util
 import json
 import os
 import sys
+import sysconfig
 import time
 from pathlib import Path
 
-_PIN_MODULE = Path(r"F:\claude\longterm\AE2ClaudePinClicker\python")
-if str(_PIN_MODULE) not in sys.path:
-    sys.path.insert(0, str(_PIN_MODULE))
-from pin_placer import PinPlacer, CEPError  # noqa: E402
+# Use the helper shipped with this checkout or wheel, never an old sibling repo.
+_PIN_MODULE = Path(__file__).resolve().parent / "extensions/pin-clicker/python/pin_placer.py"
+if not _PIN_MODULE.is_file():
+    _PIN_MODULE = Path(sysconfig.get_path("data")) / "share/ae2claude/pin-clicker/python/pin_placer.py"
+_pin_spec = importlib.util.spec_from_file_location("_ae2claude_pin_placer", _PIN_MODULE)
+_pin_module = importlib.util.module_from_spec(_pin_spec)
+sys.modules[_pin_spec.name] = _pin_module
+_pin_spec.loader.exec_module(_pin_module)
+PinPlacer, CEPError = _pin_module.PinPlacer, _pin_module.CEPError
 
 
 CEP = "http://127.0.0.1:8891"
@@ -24,7 +31,7 @@ def _resolve_layer(pl, layer_name):
     code = (
         'var ai=app.project.activeItem; '
         'if(!ai || !(ai instanceof CompItem)) return {err:"no_active_comp"};'
-        f'var n="{layer_name}"; var found=null;'
+        f'var n={json.dumps(layer_name, ensure_ascii=True)}; var found=null;'
         'for(var k=1;k<=ai.numLayers;k++){if(ai.layer(k).name===n){found=k;break;}}'
         'if(!found) return {err:"layer_not_found",name:n,comp:ai.name};'
         'return {comp_id:ai.id,comp_name:ai.name,layer_index:found,layer_name:n};'
@@ -261,6 +268,11 @@ def _build_parser():
 
 
 def main(argv):
+    # Help and JSON include Chinese text, including when stdout is redirected
+    # on a Western Windows installation. Keep the command's output UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     ap = _build_parser()
     args = ap.parse_args(argv)
     try:

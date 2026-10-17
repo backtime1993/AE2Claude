@@ -11,6 +11,8 @@
 - **工程与动画**：稳定 ID 寻址、属性批处理、原生批量关键帧和变换采样。
 - **画面检查**：单帧预览、时间线拼图、修改前后像素差分。
 - **自动化**：JSX 脚本库、后台任务、检查点、结构化错误与急停。
+- **可复用任务**：项目/用户 Skill 发现、`/skill-name` 任务包、工具白名单及只读 PV/关键帧报告。
+- **PV 制作接口**：MOGRT / Essential Graphics、形状操作器与虚线、保留样式的局部改字、关键帧插值、工程归类及渲染输出，默认先生成方案。参见[参数与使用边界](docs/PRODUCTION.md)。
 - **客户端**：Codex、Claude Code 和其他 MCP 客户端；也可直接使用 CLI / Python。
 
 ## 安装与连接
@@ -44,12 +46,28 @@ uv run ae2claude --help
 
 普通写入默认自动执行，破坏性操作要求确认；仅查看时可在 MCP 配置中设置 `AE2CLAUDE_APPROVAL_MODE=readonly`。超时或急停不会强制终止已经进入 AE 的操作，重试前应先回读结果。
 
+## Skill 与 PV 检查
+
+```powershell
+uv run ae2claude skills
+uv run ae2claude skill /pv-preflight --run
+uv run ae2claude skill /motion-review --run
+uv run ae2claude skill "/motion-review 检查标题出场" --offline
+```
+
+把团队任务放在 `<项目>/skills/<name>/SKILL.md` 或 `<项目>/.ae2claude/skills/<name>/SKILL.md`；
+个人任务默认放在 `~/.ae2claude/skills`。缺省只读、空工具白名单；需要哪些工具就明确声明哪些。
+MCP 客户端用 `ae_skills` → `ae_skill` → `ae_skill_execute`；两个内置检查可直接用 `ae_skill_run`。
+自定义 Skill 提供给外部 Agent 执行，不会凭 Markdown 自动运行脚本或启动模型。
+详情见 [Skill 协议、示例与权限边界](docs/SKILLS.md)。
+
 ## 文档
 
 | 内容 | 入口 |
 | --- | --- |
 | 版本变化、升级与限制 | [CHANGELOG](CHANGELOG.md) |
 | CLI / Python / Puppet 使用参考 | [使用参考](docs/USAGE.md) |
+| 可复用 Skill 与只读 PV / 动画检查 | [Skill 能力系统](docs/SKILLS.md) |
 | 原生批量关键帧与采样 | [原生自动化](docs/NATIVE_AUTOMATION.md) |
 | 拼图、差分与 JSX 脚本库 | [多帧预览与脚本库](docs/FRAME_REVIEW_AND_LIBRARY.md) |
 | 构建、安装与回退 | [构建说明](docs/BUILDING.md) |
@@ -61,5 +79,7 @@ uv run ae2claude --help
 | 测试及发布前验收 | [测试](docs/TESTING.md) · [发布清单](docs/RELEASE_CHECKLIST.md) |
 
 ## 致谢与许可
+
+阻塞报错排障：[`ae_capture_blocked_ui`](docs/BLOCKED_UI_CAPTURE.md) 在 AE 被模态弹窗阻塞时按需返回完整弹窗图片；正常状态不截图，无需调用 JSX 或 Computer Use 获取该类证据。
 
 原生核心基于 [PyShiftAE](https://github.com/Trentonom0r3/PyShiftAE)，采用 [AGPL-3.0](LICENSE)。其他设计参考与依赖说明见 [第三方声明](THIRD_PARTY_NOTICES.md)。

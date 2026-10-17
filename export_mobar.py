@@ -1,42 +1,99 @@
-"""Export MoBar scriptlets to individual .jsx files + registry.json"""
-import json, re, os
+"""Export MoBar scriptlets into a new directory without changing the shipped library.
 
-SETTINGS = os.path.expanduser(r"~\AppData\Roaming\MoBar\settings-v2.json")
-OUT_DIR = os.path.join(os.path.dirname(__file__), "scripts")
-os.makedirs(OUT_DIR, exist_ok=True)
+Run with --output to choose a new or empty directory. To integrate an export,
+review its scripts and merge its registry with the existing library metadata.
+"""
+from __future__ import annotations
 
-with open(SETTINGS, "r", encoding="utf-8") as f:
-    d = json.load(f)
+import argparse
+from datetime import datetime
+import json
+import os
+from pathlib import Path
+import re
 
-panels = d.get("userPanels", [])
-registry = []
 
-for p in panels:
-    for it in p.get("items", []):
-        if it.get("type") != "scriptlet":
-            continue
-        name = it.get("name", "unnamed")
-        cmd = it.get("command", "")
-        try:
-            code = json.loads(cmd) if cmd.startswith('"') else cmd
-        except:
-            code = cmd
+SETTINGS = Path(os.path.expanduser(r"~\AppData\Roaming\MoBar\settings-v2.json"))
+_RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)", re.IGNORECASE)
 
-        # slug: keep Chinese, replace special chars
-        slug = name
-        for ch in " /\\()（）≥":
-            slug = slug.replace(ch, "-")
-        slug = re.sub(r"-+", "-", slug).strip("-")
 
-        fname = slug + ".jsx"
-        fpath = os.path.join(OUT_DIR, fname)
-        with open(fpath, "w", encoding="utf-8") as f:
-            f.write(code)
+def _slug(name: str) -> str:
+    # Windows filenames are case insensitive and forbid these characters even
+    # when an export is prepared on another OS for use in After Effects.
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f ()（）≥]+', '-', name)
+    value = re.sub(r'-+', '-', value).strip('-. ')[:120].rstrip('. ')
+    value = value or 'unnamed'
+    if _RESERVED.match(value):
+        value = '_' + value
+    return value
 
-        registry.append({"slug": slug, "name": name, "file": fname})
-        print(f"  {fname}")
 
-with open(os.path.join(OUT_DIR, "registry.json"), "w", encoding="utf-8") as f:
-    json.dump(registry, f, indent=2, ensure_ascii=False)
+def prepare_scriptlets(settings: dict) -> list[tuple[dict, str]]:
+    """Validate all entries and allocate unique names before writing any files."""
+    if not isinstance(settings, dict) or not isinstance(settings.get('userPanels', []), list):
+        raise ValueError('MoBar settings must contain a userPanels array')
+    entries = []
+    used = set()
+    for panel in settings.get('userPanels', []):
+        if not isinstance(panel, dict) or not isinstance(panel.get('items', []), list):
+            raise ValueError('Each MoBar panel must contain an items array')
+        for item in panel.get('items', []):
+            if not isinstance(item, dict):
+                raise ValueError('MoBar items must be objects')
+            if item.get('type') != 'scriptlet':
+                continue
+            name, code = item.get('name', 'unnamed'), item.get('command', '')
+            if not isinstance(name, str) or not isinstance(code, str):
+                raise ValueError('Scriptlet name and command must be strings')
+            if code.startswith('"'):
+                try:
+                    code = json.loads(code)
+                except json.JSONDecodeError:
+                    pass  # A normal JSX string literal need not be JSON encoded.
+            if not isinstance(code, str):
+                raise ValueError('Decoded scriptlet command must be a string')
+            base = _slug(name)
+            slug, suffix = base, 2
+            while slug.casefold() in used:
+                slug = f'{base}-{suffix}'
+                suffix += 1
+            used.add(slug.casefold())
+            entries.append(({'slug': slug, 'name': name, 'file': slug + '.jsx'}, code))
+    return entries
 
-print(f"\n共 {len(registry)} 个脚本导出到 {OUT_DIR}")
+
+def export_scriptlets(settings_path: Path, output: Path) -> list[dict]:
+    entries = prepare_scriptlets(json.loads(Path(settings_path).read_text(encoding='utf-8-sig')))
+    output = Path(output)
+    if output.is_symlink() or output.is_junction():
+        raise ValueError('Export output must not be a link or junction')
+    if output.exists() and (not output.is_dir() or any(output.iterdir())):
+        raise FileExistsError('Export output must be a new or empty directory: ' + str(output))
+    output.mkdir(parents=True, exist_ok=True)
+    registry = [metadata for metadata, _ in entries]
+    for metadata, code in entries:
+        with (output / metadata['file']).open('x', encoding='utf-8', newline='\n') as stream:
+            stream.write(code)
+    with (output / 'registry.json').open('x', encoding='utf-8', newline='\n') as stream:
+        json.dump(registry, stream, indent=2, ensure_ascii=False)
+        stream.write('\n')
+    return registry
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--settings', type=Path, default=SETTINGS)
+    parser.add_argument('--output', type=Path,
+                        help='New or empty output directory; never overwrite an existing script library')
+    args = parser.parse_args(argv)
+    output = args.output or Path.cwd() / ('mobar-export-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
+    try:
+        registry = export_scriptlets(args.settings, output)
+    except (OSError, ValueError) as error:
+        parser.exit(1, f'error: {error}\n')
+    print(json.dumps({'ok': True, 'count': len(registry), 'output': str(output.resolve())}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

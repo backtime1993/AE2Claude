@@ -27,9 +27,13 @@ import sysconfig
 from pathlib import Path
 import ae_bridge
 import ae_native_protocol
+import pin_cmd
+import numpy
+assert pin_cmd.PinPlacer.__name__ == "PinPlacer"
 assert "var JSON=" in ae_bridge._jsx_json_compat()
 from ae2claude_mcp import __version__
 from ae2claude_mcp.catalog import SCRIPT_ROOT, load_script_registry
+from ae2claude_mcp.skills import discover_skills, prepare_skill
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -48,6 +52,10 @@ assert entrypoints["ae2claude-mcp"] == "ae2claude_mcp.server:main"
 cli = Path(sysconfig.get_path("scripts")) / ("ae2claude.exe" if sys.platform == "win32" else "ae2claude")
 output = subprocess.check_output([str(cli), "--version"], encoding="utf-8", timeout=15)
 assert output.strip() == "ae2claude " + expected, output
+skills = discover_skills()
+assert {"pv-preflight", "motion-review"}.issubset({s["name"] for s in skills["skills"]}), skills
+task = prepare_skill("/pv-preflight", include_context=False)
+assert task["skill"]["read_only"] and task["instructions"] and task["tools"], task
 
 async def discover():
     params = StdioServerParameters(command=sys.executable, args=["-I", "-m", "ae2claude_mcp.server"])
@@ -58,7 +66,9 @@ async def discover():
     tools = {tool.name: tool for tool in result.tools}
     required = {"ae_native_snapshot", "ae_sample_property", "ae_native_keyframes",
                 "ae_set_native_keyframes", "ae_layer_transforms", "ae_preview_frames",
-                "ae_compare_frames", "ae_script_library", "ae_replay_script"}
+                "ae_compare_frames", "ae_script_library", "ae_replay_script",
+                "ae_skills", "ae_skill", "ae_skill_execute", "ae_skill_run",
+                "ae_capture_blocked_ui"}
     assert required.issubset(tools), required - tools.keys()
     assert tools["ae_set_native_keyframes"].inputSchema["properties"]["dry_run"]["default"] is True
     return sorted(required)
@@ -78,7 +88,11 @@ def main() -> None:
     with zipfile.ZipFile(args.wheel) as wheel:
         names = set(wheel.namelist())
         required = {"ae_bridge.py", "ae_native_protocol.py", "ae2claude_mcp/server.py",
-                    "ae2claude_mcp/frame_review.py", "ae2claude_mcp/script_library.py"}
+                    "ae2claude_mcp/frame_review.py", "ae2claude_mcp/script_library.py",
+                    "ae2claude_mcp/skills.py", "ae2claude_mcp/skill_reports.py",
+                    "ae2claude_mcp/window_capture.py", "ae2claude_mcp/tailnet.py",
+                    "ae2claude_mcp/builtin_skills/pv-preflight/SKILL.md",
+                    "ae2claude_mcp/builtin_skills/motion-review/SKILL.md"}
         if not required <= names:
             raise ValueError(f"Wheel is missing modules: {required - names}")
         metadata_files = [name for name in names if name.endswith(".dist-info/METADATA")]
