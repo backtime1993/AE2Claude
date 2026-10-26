@@ -4,13 +4,16 @@ param(
     [string]$Mode = 'Verify',
     [string[]]$Target,
     [switch]$AllSupported,
-    [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot)
+    [string]$ProjectRoot
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'installation-transaction.ps1')
 
+if (-not $ProjectRoot) {
+    $ProjectRoot = Split-Path -Parent $PSScriptRoot
+}
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
 $sourceAex = Join-Path $ProjectRoot 'build\Release\AE2Claude.aex'
 if (-not (Test-Path -LiteralPath $sourceAex -PathType Leaf)) {
