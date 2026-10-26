@@ -4,3 +4,4 @@ node_modules/
 .ZXPInstaller.log
 __pycache__/
 *.pyc
+input-runtime.json

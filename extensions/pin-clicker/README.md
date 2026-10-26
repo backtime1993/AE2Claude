@@ -40,6 +40,29 @@ under the `HKCU\Software\Adobe\CSXS.<version>` key used by your AE CEP runtime.
 Restart AE and open AE2Claude PinClicker from Window > Extensions.
 Its CEP endpoint uses 8891; the Python helper's AE bridge endpoint uses 18889.
 
+### Older CEP Node runtimes (AE 2024)
+
+Koffi requires N-API 8. AE 24.5 ships CEP Node 15.9 with an older N-API,
+so its input/window module cannot load in-process. Install Node 18+ separately
+and create `input-runtime.json` in the installed extension directory:
+
+```json
+{
+  "nodeExecutable": "C:/absolute/path/to/node.exe"
+}
+```
+
+This explicit configuration enables a hidden, one-shot Node worker over stdin/stdout;
+it opens no additional network listener and uses the same native input implementation.
+The worker is bounded to 30 seconds per call. Each call starts a process, so input
+operations have additional latency. Current runtimes with N-API 8+ stay in-process.
+No executable is downloaded or discovered automatically. Missing/invalid configuration
+keeps input unavailable with a diagnostic in `/health`; `input_backend` reports
+`external-node` or `in-process` after successful initialization.
+
+Restart AE after deploying the changed extension files. Verify `/health` and a real
+operation: readiness alone does not prove that Windows accepted input into the target.
+
 After editing `client/main.js` or `CSXS/manifest.xml`, fully restart AE for the
 panel to reload (panel JS is not hot-reloaded).
 
